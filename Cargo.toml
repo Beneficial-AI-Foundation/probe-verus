@@ -1,0 +1,28 @@
+[package]
+name = "scip-atoms"
+version = "0.1.0"
+edition = "2021"
+description = "Generate compact function call graph data with line numbers from SCIP indexes"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/yourusername/scip-atoms"
+keywords = ["scip", "verus-analyzer", "call-graph", "code-analysis", "atoms"]
+categories = ["development-tools", "command-line-utilities"]
+
+[[bin]]
+name = "scip-atoms"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+regex = "1.10"
+
+[dev-dependencies]
+tempfile = "3.10"
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
+strip = true
+

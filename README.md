@@ -62,12 +62,11 @@ This achieves **~95% accuracy** for function spans in typical Verus projects.
 [
   {
     "display-name": "my_function",
-    "visible": true,
-    "dependencies": {
-      "module::dependency_fn": { "visible": true }
-    },
+    "scip-name": "curve25519-dalek 4.1.3 module/my_function()",
+    "dependencies": [
+      "curve25519-dalek 4.1.3 module/dependency_fn()"
+    ],
     "code-path": "src/lib.rs",
-    "code-function": "crate::module::my_function",
     "code-text": {
       "lines-start": 42,
       "lines-end": 100
@@ -78,10 +77,9 @@ This achieves **~95% accuracy** for function spans in typical Verus projects.
 
 **Fields:**
 - `display-name`: Function name
-- `visible`: Always `true` (for visualization tool compatibility)
-- `dependencies`: Map of called functions (both project and external)
+- `scip-name`: SCIP symbol name (with "rust-analyzer cargo " prefix and ending pattern stripped)
+- `dependencies`: Set of called functions (both project and external) as SCIP names
 - `code-path`: Source file path
-- `code-function`: Fully qualified function path
 - `code-text`: Line range where function is defined (1-based)
 
 ### Function Entries vs Dependencies

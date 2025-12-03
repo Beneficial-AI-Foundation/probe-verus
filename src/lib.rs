@@ -76,19 +76,13 @@ pub struct FunctionNode {
 pub struct AtomWithLines {
     #[serde(rename = "display-name")]
     pub display_name: String,
-    pub visible: bool,
-    pub dependencies: HashMap<String, DependencyInfo>,
+    #[serde(rename = "scip-name")]
+    pub scip_name: String,
+    pub dependencies: HashSet<String>,
     #[serde(rename = "code-path")]
     pub code_path: String,
-    #[serde(rename = "code-function")]
-    pub code_function: String,
     #[serde(rename = "code-text")]
     pub code_text: CodeTextInfo,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct DependencyInfo {
-    pub visible: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -202,6 +196,29 @@ pub fn build_call_graph(scip_data: &ScipIndex) -> (HashMap<String, FunctionNode>
     }
 
     (call_graph, symbol_to_display_name)
+}
+
+/// Convert symbol to a scip name
+fn symbol_to_scip_name(symbol: &str, display_name: &str) -> String {
+    // Step 1: Strip "rust-analyzer cargo " prefix
+    let s = symbol
+        .strip_prefix("rust-analyzer cargo ")
+        .unwrap_or_else(|| {
+            panic!("Symbol does not start with 'rust-analyzer cargo ': {}", symbol)
+        });
+
+    // Step 2 & 3: Check if s ends with "display_name()."
+    let expected_suffix = format!("{}().", display_name);
+
+    if !s.ends_with(&expected_suffix) {
+        panic!(
+            "Symbol does not end with '{}': {}",
+            expected_suffix, symbol
+        );
+    }
+
+    // Delete the last character of s and return it
+    s[..s.len() - 1].to_string()
 }
 
 /// Convert symbol to a path format with specified separator
@@ -319,7 +336,7 @@ fn convert_to_atoms_with_lines_internal(
     call_graph
         .values()
         .map(|node| {
-            let mut dependencies = HashMap::new();
+            let mut dependencies = HashSet::new();
             for callee in &node.callees {
                 // Get display name from call_graph (project functions) or symbol map (all functions)
                 let display_name = call_graph
@@ -328,8 +345,8 @@ fn convert_to_atoms_with_lines_internal(
                     .or_else(|| symbol_to_display_name.get(callee).cloned())
                     .unwrap_or_else(|| "unknown".to_string());
                 
-                let dep_path = symbol_to_path(callee, &display_name);
-                dependencies.insert(dep_path, DependencyInfo { visible: true });
+                let dep_path = symbol_to_scip_name(callee, &display_name);
+                dependencies.insert(dep_path);
             }
 
             // Get start line from SCIP range (0-based, convert to 1-based)
@@ -358,10 +375,9 @@ fn convert_to_atoms_with_lines_internal(
 
             AtomWithLines {
                 display_name: node.display_name.clone(),
-                visible: true,
+                scip_name: symbol_to_scip_name(&node.symbol, &node.display_name),
                 dependencies,
                 code_path: node.relative_path.clone(),
-                code_function: symbol_to_rust_path(&node.symbol, &node.display_name),
                 code_text: CodeTextInfo {
                     lines_start,
                     lines_end,

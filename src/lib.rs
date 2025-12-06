@@ -110,10 +110,33 @@ fn is_function_like(kind: i32) -> bool {
     matches!(kind, 6 | 17 | 26 | 80) // Method, Function, etc.
 }
 
-/// Create a unique key for a function by combining symbol and signature.
-/// This handles cases where multiple trait impls have the same symbol but different signatures.
-fn make_unique_key(symbol: &str, signature: &str) -> String {
-    format!("{}|{}", symbol, signature)
+/// Create a unique key for a function by combining symbol, signature, self_type, and line number.
+///
+/// This handles multiple levels of potential collisions:
+/// 1. Same symbol, different signature → distinguished by signature
+/// 2. Same symbol & signature, different Self type → distinguished by self_type
+/// 3. Same symbol, signature & self_type, different line → distinguished by line (fallback)
+///
+/// The line number fallback handles edge cases like:
+/// ```text
+/// impl<T> Marker<A> for X { fn mark(self) {} }  // line 10
+/// impl<T> Marker<B> for X { fn mark(self) {} }  // line 20
+/// ```
+/// Where the trait type parameter doesn't appear in the method signature.
+fn make_unique_key(
+    symbol: &str,
+    signature: &str,
+    self_type: Option<&str>,
+    line: Option<i32>,
+) -> String {
+    let base = match self_type {
+        Some(st) => format!("{}|{}|{}", symbol, signature, st),
+        None => format!("{}|{}", symbol, signature),
+    };
+    match line {
+        Some(l) => format!("{}@{}", base, l),
+        None => base,
+    }
 }
 
 /// Build a call graph from SCIP data.
@@ -197,9 +220,6 @@ pub fn build_call_graph(
                 all_function_symbols.insert(symbol.symbol.clone());
                 symbol_to_display_name.insert(symbol.symbol.clone(), display_name.clone());
 
-                // Create unique key using signature to handle duplicate symbols
-                let unique_key = make_unique_key(&symbol.symbol, signature);
-
                 // Get the nth definition for this symbol (matching symbol entry order with def order)
                 let def_index = *symbol_seen_count.get(&symbol.symbol).unwrap_or(&0);
                 symbol_seen_count
@@ -207,7 +227,7 @@ pub fn build_call_graph(
                     .and_modify(|c| *c += 1)
                     .or_insert(1);
 
-                // Look up self_type from the pre-collected map
+                // Look up self_type from the pre-collected map BEFORE creating unique key
                 // Use the index to handle multiple impls with the same symbol
                 let self_type =
                     if let Some(self_types) = enclosing_to_self_types.get(&symbol.symbol) {
@@ -223,7 +243,19 @@ pub fn build_call_graph(
 
                 // Only add to call_graph if DEFINED in this project
                 if let Some(defs) = symbol_to_definitions.get(&symbol.symbol) {
-                    if let Some((rel_path, _line)) = defs.get(def_index) {
+                    if let Some((rel_path, line)) = defs.get(def_index) {
+                        // Create unique key using signature, self_type, AND line number
+                        // This handles all collision cases:
+                        // - Same symbol, different signature → distinguished by signature
+                        // - Same symbol & signature, different Self type → distinguished by self_type
+                        // - Same symbol, signature & self_type → distinguished by line (fallback)
+                        let unique_key = make_unique_key(
+                            &symbol.symbol,
+                            signature,
+                            self_type.as_deref(),
+                            Some(*line),
+                        );
+
                         project_function_keys.insert(unique_key.clone());
 
                         call_graph.insert(
@@ -266,21 +298,45 @@ pub fn build_call_graph(
     // Rebuild the symbol_line_to_key map more correctly
     symbol_line_to_key.clear();
     let mut symbol_seen_for_lines: HashMap<String, usize> = HashMap::new();
+    let mut symbol_self_type_idx_for_lines: HashMap<String, usize> = HashMap::new();
     for doc in &scip_data.documents {
         for symbol in &doc.symbols {
             if is_function_like(symbol.kind) {
                 let signature = &symbol.signature_documentation.text;
-                let unique_key = make_unique_key(&symbol.symbol, signature);
 
-                if call_graph.contains_key(&unique_key) {
-                    let def_index = *symbol_seen_for_lines.get(&symbol.symbol).unwrap_or(&0);
-                    symbol_seen_for_lines
-                        .entry(symbol.symbol.clone())
-                        .and_modify(|c| *c += 1)
-                        .or_insert(1);
+                // Get the definition index first so we can look up the line number
+                let def_index = *symbol_seen_for_lines.get(&symbol.symbol).unwrap_or(&0);
+                symbol_seen_for_lines
+                    .entry(symbol.symbol.clone())
+                    .and_modify(|c| *c += 1)
+                    .or_insert(1);
 
-                    if let Some(defs) = symbol_to_definitions.get(&symbol.symbol) {
-                        if let Some((_, line)) = defs.get(def_index) {
+                // Look up self_type (must match the same logic as the first pass)
+                let self_type =
+                    if let Some(self_types) = enclosing_to_self_types.get(&symbol.symbol) {
+                        let idx = *symbol_self_type_idx_for_lines
+                            .get(&symbol.symbol)
+                            .unwrap_or(&0);
+                        symbol_self_type_idx_for_lines
+                            .entry(symbol.symbol.clone())
+                            .and_modify(|i| *i += 1)
+                            .or_insert(1);
+                        self_types.get(idx).cloned()
+                    } else {
+                        None
+                    };
+
+                // Get line number from definitions
+                if let Some(defs) = symbol_to_definitions.get(&symbol.symbol) {
+                    if let Some((_, line)) = defs.get(def_index) {
+                        let unique_key = make_unique_key(
+                            &symbol.symbol,
+                            signature,
+                            self_type.as_deref(),
+                            Some(*line),
+                        );
+
+                        if call_graph.contains_key(&unique_key) {
                             symbol_line_to_key.insert((symbol.symbol.clone(), *line), unique_key);
                         }
                     }

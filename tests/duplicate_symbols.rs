@@ -117,6 +117,58 @@ fn test_scip_names_include_type_info() {
     );
 }
 
+/// Test that implementations with same symbol AND same signature but different Self types
+/// are all captured. This is the bug reported as "impls of form X<a,b> are overwriting each other".
+///
+/// Example: `impl Mul<&Scalar> for &RistrettoPoint` and `impl Mul<&Scalar> for &RistrettoBasepointTable`
+///
+/// Both have:
+/// - Symbol: `ristretto/Mul#mul().`
+/// - Signature: `fn mul(self, scalar: &'b Scalar) -> RistrettoPoint`
+///
+/// But different self types: `&RistrettoPoint` vs `&RistrettoBasepointTable`
+#[test]
+fn test_same_symbol_and_signature_different_self_types() {
+    let (call_graph, _) = get_test_data();
+
+    // Find all ristretto/Mul#mul() implementations with signature containing "scalar: &"
+    // (i.e., Mul<&Scalar> implementations)
+    let mul_scalar_entries: Vec<_> = call_graph
+        .values()
+        .filter(|node| {
+            node.symbol.contains("ristretto/Mul#mul")
+                && node.signature_text.contains("scalar:")
+                && node.signature_text.contains("&")
+        })
+        .collect();
+
+    // We should have at least 2 different Self types for `impl Mul<&Scalar>`:
+    // - &RistrettoPoint
+    // - &RistrettoBasepointTable
+    // (and possibly &Scalar, depending on SCIP data)
+    let self_types: Vec<_> = mul_scalar_entries
+        .iter()
+        .map(|n| n.self_type.as_deref().unwrap_or("None"))
+        .collect();
+
+    let unique_self_types: std::collections::HashSet<_> = self_types.iter().cloned().collect();
+
+    assert!(
+        unique_self_types.len() >= 2,
+        "Expected at least 2 different Self types for ristretto Mul<&Scalar>, got: {:?}",
+        self_types
+    );
+
+    // Also verify all have different entries in call_graph (none were overwritten)
+    assert_eq!(
+        mul_scalar_entries.len(),
+        unique_self_types.len(),
+        "Some implementations were overwritten! Entries: {}, Unique self_types: {}",
+        mul_scalar_entries.len(),
+        unique_self_types.len()
+    );
+}
+
 /// Test that Neg trait implementations for both &Type and Type are captured.
 /// Unlike Mul, Neg implementations have different SCIP symbols:
 /// - `impl Neg for &Type` → `module/Neg#neg()`

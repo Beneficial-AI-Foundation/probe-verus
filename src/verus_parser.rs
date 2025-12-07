@@ -98,15 +98,25 @@ impl<'ast> Visit<'ast> for FunctionSpanVisitor {
         verus_syn::visit::visit_item_mod(self, node);
     }
 
-    // Handle verus! macro blocks by parsing their contents
+    // Handle verus! and cfg_if! macro blocks by parsing their contents
     fn visit_item_macro(&mut self, node: &'ast ItemMacro) {
-        // Check if this is a verus! macro
         if let Some(ident) = &node.mac.path.get_ident() {
             if *ident == "verus" {
                 // Try to parse the macro body as items
                 if let Ok(items) = verus_syn::parse2::<VerusMacroBody>(node.mac.tokens.clone()) {
                     for item in items.items {
                         self.visit_item(&item);
+                    }
+                }
+            } else if *ident == "cfg_if" {
+                // Try to parse the cfg_if! macro body
+                // cfg_if! has syntax: if #[cfg(...)] { items } else if #[cfg(...)] { items } else { items }
+                // We want to extract items from ALL branches since all may contain function definitions
+                if let Ok(branches) = verus_syn::parse2::<CfgIfMacroBody>(node.mac.tokens.clone()) {
+                    for items in branches.all_items {
+                        for item in items {
+                            self.visit_item(&item);
+                        }
                     }
                 }
             }
@@ -128,6 +138,73 @@ impl verus_syn::parse::Parse for VerusMacroBody {
             items.push(input.parse()?);
         }
         Ok(VerusMacroBody { items })
+    }
+}
+
+/// Helper struct to parse cfg_if! macro body
+/// The syntax is: if #[cfg(...)] { items } else if #[cfg(...)] { items } else { items }
+struct CfgIfMacroBody {
+    all_items: Vec<Vec<Item>>,
+}
+
+impl verus_syn::parse::Parse for CfgIfMacroBody {
+    fn parse(input: verus_syn::parse::ParseStream) -> verus_syn::Result<Self> {
+        use verus_syn::Token;
+
+        let mut all_items = Vec::new();
+
+        // Parse: if #[cfg(...)] { items }
+        if input.peek(Token![if]) {
+            input.parse::<Token![if]>()?;
+
+            // Skip the #[cfg(...)] attribute
+            // In macro token streams, the tokens are:
+            //   # followed by a Group{delimiter: Bracket} containing the attribute content
+            // So we parse # and then a Group, not using bracketed! which expects [ ] tokens
+            input.parse::<Token![#]>()?;
+            let _attr_group: proc_macro2::Group = input.parse()?;
+
+            // Parse the block { items }
+            let content;
+            verus_syn::braced!(content in input);
+            let mut items = Vec::new();
+            while !content.is_empty() {
+                items.push(content.parse()?);
+            }
+            all_items.push(items);
+        }
+
+        // Parse any else if or else branches
+        while input.peek(Token![else]) {
+            input.parse::<Token![else]>()?;
+
+            if input.peek(Token![if]) {
+                // else if #[cfg(...)] { items }
+                input.parse::<Token![if]>()?;
+                input.parse::<Token![#]>()?;
+                let _attr_group: proc_macro2::Group = input.parse()?;
+
+                let content;
+                verus_syn::braced!(content in input);
+                let mut items = Vec::new();
+                while !content.is_empty() {
+                    items.push(content.parse()?);
+                }
+                all_items.push(items);
+            } else {
+                // else { items }
+                let content;
+                verus_syn::braced!(content in input);
+                let mut items = Vec::new();
+                while !content.is_empty() {
+                    items.push(content.parse()?);
+                }
+                all_items.push(items);
+                break; // else is always last
+            }
+        }
+
+        Ok(CfgIfMacroBody { all_items })
     }
 }
 

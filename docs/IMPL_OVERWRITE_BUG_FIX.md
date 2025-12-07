@@ -132,3 +132,4 @@ See `tests/duplicate_symbols.rs`:
 - `docs/TRAIT_IMPL_SYMBOL_PATTERNS.md` - SCIP symbol patterns for trait impls
 - `docs/SCIP_SYMBOL_FORMAT_COMPARISON.md` - rust-analyzer vs verus-analyzer differences
 
+

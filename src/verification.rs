@@ -1053,13 +1053,12 @@ impl VerificationAnalyzer {
 }
 
 /// Atom entry from atoms.json for scip-name lookup
+/// Note: scip-name is now the dictionary key, not a field in the value
 #[derive(Debug, Clone, Deserialize)]
 struct AtomEntry {
     #[serde(rename = "display-name")]
     #[allow(dead_code)]
     display_name: String,
-    #[serde(rename = "scip-name")]
-    scip_name: String,
     #[serde(rename = "code-path")]
     code_path: String,
     #[serde(rename = "code-text")]
@@ -1073,11 +1072,11 @@ pub fn enrich_with_scip_names(
     result: &mut AnalysisResult,
     atoms_path: &Path,
 ) -> Result<usize, String> {
-    // Read and parse atoms.json
+    // Read and parse atoms.json (now a dictionary keyed by scip-name)
     let content = fs::read_to_string(atoms_path)
         .map_err(|e| format!("Failed to read {}: {}", atoms_path.display(), e))?;
 
-    let atoms: Vec<AtomEntry> = serde_json::from_str(&content)
+    let atoms: HashMap<String, AtomEntry> = serde_json::from_str(&content)
         .map_err(|e| format!("Failed to parse {}: {}", atoms_path.display(), e))?;
 
     // Line tolerance for matching - verus-analyzer and verus_syn may report slightly
@@ -1103,10 +1102,10 @@ pub fn enrich_with_scip_names(
         let loc_suffix = extract_suffix(&loc.code_path);
         let loc_line = loc.code_text.lines_start;
 
-        let mut best_match: Option<&AtomEntry> = None;
+        let mut best_match: Option<&String> = None;
         let mut best_line_diff: usize = usize::MAX;
 
-        for atom in &atoms {
+        for (scip_name, atom) in &atoms {
             let atom_suffix = extract_suffix(&atom.code_path);
 
             // Check if paths match by suffix
@@ -1121,7 +1120,7 @@ pub fn enrich_with_scip_names(
                 if line_diff <= LINE_TOLERANCE && line_diff < best_line_diff {
                     // Also verify display names match to avoid false positives
                     if loc.display_name == atom.display_name {
-                        best_match = Some(atom);
+                        best_match = Some(scip_name);
                         best_line_diff = line_diff;
 
                         // Exact line match is the best we can do
@@ -1133,7 +1132,7 @@ pub fn enrich_with_scip_names(
             }
         }
 
-        best_match.map(|a| a.scip_name.clone())
+        best_match.cloned()
     };
 
     // Enrich all function lists

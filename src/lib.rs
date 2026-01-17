@@ -1,9 +1,68 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::path::Path;
 
+pub mod constants;
+pub mod error;
+pub mod path_utils;
+pub mod scip_cache;
 pub mod verification;
 pub mod verus_parser;
+
+pub use error::{ProbeError, ProbeResult};
+
+use constants::{
+    is_definition, is_function_like_kind, PROBE_URI_PREFIX, SCIP_SYMBOL_PREFIX,
+    TYPE_CONTEXT_LOOKBACK_LINES,
+};
+
+// =============================================================================
+// Function Mode Enum
+// =============================================================================
+
+/// Verus function mode - indicates what kind of verification is performed.
+///
+/// - `Exec`: Executable code, compiled to native code and verified
+/// - `Proof`: Proof code, verified but not compiled (erased at runtime)
+/// - `Spec`: Specification code, defines logical properties (erased at runtime)
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FunctionMode {
+    #[default]
+    Exec,
+    Proof,
+    Spec,
+}
+
+impl FunctionMode {
+    /// Parse a function mode from a string.
+    ///
+    /// Accepts: "exec", "proof", "spec" (case-insensitive)
+    /// Returns `Exec` for unrecognized values (the default mode).
+    pub fn parse(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "proof" => FunctionMode::Proof,
+            "spec" => FunctionMode::Spec,
+            _ => FunctionMode::Exec,
+        }
+    }
+
+    /// Convert to a string representation.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            FunctionMode::Exec => "exec",
+            FunctionMode::Proof => "proof",
+            FunctionMode::Spec => "spec",
+        }
+    }
+}
+
+impl fmt::Display for FunctionMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
 
 /// SCIP data structures
 #[derive(Debug, Serialize, Deserialize)]
@@ -135,11 +194,11 @@ pub struct AtomWithLines {
     pub code_path: String,
     #[serde(rename = "code-text")]
     pub code_text: CodeTextInfo,
-    /// Verus function mode: "exec", "proof", or "spec"
-    pub mode: String,
+    /// Verus function mode: exec, proof, or spec
+    pub mode: FunctionMode,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CodeTextInfo {
     #[serde(rename = "lines-start")]
     pub lines_start: usize,
@@ -156,7 +215,7 @@ pub fn parse_scip_json(file_path: &str) -> Result<ScipIndex, Box<dyn std::error:
 
 /// Check if a symbol kind represents a function-like entity
 fn is_function_like(kind: i32) -> bool {
-    matches!(kind, 6 | 17 | 26 | 80) // Method, Function, etc.
+    is_function_like_kind(kind)
 }
 
 /// Create a unique key for a function by combining symbol, signature, self_type, and line number.
@@ -208,8 +267,7 @@ pub fn build_call_graph(
     for doc in &scip_data.documents {
         let rel_path = doc.relative_path.trim_start_matches('/').to_string();
         for occurrence in &doc.occurrences {
-            let is_definition = occurrence.symbol_roles.unwrap_or(0) & 1 == 1;
-            if is_definition && !occurrence.range.is_empty() {
+            if is_definition(occurrence.symbol_roles) && !occurrence.range.is_empty() {
                 let line = occurrence.range[0];
                 symbol_to_definitions
                     .entry(occurrence.symbol.clone())
@@ -234,8 +292,10 @@ pub fn build_call_graph(
         // Collect all type references in this document
         let mut type_refs_by_line: HashMap<i32, Vec<String>> = HashMap::new();
         for occ in &doc.occurrences {
-            let is_definition = occ.symbol_roles.unwrap_or(0) & 1 == 1;
-            if !is_definition && !occ.range.is_empty() && occ.symbol.ends_with('#') {
+            if !is_definition(occ.symbol_roles)
+                && !occ.range.is_empty()
+                && occ.symbol.ends_with('#')
+            {
                 let line = occ.range[0];
                 if let Some(type_name) = extract_type_name_from_symbol(&occ.symbol) {
                     type_refs_by_line.entry(line).or_default().push(type_name);
@@ -245,13 +305,12 @@ pub fn build_call_graph(
 
         // For each definition line, collect types from nearby lines (within 5 lines before)
         for occ in &doc.occurrences {
-            let is_definition = occ.symbol_roles.unwrap_or(0) & 1 == 1;
-            if is_definition && !occ.range.is_empty() {
+            if is_definition(occ.symbol_roles) && !occ.range.is_empty() {
                 let def_line = occ.range[0];
                 let mut nearby_types = Vec::new();
 
-                // Look at lines from def_line-5 to def_line
-                for offset in 0..=5 {
+                // Look at lines from def_line-N to def_line for type context
+                for offset in 0..=TYPE_CONTEXT_LOOKBACK_LINES {
                     let check_line = def_line - offset;
                     if check_line >= 0 {
                         if let Some(types) = type_refs_by_line.get(&check_line) {
@@ -464,8 +523,7 @@ pub fn build_call_graph(
         // Type symbols are those ending with # (struct/type references)
         let mut line_to_type_hints: HashMap<i32, Vec<String>> = HashMap::new();
         for occ in &ordered_occurrences {
-            let is_definition = occ.symbol_roles.unwrap_or(0) & 1 == 1;
-            if !is_definition && !occ.range.is_empty() {
+            if !is_definition(occ.symbol_roles) && !occ.range.is_empty() {
                 let line = occ.range[0];
                 // Check if this is a type reference (symbol ends with #)
                 if occ.symbol.ends_with('#') {
@@ -480,7 +538,7 @@ pub fn build_call_graph(
         }
 
         for occurrence in &ordered_occurrences {
-            let is_definition = occurrence.symbol_roles.unwrap_or(0) & 1 == 1;
+            let is_def = is_definition(occurrence.symbol_roles);
             let line = if !occurrence.range.is_empty() {
                 occurrence.range[0]
             } else {
@@ -488,7 +546,7 @@ pub fn build_call_graph(
             };
 
             // Track when we enter a project function definition
-            if is_definition {
+            if is_def {
                 // Look up the unique key for this (symbol, line) pair
                 if let Some(key) = symbol_line_to_key.get(&(occurrence.symbol.clone(), line)) {
                     current_function_key = Some(key.clone());
@@ -500,7 +558,7 @@ pub fn build_call_graph(
 
             // Track ALL function calls (including to external functions)
             // Note: References use the base symbol, not the unique key
-            if !is_definition && all_function_symbols.contains(&occurrence.symbol) {
+            if !is_def && all_function_symbols.contains(&occurrence.symbol) {
                 if let Some(caller_key) = &current_function_key {
                     if let Some(caller_node) = call_graph.get_mut(caller_key) {
                         // For callees, we store the base symbol with type hints
@@ -713,7 +771,9 @@ fn is_missing_self_type(symbol: &str) -> bool {
 /// Example: "probe:crate/0.1.0/TopLevel#method()" -> "" (no module path)
 fn extract_code_module(probe_name: &str) -> String {
     // Strip "probe:" prefix
-    let s = probe_name.strip_prefix("probe:").unwrap_or(probe_name);
+    let s = probe_name
+        .strip_prefix(PROBE_URI_PREFIX)
+        .unwrap_or(probe_name);
 
     // Find the position of "#" which marks the type/method boundary
     let hash_pos = s.find('#').unwrap_or(s.len());
@@ -776,6 +836,15 @@ fn symbol_to_scip_name_with_line(
         line_number,
         None,
     )
+    .unwrap_or_else(|e| {
+        // Log warning and return a fallback name using the raw symbol
+        eprintln!("Warning: {}", e);
+        format!(
+            "{}{}",
+            PROBE_URI_PREFIX,
+            symbol.replace("rust-analyzer cargo ", "").replace(' ', "/")
+        )
+    })
 }
 
 /// Convert symbol to scip name with full disambiguation options.
@@ -787,6 +856,10 @@ fn symbol_to_scip_name_with_line(
 /// * `self_type` - Optional Self type for trait impls
 /// * `line_number` - Optional line number (last resort disambiguation)
 /// * `target_type` - Optional target type parameter for generic impls (e.g., "ProjectiveNielsPoint")
+///
+/// # Returns
+/// Returns `Ok(String)` with the formatted scip name, or `Err(ProbeError)` if the symbol
+/// format is invalid.
 fn symbol_to_scip_name_full(
     symbol: &str,
     display_name: &str,
@@ -794,22 +867,23 @@ fn symbol_to_scip_name_full(
     self_type: Option<&str>,
     line_number: Option<usize>,
     target_type: Option<&str>,
-) -> String {
+) -> Result<String, ProbeError> {
     // Step 1: Strip "rust-analyzer cargo " prefix
-    let s = symbol
-        .strip_prefix("rust-analyzer cargo ")
-        .unwrap_or_else(|| {
-            panic!(
-                "Symbol does not start with 'rust-analyzer cargo ': {}",
-                symbol
-            )
-        });
+    let s = symbol.strip_prefix(SCIP_SYMBOL_PREFIX).ok_or_else(|| {
+        ProbeError::invalid_symbol(
+            format!("Symbol does not start with '{}'", SCIP_SYMBOL_PREFIX),
+            symbol,
+        )
+    })?;
 
     // Step 2 & 3: Check if s ends with "display_name()."
     let expected_suffix = format!("{}().", display_name);
 
     if !s.ends_with(&expected_suffix) {
-        panic!("Symbol does not end with '{}': {}", expected_suffix, symbol);
+        return Err(ProbeError::invalid_symbol(
+            format!("Symbol does not end with '{}'", expected_suffix),
+            symbol,
+        ));
     }
 
     // Delete the last character of s
@@ -879,7 +953,7 @@ fn symbol_to_scip_name_full(
     // Convert to probe: URI format
     // "curve25519-dalek 4.1.3 montgomery/MontgomeryPoint#ct_eq()"
     // becomes "probe:curve25519-dalek/4.1.3/montgomery/MontgomeryPoint#ct_eq()"
-    format!("probe:{}", result.replace(' ', "/"))
+    Ok(format!("{}{}", PROBE_URI_PREFIX, result.replace(' ', "/")))
 }
 
 /// Convert call graph to atoms with line numbers format.
@@ -939,7 +1013,7 @@ fn convert_to_atoms_with_lines_internal(
         lines_start: usize,
         lines_end: usize,
         base_scip_name: String,
-        mode: String,
+        mode: FunctionMode,
         /// Line range of requires clause, if present
         requires_range: Option<(usize, usize)>,
         /// Line range of ensures clause, if present
@@ -970,7 +1044,7 @@ fn convert_to_atoms_with_lines_internal(
                 }
             };
 
-            // Get mode from span_map (defaults to "exec" if not found)
+            // Get mode from span_map (defaults to Exec if not found)
             let mode = if let Some(map) = span_map {
                 verus_parser::get_function_mode(
                     map,
@@ -978,9 +1052,9 @@ fn convert_to_atoms_with_lines_internal(
                     &node.display_name,
                     lines_start,
                 )
-                .unwrap_or_else(|| "exec".to_string())
+                .unwrap_or(FunctionMode::Exec)
             } else {
-                "exec".to_string()
+                FunctionMode::Exec
             };
 
             // Get spec ranges (requires/ensures line ranges)
@@ -1083,7 +1157,7 @@ fn convert_to_atoms_with_lines_internal(
 
             if is_duplicate {
                 // Try to use discriminating type first, fall back to line number
-                if let Some(Some(target_type)) = node_discriminating_type.get(&idx) {
+                let result = if let Some(Some(target_type)) = node_discriminating_type.get(&idx) {
                     symbol_to_scip_name_full(
                         &data.node.symbol,
                         &data.node.display_name,
@@ -1103,8 +1177,12 @@ fn convert_to_atoms_with_lines_internal(
                         None,
                     )
                 } else {
+                    Ok(data.base_scip_name.clone())
+                };
+                result.unwrap_or_else(|e| {
+                    eprintln!("Warning: {}", e);
                     data.base_scip_name.clone()
-                }
+                })
             } else {
                 data.base_scip_name.clone()
             }
@@ -1303,7 +1381,7 @@ fn convert_to_atoms_with_lines_internal(
                     lines_start: data.lines_start,
                     lines_end: data.lines_end,
                 },
-                mode: data.mode.clone(),
+                mode: data.mode,
             }
         })
         .collect()

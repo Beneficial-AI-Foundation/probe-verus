@@ -6,6 +6,7 @@
 //! This module also provides functionality to find all functions in a project,
 //! including support for Verus-specific constructs (spec, proof, exec functions).
 
+use crate::FunctionMode;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -25,8 +26,8 @@ pub struct FunctionSpan {
     pub name: String,
     pub start_line: usize,
     pub end_line: usize,
-    /// Verus function mode: "exec", "proof", or "spec"
-    pub mode: String,
+    /// Verus function mode
+    pub mode: FunctionMode,
     /// Line range of requires clause (start, end), if present
     pub requires_range: Option<(usize, usize)>,
     /// Line range of ensures clause (start, end), if present
@@ -45,12 +46,12 @@ impl FunctionSpanVisitor {
         }
     }
 
-    /// Convert FnMode to a string representation
-    fn mode_to_string(mode: &FnMode) -> String {
+    /// Convert FnMode to FunctionMode
+    fn convert_mode(mode: &FnMode) -> FunctionMode {
         match mode {
-            FnMode::Spec(_) | FnMode::SpecChecked(_) => "spec".to_string(),
-            FnMode::Proof(_) | FnMode::ProofAxiom(_) => "proof".to_string(),
-            FnMode::Exec(_) | FnMode::Default => "exec".to_string(),
+            FnMode::Spec(_) | FnMode::SpecChecked(_) => FunctionMode::Spec,
+            FnMode::Proof(_) | FnMode::ProofAxiom(_) => FunctionMode::Proof,
+            FnMode::Exec(_) | FnMode::Default => FunctionMode::Exec,
         }
     }
 
@@ -76,7 +77,7 @@ impl<'ast> Visit<'ast> for FunctionSpanVisitor {
         let span = node.span();
         let start_line = span.start().line;
         let end_line = span.end().line;
-        let mode = Self::mode_to_string(&node.sig.mode);
+        let mode = Self::convert_mode(&node.sig.mode);
         let (requires_range, ensures_range) = Self::extract_spec_ranges(&node.sig);
 
         self.functions.push(FunctionSpan {
@@ -97,7 +98,7 @@ impl<'ast> Visit<'ast> for FunctionSpanVisitor {
         let span = node.span();
         let start_line = span.start().line;
         let end_line = span.end().line;
-        let mode = Self::mode_to_string(&node.sig.mode);
+        let mode = Self::convert_mode(&node.sig.mode);
         let (requires_range, ensures_range) = Self::extract_spec_ranges(&node.sig);
 
         self.functions.push(FunctionSpan {
@@ -118,7 +119,7 @@ impl<'ast> Visit<'ast> for FunctionSpanVisitor {
         let span = node.span();
         let start_line = span.start().line;
         let end_line = span.end().line;
-        let mode = Self::mode_to_string(&node.sig.mode);
+        let mode = Self::convert_mode(&node.sig.mode);
         let (requires_range, ensures_range) = Self::extract_spec_ranges(&node.sig);
 
         self.functions.push(FunctionSpan {
@@ -282,7 +283,7 @@ pub fn parse_file_for_spans(file_path: &Path) -> Result<Vec<FunctionSpan>, Strin
 #[derive(Debug, Clone)]
 pub struct SpanAndMode {
     pub end_line: usize,
-    pub mode: String,
+    pub mode: FunctionMode,
     /// Line range of requires clause (start, end), if present
     pub requires_range: Option<(usize, usize)>,
     /// Line range of ensures clause (start, end), if present
@@ -371,7 +372,7 @@ pub fn get_function_mode(
     relative_path: &str,
     function_name: &str,
     start_line: usize,
-) -> Option<String> {
+) -> Option<FunctionMode> {
     // Try exact match first
     let key = (
         relative_path.to_string(),
@@ -379,7 +380,7 @@ pub fn get_function_mode(
         start_line,
     );
     if let Some(span_and_mode) = span_map.get(&key) {
-        return Some(span_and_mode.mode.clone());
+        return Some(span_and_mode.mode);
     }
 
     // Try containment match
@@ -389,7 +390,7 @@ pub fn get_function_mode(
             && start_line >= *parsed_start
             && start_line <= span_and_mode.end_line
         {
-            return Some(span_and_mode.mode.clone());
+            return Some(span_and_mode.mode);
         }
     }
 

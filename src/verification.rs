@@ -4,6 +4,11 @@
 //! including compilation errors, verification failures, and verification results.
 //! Ported from the Python find_verus_functions_syn.py script.
 
+use crate::constants::LINE_TOLERANCE;
+use crate::path_utils::{
+    extract_src_suffix, find_best_matching_path, paths_match_by_suffix, PathMatcher,
+};
+use crate::CodeTextInfo;
 use regex::Regex;
 use rust_lapper::{Interval, Lapper};
 use serde::{Deserialize, Serialize};
@@ -32,8 +37,8 @@ type FuncInterval = Interval<usize, FunctionInterval>;
 struct FunctionIndex {
     /// Map from normalized file path to interval tree of functions
     trees: HashMap<String, Lapper<usize, FunctionInterval>>,
-    /// All files we know about (for fuzzy path matching)
-    known_files: Vec<String>,
+    /// Path matcher for fuzzy file path matching
+    path_matcher: PathMatcher,
 }
 
 impl FunctionIndex {
@@ -73,7 +78,10 @@ impl FunctionIndex {
             trees.insert(file, Lapper::new(intervals));
         }
 
-        Self { trees, known_files }
+        Self {
+            trees,
+            path_matcher: PathMatcher::new(known_files),
+        }
     }
 
     /// Find the function containing the given line in the given file
@@ -96,38 +104,7 @@ impl FunctionIndex {
 
     /// Find the best matching file path with priority: exact > suffix > filename-only
     fn find_matching_file(&self, query_path: &str) -> Option<&String> {
-        let query = std::path::Path::new(query_path);
-        let query_str = query.to_string_lossy();
-
-        let mut best_match: Option<&String> = None;
-        let mut best_score = 0; // 0=none, 1=filename, 2=suffix, 3=exact
-
-        for file_key in &self.known_files {
-            let key_path = std::path::Path::new(file_key);
-            let key_str = key_path.to_string_lossy();
-
-            // Exact match (highest priority)
-            if query == key_path {
-                return Some(file_key); // Can't do better
-            }
-
-            // Suffix match (high priority)
-            if query_str.ends_with(&*key_str) || key_str.ends_with(&*query_str) {
-                if best_score < 2 {
-                    best_match = Some(file_key);
-                    best_score = 2;
-                }
-                continue;
-            }
-
-            // Filename-only match (lowest priority)
-            if best_score < 1 && query.file_name() == key_path.file_name() {
-                best_match = Some(file_key);
-                best_score = 1;
-            }
-        }
-
-        best_match
+        self.path_matcher.find_best_match(query_path)
     }
 }
 
@@ -618,43 +595,11 @@ impl VerificationParser {
         line_number: i32,
         all_functions_with_lines: &HashMap<String, Vec<(String, usize)>>,
     ) -> Option<String> {
-        let file_path_normalized = std::path::Path::new(file_path);
-        let file_path_str = file_path_normalized.to_string_lossy();
-
         // Find matching file with priority: exact > suffix > filename-only
-        // We need to find the BEST match, not just the first match
-        let mut best_match: Option<&String> = None;
-        let mut best_match_score = 0; // 0=none, 1=filename, 2=suffix, 3=exact
-
-        for file_key in all_functions_with_lines.keys() {
-            let file_key_path = std::path::Path::new(file_key);
-            let file_key_str = file_key_path.to_string_lossy();
-
-            // Exact match (highest priority)
-            if file_path_normalized == file_key_path {
-                best_match = Some(file_key);
-                break; // Can't do better than exact
-            }
-
-            // Suffix match (high priority)
-            // Check if error path ends with known file path or vice versa
-            if file_path_str.ends_with(&*file_key_str) || file_key_str.ends_with(&*file_path_str) {
-                if best_match_score < 2 {
-                    best_match = Some(file_key);
-                    best_match_score = 2;
-                }
-                continue;
-            }
-
-            // Filename-only match (lowest priority, only if no better match)
-            if best_match_score < 1 && file_path_normalized.file_name() == file_key_path.file_name()
-            {
-                best_match = Some(file_key);
-                best_match_score = 1;
-            }
-        }
-
-        let matching_file = best_match?;
+        let matching_file = find_best_matching_path(
+            file_path,
+            all_functions_with_lines.keys().map(|s| s.as_str()),
+        )?;
         let functions_in_file = all_functions_with_lines.get(matching_file)?;
 
         // Find closest function above the line
@@ -814,14 +759,7 @@ pub struct FunctionLocation {
     pub code_text: CodeTextInfo,
 }
 
-/// Code text info with line ranges - aligned with atoms.json format
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CodeTextInfo {
-    #[serde(rename = "lines-start")]
-    pub lines_start: usize,
-    #[serde(rename = "lines-end")]
-    pub lines_end: usize,
-}
+// CodeTextInfo is imported from crate root for consistency with atoms.json format
 
 /// Verification output analyzer
 ///
@@ -1081,36 +1019,22 @@ pub fn enrich_with_scip_names(
 
     // Line tolerance for matching - verus-analyzer and verus_syn may report slightly
     // different start lines due to attributes/doc comments handling
-    const LINE_TOLERANCE: usize = 5;
-
-    // Helper to check if paths match (by suffix)
-    fn paths_match(path1: &str, path2: &str) -> bool {
-        path1.ends_with(path2) || path2.ends_with(path1)
-    }
-
-    // Helper to extract common suffix path for matching
-    fn extract_suffix(path: &str) -> &str {
-        // Try to find the "src/" part and use everything from there
-        if let Some(pos) = path.find("/src/") {
-            return &path[pos + 1..]; // Returns "src/..."
-        }
-        path
-    }
+    // (LINE_TOLERANCE is imported from crate::constants)
 
     // Helper to find scip-name with fuzzy path and line matching
     let find_scip_name = |loc: &FunctionLocation| -> Option<String> {
-        let loc_suffix = extract_suffix(&loc.code_path);
+        let loc_suffix = extract_src_suffix(&loc.code_path);
         let loc_line = loc.code_text.lines_start;
 
         let mut best_match: Option<&String> = None;
         let mut best_line_diff: usize = usize::MAX;
 
         for (scip_name, atom) in &atoms {
-            let atom_suffix = extract_suffix(&atom.code_path);
+            let atom_suffix = extract_src_suffix(&atom.code_path);
 
             // Check if paths match by suffix
             let path_matches =
-                paths_match(&loc.code_path, &atom.code_path) || loc_suffix == atom_suffix;
+                paths_match_by_suffix(&loc.code_path, &atom.code_path) || loc_suffix == atom_suffix;
 
             if path_matches {
                 // Check line tolerance

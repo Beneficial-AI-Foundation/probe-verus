@@ -41,7 +41,7 @@ Options:
 **Examples:**
 ```bash
 probe-verus atomize ./my-rust-project
-probe-verus atomize ./my-rust-project -o output.json
+probe-verus atomize ./my-rust-project -o atoms.json
 probe-verus atomize ./my-rust-project --regenerate-scip
 probe-verus atomize ./my-rust-project --with-locations  # extended output
 ```
@@ -161,7 +161,7 @@ probe-verus specify ./src -a atoms.json
 probe-verus specify ./src -a atoms.json --with-spec-text
 
 # Custom output file
-probe-verus specify ./src -a atoms.json -o my-specs.json
+probe-verus specify ./src -a atoms.json -o specs.json
 ```
 
 **Output format:**

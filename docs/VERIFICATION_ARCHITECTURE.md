@@ -34,7 +34,7 @@ The `probe-verus` tool has **two completely independent pipelines**:
 │   + verus_syn spans           │   + verus_syn spans                     │
 │        │                      │        │                                │
 │        ▼                      │        ▼                                │
-│   atoms.json                  │   results.json                          │
+│   atoms.json                  │   proofs.json                          │
 │   (call graph)                │   (verified/failed functions)           │
 └───────────────────────────────┴─────────────────────────────────────────┘
 ```
@@ -124,7 +124,7 @@ Functions with specifications that have verifiable bodies:
 │                                                    ▼                     │
 │                                         ┌─────────────────────┐          │
 │                                         │   AnalysisResult    │          │
-│                                         │  (results.json)     │          │
+│                                         │  (proofs.json)     │          │
 │                                         └─────────────────────┘          │
 └─────────────────────────────────────────────────────────────────────────┘
 ```

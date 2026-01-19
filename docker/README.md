@@ -41,7 +41,7 @@ docker run --rm --user root \
 
 **Output files:**
 - `atoms.json` - Call graph from atomize
-- `results.json` - Verification results from verify
+- `proofs.json` - Verification results from verify
 - `run_summary.json` - Overall run status
 
 ## Examples
@@ -88,7 +88,7 @@ docker run --rm --user root \
 | File | Description |
 |------|-------------|
 | `atoms.json` | Call graph with dependencies and line ranges |
-| `results.json` | Verification results (verified/failed/unverified functions) |
+| `proofs.json` | Verification results (verified/failed/unverified functions) |
 | `run_summary.json` | Overall run status and summary |
 
 ### atoms.json format
@@ -105,7 +105,7 @@ docker run --rm --user root \
 }
 ```
 
-### results.json format
+### proofs.json format
 
 ```json
 {
@@ -136,7 +136,7 @@ docker run --rm --user root \
   },
   "verify": {
     "success": true,
-    "output_file": "/workspace/output/results.json",
+    "output_file": "/workspace/output/proofs.json",
     "summary": {
       "total_functions": 42,
       "verified": 40,

@@ -8,12 +8,12 @@ use walkdir::WalkDir;
 /// YAML frontmatter structure from stub .md files.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct StubFrontmatter {
-    #[serde(rename = "code-line")]
-    pub code_line: usize,
-    #[serde(rename = "code-path")]
-    pub code_path: String,
-    #[serde(rename = "code-name")]
-    pub code_name: String,
+    #[serde(rename = "code-line", default, skip_serializing_if = "Option::is_none")]
+    pub code_line: Option<usize>,
+    #[serde(rename = "code-path", default, skip_serializing_if = "Option::is_none")]
+    pub code_path: Option<String>,
+    #[serde(rename = "code-name", default, skip_serializing_if = "Option::is_none")]
+    pub code_name: Option<String>,
 }
 
 /// Execute the stubify command.

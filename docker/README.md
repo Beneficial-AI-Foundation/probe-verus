@@ -192,6 +192,14 @@ docker build -t probe-verus -f docker/Dockerfile \
 
 **Note:** The Rust toolchain required by Verus is automatically detected from the release's `rust-toolchain.toml` file.
 
+**Tip:** To list available Verus releases:
+
+```bash
+curl -s https://api.github.com/repos/verus-lang/verus/releases | jq -r '.[].tag_name'
+```
+
+Or browse: https://github.com/verus-lang/verus/releases
+
 ## Security
 
 The container image defaults to a non-root user (`verus`, UID 1000) for security.

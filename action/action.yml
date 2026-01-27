@@ -201,6 +201,9 @@ runs:
         OUTPUT_DIR="${{ inputs.output-dir }}"
         ATOMS_FILE="$OUTPUT_DIR/atoms.json"
         
+        # Ensure output directory exists
+        mkdir -p "$OUTPUT_DIR"
+        
         echo "=== Running probe-verus atomize ==="
         echo "Project: $PROJECT_PATH"
         

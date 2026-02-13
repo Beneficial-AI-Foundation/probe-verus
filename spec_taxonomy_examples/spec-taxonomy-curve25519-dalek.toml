@@ -1,0 +1,113 @@
+# Spec Taxonomy Configuration for Verus Crypto Projects
+#
+# Classification rules for probe-verus specify --taxonomy-config
+#
+# Rule semantics:
+#   - All rules are evaluated independently; all matching rules contribute their label
+#   - Within a rule, all specified criteria must match (AND)
+#   - Within a list criterion (mode, ensures_calls_contain, etc.), any match suffices (OR)
+#   - ensures_calls_contain checks if ANY called function name contains ANY of the substrings
+#
+# How classification works:
+#   - ensures_calls / requires_calls are function names extracted by walking the
+#     verus_syn AST (ExprCall and ExprMethodCall nodes) in each clause.
+#     Example: `ensures is_canonical(x), y == spec_foo(z)` produces
+#     ensures_calls = ["is_canonical", "spec_foo"]
+#   - Specs that use only operators, literals, field access, or quantifiers
+#     (e.g., `ensures forall|i| limbs[i] == 0`) have EMPTY ensures_calls.
+#     Use ensures_calls_empty = true to match these.
+#   - ensures_calls_empty = false matches functions that DO have function calls.
+
+[taxonomy]
+version = "1"
+
+# --- Functional correctness ---
+# Exec functions whose ensures clause references spec-level mathematical models.
+# This is the highest-value category: it proves the implementation matches the spec.
+[[taxonomy.rules]]
+label = "functional-correctness"
+description = "Output matches a mathematical model"
+trust = "highest"
+
+[taxonomy.rules.match]
+mode = ["exec"]
+ensures_calls_contain = ["spec_", "_to_nat", "_as_nat", "_canonical_nat", "_as_affine", "_scalar_mul", "group_order", "is_inverse", "math_on_", "from_bytes"]
+
+# --- Data invariant ---
+# Functions proving representation invariants (canonical form, validity, well-formedness).
+# Includes length/size checks on byte representations (structural consistency).
+# These hold across exec and proof modes.
+[[taxonomy.rules]]
+label = "data-invariant"
+description = "Representation invariant or structural consistency"
+trust = "high"
+
+[taxonomy.rules.match]
+ensures_calls_contain = ["is_canonical", "is_valid", "is_well_formed", "is_identity", "identity_", "len"]
+
+# --- Constant-time behavior ---
+# Functions proving constant-time correctness via the Choice/CtOption abstraction.
+# These ensure behavior is independent of secret data.
+[[taxonomy.rules]]
+label = "constant-time-behavior"
+description = "Constant-time correctness via Choice/CtOption abstraction"
+trust = "high"
+
+[taxonomy.rules.match]
+ensures_calls_contain = ["choice_is_true", "ct_option_has_value", "ct_option_value"]
+
+# --- Bounds safety ---
+# Functions proving values stay within limb/word bounds (no overflow).
+# Maps to "memory safety" in the general taxonomy.
+[[taxonomy.rules]]
+label = "bounds-safety"
+description = "No overflow, values within bounds"
+trust = "high"
+
+[taxonomy.rules.match]
+ensures_calls_contain = ["pow2", "bounded"]
+
+# --- Memory safety ---
+# Exec functions whose ensures clause uses only direct assertions (operators, literals,
+# field access, quantifiers) with no function calls. Catches zeroization proofs,
+# field-equality assertions, and structural memory properties.
+[[taxonomy.rules]]
+label = "memory-safety"
+description = "Direct structural/memory assertions (zeroization, field equality)"
+trust = "high"
+
+[taxonomy.rules.match]
+has_ensures = true
+ensures_calls_empty = true
+mode = ["exec"]
+
+# --- Algebraic property ---
+# Proof-mode functions with ensures clauses (mathematical lemmas).
+[[taxonomy.rules]]
+label = "algebraic-property"
+description = "Mathematical/algebraic lemma"
+trust = "moderate"
+
+[taxonomy.rules.match]
+mode = ["proof"]
+has_ensures = true
+
+# --- Termination ---
+# Functions with decreases clauses, proving termination.
+[[taxonomy.rules]]
+label = "termination"
+description = "Operation terminates (decreases clause)"
+trust = "moderate"
+
+[taxonomy.rules.match]
+has_decreases = true
+
+# --- Specification definition ---
+# Spec-mode functions: pure mathematical definitions, not proofs.
+[[taxonomy.rules]]
+label = "specification-definition"
+description = "Pure specification, not a proof"
+trust = "n/a"
+
+[taxonomy.rules.match]
+mode = ["spec"]

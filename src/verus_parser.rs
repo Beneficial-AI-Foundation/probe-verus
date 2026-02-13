@@ -34,6 +34,112 @@ pub struct FunctionSpan {
     pub ensures_range: Option<(usize, usize)>,
 }
 
+/// Convert FnMode to FunctionMode
+fn convert_mode(mode: &FnMode) -> FunctionMode {
+    match mode {
+        FnMode::Spec(_) | FnMode::SpecChecked(_) => FunctionMode::Spec,
+        FnMode::Proof(_) | FnMode::ProofAxiom(_) => FunctionMode::Proof,
+        FnMode::Exec(_) | FnMode::Default => FunctionMode::Exec,
+    }
+}
+
+/// A collected function call from a spec clause.
+#[derive(Debug, Clone)]
+struct CollectedCall {
+    /// Last path segment (e.g., "is_canonical" from "crate::spec::is_canonical")
+    short_name: String,
+    /// Full qualified path (e.g., "crate::spec::is_canonical"), if available.
+    /// Method calls only have the short name.
+    full_path: Option<String>,
+    /// Whether this is a method call (ExprMethodCall) vs a function call (ExprCall)
+    is_method: bool,
+}
+
+/// Visitor that walks verus_syn Expr nodes and collects function call names.
+///
+/// Used to extract called function names from requires/ensures clauses
+/// for taxonomy classification.
+struct CallNameCollector {
+    calls: Vec<CollectedCall>,
+}
+
+impl CallNameCollector {
+    fn new() -> Self {
+        Self { calls: Vec::new() }
+    }
+
+    /// Get all call names (short names, for backward compatibility).
+    fn names(&self) -> Vec<String> {
+        self.calls.iter().map(|c| c.short_name.clone()).collect()
+    }
+
+    /// Get full paths where available, falling back to short name.
+    fn full_paths(&self) -> Vec<String> {
+        self.calls
+            .iter()
+            .map(|c| c.full_path.clone().unwrap_or_else(|| c.short_name.clone()))
+            .collect()
+    }
+
+    /// Get only function calls (ExprCall, not method calls).
+    fn fn_call_names(&self) -> Vec<String> {
+        self.calls
+            .iter()
+            .filter(|c| !c.is_method)
+            .map(|c| c.short_name.clone())
+            .collect()
+    }
+
+    /// Get only method call names (ExprMethodCall).
+    fn method_call_names(&self) -> Vec<String> {
+        self.calls
+            .iter()
+            .filter(|c| c.is_method)
+            .map(|c| c.short_name.clone())
+            .collect()
+    }
+}
+
+impl<'ast> Visit<'ast> for CallNameCollector {
+    fn visit_expr_call(&mut self, node: &'ast verus_syn::ExprCall) {
+        // Extract function name from Expr::Path (e.g., is_canonical_scalar52(...))
+        if let verus_syn::Expr::Path(path) = &*node.func {
+            if let Some(last) = path.path.segments.last() {
+                let short_name = last.ident.to_string();
+                // Build full path from all segments
+                let full_path = if path.path.segments.len() > 1 {
+                    Some(
+                        path.path
+                            .segments
+                            .iter()
+                            .map(|seg| seg.ident.to_string())
+                            .collect::<Vec<_>>()
+                            .join("::"),
+                    )
+                } else {
+                    None
+                };
+                self.calls.push(CollectedCall {
+                    short_name,
+                    full_path,
+                    is_method: false,
+                });
+            }
+        }
+        // Continue walking sub-expressions (nested calls in arguments)
+        verus_syn::visit::visit_expr_call(self, node);
+    }
+
+    fn visit_expr_method_call(&mut self, node: &'ast verus_syn::ExprMethodCall) {
+        self.calls.push(CollectedCall {
+            short_name: node.method.to_string(),
+            full_path: None, // Method calls don't have a path, only the method name
+            is_method: true,
+        });
+        verus_syn::visit::visit_expr_method_call(self, node);
+    }
+}
+
 /// Visitor that collects function spans from an AST
 struct FunctionSpanVisitor {
     functions: Vec<FunctionSpan>,
@@ -43,15 +149,6 @@ impl FunctionSpanVisitor {
     fn new() -> Self {
         Self {
             functions: Vec::new(),
-        }
-    }
-
-    /// Convert FnMode to FunctionMode
-    fn convert_mode(mode: &FnMode) -> FunctionMode {
-        match mode {
-            FnMode::Spec(_) | FnMode::SpecChecked(_) => FunctionMode::Spec,
-            FnMode::Proof(_) | FnMode::ProofAxiom(_) => FunctionMode::Proof,
-            FnMode::Exec(_) | FnMode::Default => FunctionMode::Exec,
         }
     }
 
@@ -77,7 +174,7 @@ impl<'ast> Visit<'ast> for FunctionSpanVisitor {
         let span = node.span();
         let start_line = span.start().line;
         let end_line = span.end().line;
-        let mode = Self::convert_mode(&node.sig.mode);
+        let mode = convert_mode(&node.sig.mode);
         let (requires_range, ensures_range) = Self::extract_spec_ranges(&node.sig);
 
         self.functions.push(FunctionSpan {
@@ -98,7 +195,7 @@ impl<'ast> Visit<'ast> for FunctionSpanVisitor {
         let span = node.span();
         let start_line = span.start().line;
         let end_line = span.end().line;
-        let mode = Self::convert_mode(&node.sig.mode);
+        let mode = convert_mode(&node.sig.mode);
         let (requires_range, ensures_range) = Self::extract_spec_ranges(&node.sig);
 
         self.functions.push(FunctionSpan {
@@ -119,7 +216,7 @@ impl<'ast> Visit<'ast> for FunctionSpanVisitor {
         let span = node.span();
         let start_line = span.start().line;
         let end_line = span.end().line;
-        let mode = Self::convert_mode(&node.sig.mode);
+        let mode = convert_mode(&node.sig.mode);
         let (requires_range, ensures_range) = Self::extract_spec_ranges(&node.sig);
 
         self.functions.push(FunctionSpan {
@@ -448,6 +545,8 @@ pub struct FunctionInfo {
     pub file: Option<String>,
     #[serde(rename = "spec-text")]
     pub spec_text: SpecText,
+    /// Function mode: exec, proof, or spec (from sig.mode)
+    pub mode: FunctionMode,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -463,6 +562,9 @@ pub struct FunctionInfo {
     /// Whether the function has ensures clause (postcondition)
     #[serde(default)]
     pub has_ensures: bool,
+    /// Whether the function has a decreases clause (termination proof)
+    #[serde(default)]
+    pub has_decreases: bool,
     /// Whether the function body contains assume() or admit() (trusted assumptions)
     #[serde(default)]
     pub has_trusted_assumption: bool,
@@ -472,6 +574,54 @@ pub struct FunctionInfo {
     /// Raw text of the ensures clause (postcondition), if present and requested
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ensures_text: Option<String>,
+    /// Function names called in the ensures clause (extracted from AST, short names)
+    #[serde(rename = "ensures-calls", skip_serializing_if = "Vec::is_empty", default)]
+    pub ensures_calls: Vec<String>,
+    /// Function names called in the requires clause (extracted from AST, short names)
+    #[serde(rename = "requires-calls", skip_serializing_if = "Vec::is_empty", default)]
+    pub requires_calls: Vec<String>,
+    /// Full qualified paths of function calls in ensures (e.g., "crate::spec::is_canonical")
+    #[serde(
+        rename = "ensures-calls-full",
+        skip_serializing_if = "Vec::is_empty",
+        default
+    )]
+    pub ensures_calls_full: Vec<String>,
+    /// Full qualified paths of function calls in requires
+    #[serde(
+        rename = "requires-calls-full",
+        skip_serializing_if = "Vec::is_empty",
+        default
+    )]
+    pub requires_calls_full: Vec<String>,
+    /// Function (non-method) call names in ensures clause
+    #[serde(
+        rename = "ensures-fn-calls",
+        skip_serializing_if = "Vec::is_empty",
+        default
+    )]
+    pub ensures_fn_calls: Vec<String>,
+    /// Method call names in ensures clause
+    #[serde(
+        rename = "ensures-method-calls",
+        skip_serializing_if = "Vec::is_empty",
+        default
+    )]
+    pub ensures_method_calls: Vec<String>,
+    /// Function (non-method) call names in requires clause
+    #[serde(
+        rename = "requires-fn-calls",
+        skip_serializing_if = "Vec::is_empty",
+        default
+    )]
+    pub requires_fn_calls: Vec<String>,
+    /// Method call names in requires clause
+    #[serde(
+        rename = "requires-method-calls",
+        skip_serializing_if = "Vec::is_empty",
+        default
+    )]
+    pub requires_method_calls: Vec<String>,
 }
 
 /// Output format for function listing
@@ -645,14 +795,69 @@ impl FunctionInfoVisitor {
         let start_line = span.start().line;
         let end_line = span.end().line;
 
+        // Extract function mode
+        let mode = convert_mode(&sig.mode);
+
         // Extract spec information
         let has_requires = sig.spec.requires.is_some();
         let has_ensures = sig.spec.ensures.is_some();
+        let has_decreases = sig.spec.decreases.is_some();
         let has_trusted_assumption = self.has_trusted_assumption(start_line, end_line);
 
         // Extract spec text if requested
         let requires_text = self.extract_spec_text(sig.spec.requires.as_ref());
         let ensures_text = self.extract_spec_text(sig.spec.ensures.as_ref());
+
+        // Extract called function names from ensures/requires clauses (AST walk)
+        let ensures_collector = sig.spec.ensures.as_ref().map(|ens| {
+            let mut collector = CallNameCollector::new();
+            for expr in ens.exprs.exprs.iter() {
+                collector.visit_expr(expr);
+            }
+            collector
+        });
+
+        let requires_collector = sig.spec.requires.as_ref().map(|req| {
+            let mut collector = CallNameCollector::new();
+            for expr in req.exprs.exprs.iter() {
+                collector.visit_expr(expr);
+            }
+            collector
+        });
+
+        let ensures_calls = ensures_collector
+            .as_ref()
+            .map(|c| c.names())
+            .unwrap_or_default();
+        let ensures_calls_full = ensures_collector
+            .as_ref()
+            .map(|c| c.full_paths())
+            .unwrap_or_default();
+        let ensures_fn_calls = ensures_collector
+            .as_ref()
+            .map(|c| c.fn_call_names())
+            .unwrap_or_default();
+        let ensures_method_calls = ensures_collector
+            .as_ref()
+            .map(|c| c.method_call_names())
+            .unwrap_or_default();
+
+        let requires_calls = requires_collector
+            .as_ref()
+            .map(|c| c.names())
+            .unwrap_or_default();
+        let requires_calls_full = requires_collector
+            .as_ref()
+            .map(|c| c.full_paths())
+            .unwrap_or_default();
+        let requires_fn_calls = requires_collector
+            .as_ref()
+            .map(|c| c.fn_call_names())
+            .unwrap_or_default();
+        let requires_method_calls = requires_collector
+            .as_ref()
+            .map(|c| c.method_call_names())
+            .unwrap_or_default();
 
         self.functions.push(FunctionInfo {
             name,
@@ -661,15 +866,25 @@ impl FunctionInfoVisitor {
                 lines_start: start_line,
                 lines_end: end_line,
             },
+            mode,
             kind,
             visibility,
             context,
             specified: has_requires || has_ensures,
             has_requires,
             has_ensures,
+            has_decreases,
             has_trusted_assumption,
             requires_text,
             ensures_text,
+            ensures_calls,
+            requires_calls,
+            ensures_calls_full,
+            requires_calls_full,
+            ensures_fn_calls,
+            ensures_method_calls,
+            requires_fn_calls,
+            requires_method_calls,
         });
     }
 }
@@ -774,9 +989,10 @@ pub fn parse_file_for_functions(
     Ok(visitor.functions)
 }
 
-/// Find all Rust files in a directory
+/// Find all Rust files in a directory (sorted for deterministic output)
 fn find_rust_files(path: &Path) -> Vec<std::path::PathBuf> {
     WalkDir::new(path)
+        .sort_by_file_name()
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file() && e.path().extension().is_some_and(|ext| ext == "rs"))

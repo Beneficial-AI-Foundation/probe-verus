@@ -1,0 +1,125 @@
+# Spec Taxonomy Configuration — Skeleton Template
+#
+# Copy this file and customise it for your Verus project.
+# Usage: probe-verus specify ./src -a atoms.json --taxonomy-config <this-file>
+#
+# ─── Rule semantics ───
+#   - All rules are evaluated independently; every matching rule contributes its label.
+#   - Within a rule, all specified criteria must match (AND).
+#   - Within a list criterion (mode, ensures_calls_contain, …), any match suffices (OR).
+#
+# ─── How classification works ───
+#   ensures_calls / requires_calls are function names extracted by walking the
+#   verus_syn AST (ExprCall and ExprMethodCall nodes) in each clause.
+#     Example: `ensures is_canonical(x), y == spec_foo(z)`
+#              → ensures_calls = ["is_canonical", "spec_foo"]
+#   Specs that use only operators, literals, field access, or quantifiers
+#     (e.g., `ensures forall|i| limbs[i] == 0`) produce EMPTY ensures_calls.
+#   Use ensures_calls_empty = true / false to match on that.
+#
+# ─── Available match criteria ───
+#   mode                           : ["exec", "proof", "spec"]  — function's Verus mode
+#   context                        : ["impl", "trait", "standalone"]
+#   ensures_calls_contain          : ["substring", ...]  — any ensures call name contains any substring
+#   requires_calls_contain         : ["substring", ...]  — same for requires
+#   ensures_calls_full_contain     : ["substring", ...]  — match against full qualified paths (e.g., "crate::spec::is_valid")
+#   requires_calls_full_contain    : ["substring", ...]  — same for requires
+#   ensures_fn_calls_contain       : ["substring", ...]  — match only function calls (not method calls)
+#   ensures_method_calls_contain   : ["substring", ...]  — match only method calls (e.g., .len(), .unwrap())
+#   requires_fn_calls_contain      : ["substring", ...]  — same for requires
+#   requires_method_calls_contain  : ["substring", ...]  — same for requires
+#   name_contains                  : ["substring", ...]  — function name contains any substring
+#   path_contains                  : ["substring", ...]  — source path contains any substring
+#   has_ensures                    : true / false
+#   has_requires                   : true / false
+#   has_decreases                  : true / false
+#   has_trusted_assumption         : true / false
+#   ensures_calls_empty            : true / false  — ensures clause has zero function calls
+#   requires_calls_empty           : true / false  — requires clause has zero function calls
+#
+# ─── Stop words (optional) ───
+#   stop_words = ["len", "old", "unwrap", "Some", "None", ...]
+#   Filters out utility call names from ensures/requires before rule evaluation.
+#   Useful when common Verus/Rust plumbing functions pollute the signal.
+#
+# ─── Tips for writing rules ───
+#   1. Run `probe-verus specify` once WITHOUT --taxonomy-config and inspect the
+#      ensures-calls / requires-calls fields in the JSON output to see which
+#      function names appear in your project's spec clauses.
+#   2. Start with broad mode-based rules (spec, proof) and refine with call patterns.
+#   3. Use ensures_calls_empty = true to catch specs that assert via operators only.
+#   4. Use --taxonomy-explain to debug which rules matched or missed each function.
+#
+# ─── See also ───
+#   spec-taxonomy-curve25519-dalek.toml — full working example with 8 categories
+#   spec-taxonomy-pmemlog.toml — persistent memory example with 9 categories
+#   docs/SPEC_TAXONOMY_DESIGN.md — full design analysis
+
+[taxonomy]
+version = "1"
+
+# ── Functional correctness ──
+# Exec functions whose ensures reference spec-level mathematical models.
+# Replace the substring patterns below with ones from YOUR project's ensures_calls.
+[[taxonomy.rules]]
+label = "functional-correctness"
+description = "Output matches a mathematical model"
+trust = "highest"
+
+[taxonomy.rules.match]
+mode = ["exec"]
+ensures_calls_contain = ["spec_"]
+
+# ── Data invariant ──
+# Functions proving representation invariants (canonical form, validity, …).
+[[taxonomy.rules]]
+label = "data-invariant"
+description = "Representation invariant or structural consistency"
+trust = "high"
+
+[taxonomy.rules.match]
+ensures_calls_contain = ["is_valid", "is_canonical", "is_well_formed"]
+
+# ── Memory safety ──
+# Exec functions whose ensures use only direct assertions (no function calls).
+# Catches zeroization, field-equality, and structural memory properties.
+[[taxonomy.rules]]
+label = "memory-safety"
+description = "Direct structural/memory assertions"
+trust = "high"
+
+[taxonomy.rules.match]
+has_ensures = true
+ensures_calls_empty = true
+mode = ["exec"]
+
+# ── Algebraic property ──
+# Proof-mode functions with ensures clauses (mathematical lemmas).
+[[taxonomy.rules]]
+label = "algebraic-property"
+description = "Mathematical/algebraic lemma"
+trust = "moderate"
+
+[taxonomy.rules.match]
+mode = ["proof"]
+has_ensures = true
+
+# ── Termination ──
+# Functions with decreases clauses, proving termination.
+[[taxonomy.rules]]
+label = "termination"
+description = "Operation terminates (decreases clause)"
+trust = "moderate"
+
+[taxonomy.rules.match]
+has_decreases = true
+
+# ── Specification definition ──
+# Spec-mode functions: pure mathematical definitions, not proofs themselves.
+[[taxonomy.rules]]
+label = "specification-definition"
+description = "Pure specification, not a proof"
+trust = "n/a"
+
+[taxonomy.rules.match]
+mode = ["spec"]

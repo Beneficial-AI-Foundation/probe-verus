@@ -1,0 +1,170 @@
+# Spec Taxonomy Configuration for pmemlog (persistent-memory append-only log)
+#
+# Project: https://github.com/microsoft/verified-storage (pmemlog subset)
+# Domain: crash-safe persistent memory, corruption detection, circular log
+#
+# Classification rules for: probe-verus specify --taxonomy-config <this-file>
+#
+# Rule semantics:
+#   - All rules are evaluated independently; every matching rule contributes its label
+#   - Within a rule, all criteria must match (AND)
+#   - Within a list criterion, any match suffices (OR)
+#
+# How classification works:
+#   ensures_calls / requires_calls are function names extracted by walking the
+#   verus_syn AST (ExprCall and ExprMethodCall nodes) in each clause.
+#   Specs using only operators/literals/quantifiers have EMPTY ensures_calls.
+#   Use ensures_calls_empty = true to match those.
+
+[taxonomy]
+version = "1"
+
+# ── Crash safety ──
+# Functions proving that crash (partial flush) preserves a recoverable state.
+# This is the defining property of a persistent-memory data structure:
+# any prefix of writes that reaches storage still produces a valid log.
+[[taxonomy.rules]]
+label = "crash-safety"
+description = "Recovery correctness under crash / partial flush"
+trust = "highest"
+
+[taxonomy.rules.match]
+ensures_calls_contain = [
+    "recover",
+    "recovery_view",
+    "check_permission",
+    "is_state_allowable",
+    "update_contents_to_reflect_partially_flushed_write",
+]
+
+# ── Functional correctness ──
+# Functions proving the implementation matches the abstract log model
+# (initialize, append, advance_head, read, get_head_and_tail).
+[[taxonomy.rules]]
+label = "functional-correctness"
+description = "Implementation matches abstract log operations"
+trust = "highest"
+
+[taxonomy.rules.match]
+mode = ["exec"]
+ensures_calls_contain = [
+    "append",
+    "advance_head",
+    "initialize",
+    "read_correct_modulo_corruption",
+]
+
+# get_head_and_tail ensures only use unwrap/len (no spec function calls),
+# but it is a core log operation returning the correct abstract state.
+[[taxonomy.rules]]
+label = "functional-correctness"
+description = "Implementation matches abstract log operations"
+trust = "highest"
+
+[taxonomy.rules.match]
+mode = ["exec"]
+name_contains = ["get_head_and_tail"]
+
+# ── Data invariant ──
+# Functions establishing or preserving representation invariants:
+# inv (log impl invariant), pm_to_views (PM region decomposition),
+# valid (struct well-formedness).
+[[taxonomy.rules]]
+label = "data-invariant"
+description = "Representation invariant or structural consistency"
+trust = "high"
+
+[taxonomy.rules.match]
+ensures_calls_contain = [
+    "inv",
+    "pm_to_views",
+    "valid",
+    "log_state_is_valid",
+    "inv_pm_contents",
+    "permissions_depend_only_on_recovery_view",
+]
+
+# ── Corruption detection ──
+# Functions reasoning about corruption models and CRC integrity.
+# maybe_corrupted models reads that may differ from true PM contents;
+# spec_crc_bytes proves CRC checks detect such corruption.
+[[taxonomy.rules]]
+label = "corruption-detection"
+description = "CRC integrity and corruption model reasoning"
+trust = "high"
+
+[taxonomy.rules.match]
+ensures_calls_contain = [
+    "maybe_corrupted",
+    "spec_crc_bytes",
+    "all_elements_unique",
+]
+
+# ── Persistence encoding ──
+# Functions proving correctness of byte-level serialization:
+# headers, metadata, u64 <-> bytes, logical-to-physical address mapping.
+[[taxonomy.rules]]
+label = "persistence-encoding"
+description = "Byte-level serialization and address mapping"
+trust = "high"
+
+[taxonomy.rules.match]
+ensures_calls_contain = [
+    "spec_bytes_to_header",
+    "spec_bytes_to_metadata",
+    "spec_u64_to_le_bytes",
+    "spec_u64_from_le_bytes",
+    "spec_get_live_header",
+    "spec_addr_logical_to_physical",
+]
+
+# ── Write effect ──
+# Functions reasoning about the effect of completed writes on PM contents.
+# Distinct from crash-safety (partial flush); these prove the post-write state.
+[[taxonomy.rules]]
+label = "write-effect"
+description = "PM state after completed writes"
+trust = "high"
+
+[taxonomy.rules.match]
+ensures_calls_contain = [
+    "update_contents_to_reflect_write",
+    "update_data_view_postcond",
+]
+
+# ── Arithmetic lemma ──
+# Proof functions in math_v.rs with ensures that use only operators/literals
+# (div, mod properties). These have empty ensures-calls because they assert
+# pure arithmetic without calling spec functions.
+[[taxonomy.rules]]
+label = "arithmetic-lemma"
+description = "Division/modular arithmetic lemma"
+trust = "moderate"
+
+[taxonomy.rules.match]
+mode = ["proof"]
+has_ensures = true
+ensures_calls_empty = true
+
+# ── Algebraic property ──
+# Catch-all for proof functions with ensures that call spec functions
+# (i.e. not covered by the arithmetic-lemma rule above).
+[[taxonomy.rules]]
+label = "algebraic-property"
+description = "General proof lemma"
+trust = "moderate"
+
+[taxonomy.rules.match]
+mode = ["proof"]
+has_ensures = true
+ensures_calls_empty = false
+
+# ── Specification definition ──
+# Spec-mode functions: pure definitions, not proofs.
+[[taxonomy.rules]]
+label = "specification-definition"
+description = "Pure specification, not a proof"
+trust = "n/a"
+
+[taxonomy.rules.match]
+mode = ["spec"]

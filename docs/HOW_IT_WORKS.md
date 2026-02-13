@@ -110,21 +110,25 @@ When `--show-visibility` or `--show-kind` are enabled:
 
 ## Specification Extraction (`specify` command)
 
-The `specify` command extracts function specifications (requires/ensures clauses) from source files, keyed by probe-name from atoms.json.
+The `specify` command extracts function specifications (requires/ensures clauses) from source files, keyed by probe-name from atoms.json. It can optionally classify each spec with taxonomy labels.
 
 ### Pipeline
 
 1. **Load atoms.json** to get the probe-name → function mappings
 2. **Parse source files** with `verus_syn` to extract:
    - Function definitions with their spans
-   - Whether each function has `requires` clauses
-   - Whether each function has `ensures` clauses
+   - Function mode (`exec`, `proof`, `spec`) from `sig.mode`
+   - Whether each function has `requires`, `ensures`, or `decreases` clauses
    - Whether each function contains `assume()` or `admit()` calls
+   - Called function names in ensures/requires (via `CallNameCollector` AST visitor)
 3. **Match functions to atoms** using:
    - Path matching (by suffix comparison)
    - Display name matching
    - Line number proximity (SCIP line within function span or within tolerance)
-4. **Output JSON** keyed by probe-name
+4. **Classify with taxonomy** (if `--taxonomy-config` is provided):
+   - Load TOML rules and evaluate each against the function's structured metadata
+   - All matching rules contribute their label (multiple labels per function)
+5. **Output deterministic JSON** keyed by probe-name (BTreeMap for sorted keys)
 
 ### Matching Strategy
 
@@ -138,18 +142,57 @@ Functions are matched to atoms from atoms.json using multiple criteria:
 
 This handles cases where `verus_syn` includes doc comments in function spans (reporting an earlier start line) while `verus-analyzer` reports the actual function declaration line.
 
+### AST-based Call Name Extraction
+
+The `CallNameCollector` visitor walks verus_syn `Expr` nodes in ensures/requires clauses to extract called function names. This uses the `verus_syn::visit::Visit` trait:
+
+- `visit_expr_call`: Extracts function name from `ExprCall.func` (typically an `Expr::Path`)
+- `visit_expr_method_call`: Extracts method name from `ExprMethodCall.method`
+- Recursion into sub-expressions captures nested calls in arguments
+
+For example, `ensures is_canonical_scalar52(&s), scalar52_to_nat(&s) == bytes_seq_to_nat(bytes@) % group_order()` produces: `["is_canonical_scalar52", "scalar52_to_nat", "bytes_seq_to_nat", "group_order"]`.
+
+These extracted call names are the basis for taxonomy classification — no regex is needed.
+
+### Taxonomy Classification
+
+When `--taxonomy-config` is provided, each function is classified against TOML-defined rules. Rules match on structured fields:
+
+- **`mode`**: Function mode (exec/proof/spec)
+- **`ensures_calls_contain`**: Substring match against extracted call names
+- **`has_ensures`**, **`has_requires`**, **`has_decreases`**: Boolean flags
+- **`context`**, **`name_contains`**, **`path_contains`**: Additional filters
+
+All specified criteria in a rule must match (AND). Within a list criterion, any match suffices (OR). All matching rules contribute their label, so a function can receive multiple labels.
+
+An example config for curve25519-dalek (`spec_taxonomy_examples/spec-taxonomy-curve25519-dalek.toml`) defines eight categories: `functional-correctness`, `data-invariant`, `constant-time-behavior`, `bounds-safety`, `memory-safety`, `algebraic-property`, `termination`, and `specification-definition`. A starter template for new projects is at `spec_taxonomy_examples/spec-taxonomy-default.toml`.
+
 ### Output Fields
 
 - **`code-path`**: Source file path
 - **`spec-text`**: Line range with `lines-start` and `lines-end`
+- **`mode`**: Verus function mode (`exec`, `proof`, or `spec`)
 - **`specified`**: Whether the function has any specification (`has_requires` or `has_ensures`)
 - **`has_requires`**: Whether the function has a `requires` clause
 - **`has_ensures`**: Whether the function has an `ensures` clause
+- **`has_decreases`**: Whether the function has a `decreases` clause
 - **`has_trusted_assumption`**: Whether the function contains `assume()` or `admit()`
 
 With `--with-spec-text`, raw specification text is also included:
 - **`requires_text`**: Raw text of the requires clause
 - **`ensures_text`**: Raw text of the ensures clause
+- **`ensures-calls`**: Function names called in the ensures clause (from AST)
+- **`requires-calls`**: Function names called in the requires clause (from AST)
+
+With `--taxonomy-config`:
+- **`spec-labels`**: List of taxonomy labels assigned by matching rules
+
+### Determinism
+
+The specify output is fully deterministic (identical JSON for identical input):
+- Output keys are sorted via `BTreeMap`
+- File traversal is sorted via `WalkDir::sort_by_file_name()`
+- Atom loading uses `BTreeMap` for deterministic tie-breaking
 
 ---
 

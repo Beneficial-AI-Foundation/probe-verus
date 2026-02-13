@@ -8,7 +8,7 @@ probe-verus is a Rust CLI tool that generates compact function call graph data f
 - **atomize**: Generate call graph atoms with accurate line numbers
 - **list-functions**: List all functions in a Rust/Verus project (no external tools needed)
 - **verify**: Run Verus verification and analyze results
-- **specify**: Extract function specifications from atoms.json
+- **specify**: Extract function specifications from atoms.json, with optional taxonomy classification
 
 ## Build and Test Commands
 
@@ -38,17 +38,19 @@ cargo fmt && cargo clippy --all-targets && cargo test
 src/
 ├── main.rs           # CLI entry point with subcommand routing
 ├── lib.rs            # Core data structures and SCIP JSON parsing
+├── taxonomy.rs       # Spec taxonomy classification from TOML rules
 ├── verification.rs   # Verification output parsing & analysis
 └── verus_parser.rs   # AST parsing using verus_syn for function spans
 ```
 
 ## Architecture
 
-### Three Main Pipelines
+### Four Main Pipelines
 
 1. **Atomize Pipeline** (`atomize` command): SCIP JSON → call graph parsing → spans via verus_syn → JSON output
 2. **List Functions Pipeline** (`list-functions` command): Source files → AST visitor → function list
 3. **Verification Pipeline** (`verify` command): Cargo verus output → error parsing → function mapping → analysis
+4. **Specify Pipeline** (`specify` command): Source files + atoms.json → spec extraction → optional taxonomy classification via TOML rules → JSON output
 
 ### Key Architectural Patterns
 
@@ -60,10 +62,14 @@ src/
 
 **SCIP Data Caching**: Generated SCIP data is cached in `<project>/data/` to avoid re-running slow external tools.
 
+**AST-based Spec Taxonomy**: The `specify` command can classify specs using taxonomy rules defined in TOML. Classification uses structured AST data (function mode, called function names extracted via `verus_syn` visitor) rather than regex on text. A `CallNameCollector` visitor walks `ExprCall`/`ExprMethodCall` nodes in ensures/requires clauses to extract called function names.
+
 ### Key Types
 
 - `FunctionNode`: Call graph node with callees and type context
 - `AtomWithLines`: Output format with line ranges
+- `FunctionInfo`: Function metadata with mode, specs, ensures/requires calls
+- `TaxonomyConfig`, `TaxonomyRule`, `MatchCriteria`: TOML-based spec classification rules
 - `FunctionInterval`: Interval tree entry for error→function mapping
 - `CompilationError`, `VerificationFailure`: Error types for verification analysis
 
@@ -72,6 +78,7 @@ src/
 - **atomize command**: Requires `verus-analyzer` and `scip` CLI
 - **list-functions command**: None (uses verus_syn only)
 - **verify command**: Requires `cargo verus`
+- **specify command**: None (uses verus_syn only; optional TOML config for taxonomy)
 
 ## Before Committing
 

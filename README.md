@@ -198,15 +198,16 @@ probe-verus list-functions ./my-project --format json
 
 ### `specify` - Extract Function Specifications
 
-Extract function specifications (requires/ensures clauses) from source files, keyed by probe-name from atoms.json.
+Extract function specifications (requires/ensures clauses) from source files, keyed by probe-name from atoms.json. Optionally classify each function's spec with taxonomy labels.
 
 ```bash
 probe-verus specify <PATH> -a <ATOMS_FILE> [OPTIONS]
 
 Options:
-  -o, --output <FILE>        Output file path (default: specs.json)
-  -a, --with-atoms <FILE>    Path to atoms.json for code-name lookup (required)
-      --with-spec-text       Include raw specification text in output
+  -o, --output <FILE>              Output file path (default: specs.json)
+  -a, --with-atoms <FILE>          Path to atoms.json for code-name lookup (required)
+      --with-spec-text             Include raw specification text in output
+      --taxonomy-config <FILE>     Path to TOML file defining spec classification rules
 ```
 
 **Examples:**
@@ -216,6 +217,9 @@ probe-verus specify ./src -a atoms.json
 
 # Include raw requires/ensures text
 probe-verus specify ./src -a atoms.json --with-spec-text
+
+# Classify specs with taxonomy labels
+probe-verus specify ./src -a atoms.json --with-spec-text --taxonomy-config spec_taxonomy_examples/spec-taxonomy-curve25519-dalek.toml
 
 # Custom output file
 probe-verus specify ./src -a atoms.json -o specs.json
@@ -231,9 +235,11 @@ probe-verus specify ./src -a atoms.json -o specs.json
       "lines-start": 42,
       "lines-end": 60
     },
+    "mode": "exec",
     "specified": true,
     "has_requires": true,
     "has_ensures": true,
+    "has_decreases": false,
     "has_trusted_assumption": false
   }
 }
@@ -243,30 +249,114 @@ probe-verus specify ./src -a atoms.json -o specs.json
 - **Key**: The probe-name from atoms.json
 - **`code-path`**: Source file path
 - **`spec-text`**: Function span with `lines-start` and `lines-end`
+- **`mode`**: Verus function mode (`"exec"`, `"proof"`, or `"spec"`)
 - **`specified`**: Whether the function has a specification (`has_requires` or `has_ensures` is true)
 - **`has_requires`**: Whether the function has a `requires` clause (precondition)
 - **`has_ensures`**: Whether the function has an `ensures` clause (postcondition)
+- **`has_decreases`**: Whether the function has a `decreases` clause (termination proof)
 - **`has_trusted_assumption`**: Whether the function contains `assume()` or `admit()`
 
 **Extended output (`--with-spec-text`):**
+
+When `--with-spec-text` is used, additional fields are included:
+- **`requires_text`**: Raw text of the requires clause
+- **`ensures_text`**: Raw text of the ensures clause
+- **`ensures-calls`**: Function names called in the ensures clause (extracted from AST)
+- **`requires-calls`**: Function names called in the requires clause (extracted from AST)
 
 ```json
 {
   "probe:crate/1.0.0/module/my_function()": {
     "code-path": "src/lib.rs",
-    "spec-text": {
-      "lines-start": 42,
-      "lines-end": 60
-    },
+    "spec-text": { "lines-start": 42, "lines-end": 60 },
+    "mode": "exec",
     "specified": true,
     "has_requires": true,
     "has_ensures": true,
+    "has_decreases": false,
     "has_trusted_assumption": false,
-    "requires_text": "x > 0 && y > 0",
-    "ensures_text": "result == x + y"
+    "requires_text": "requires\n        x > 0 && y > 0,",
+    "ensures_text": "ensures\n        result == x + y,",
+    "ensures-calls": ["spec_add"],
+    "requires-calls": []
   }
 }
 ```
+
+**Taxonomy classification (`--taxonomy-config`):**
+
+When a taxonomy config TOML file is provided, each function is classified with `spec-labels` based on structured AST data (function mode, called function names in ensures/requires). This uses no regex -- classification is based on verus_syn AST walking.
+
+```json
+{
+  "probe:crate/1.0.0/module/my_function()": {
+    "code-path": "src/lib.rs",
+    "spec-text": { "lines-start": 42, "lines-end": 60 },
+    "mode": "exec",
+    "specified": true,
+    "has_ensures": true,
+    "ensures-calls": ["is_canonical_scalar52", "scalar52_to_nat"],
+    "spec-labels": ["functional-correctness", "data-invariant"]
+  }
+}
+```
+
+An example taxonomy config for curve25519-dalek is provided in [`spec_taxonomy_examples/spec-taxonomy-curve25519-dalek.toml`](spec_taxonomy_examples/spec-taxonomy-curve25519-dalek.toml). A starter template for new projects is at [`spec_taxonomy_examples/spec-taxonomy-default.toml`](spec_taxonomy_examples/spec-taxonomy-default.toml). The dalek config defines these categories:
+
+| Label | Description | Trust |
+|-------|-------------|-------|
+| `functional-correctness` | Output matches a mathematical model | Highest |
+| `data-invariant` | Representation invariant or structural consistency | High |
+| `constant-time-behavior` | Constant-time correctness via Choice/CtOption | High |
+| `bounds-safety` | No overflow, values within bounds | High |
+| `memory-safety` | Direct structural/memory assertions (zeroization) | High |
+| `algebraic-property` | Mathematical/algebraic lemma | Moderate |
+| `termination` | Operation terminates (decreases clause) | Moderate |
+| `specification-definition` | Pure specification, not a proof | N/A |
+
+Multiple labels per function are supported (e.g., a function can be both `functional-correctness` and `data-invariant`).
+
+See [Taxonomy Config Format](#taxonomy-config-format) for details on writing custom rules.
+
+---
+
+#### Taxonomy Config Format
+
+The taxonomy config is a TOML file defining classification rules. Each rule specifies a label and match criteria. All rules are evaluated independently, and all matching rules contribute their label.
+
+```toml
+[taxonomy]
+version = "1"
+
+[[taxonomy.rules]]
+label = "functional-correctness"
+description = "Output matches a mathematical model"
+trust = "highest"
+
+[taxonomy.rules.match]
+mode = ["exec"]
+ensures_calls_contain = ["spec_", "_to_nat"]
+```
+
+**Rule semantics:**
+- All specified criteria within a rule must match (AND logic)
+- Within a list criterion, any match suffices (OR logic)
+- `ensures_calls_contain` checks if ANY function name called in ensures contains ANY of the given substrings
+
+**Available match criteria:**
+
+| Criterion | Type | Description |
+|-----------|------|-------------|
+| `mode` | string list | Function mode: `exec`, `proof`, `spec` |
+| `context` | string list | Function context: `impl`, `trait`, `standalone` |
+| `ensures_calls_contain` | substring list | Match against function names called in ensures |
+| `requires_calls_contain` | substring list | Match against function names called in requires |
+| `name_contains` | substring list | Match against function display name |
+| `path_contains` | substring list | Match against code-path |
+| `has_ensures` | bool | Whether function has ensures clause |
+| `has_requires` | bool | Whether function has requires clause |
+| `has_decreases` | bool | Whether function has decreases clause |
+| `has_trusted_assumption` | bool | Whether function uses assume()/admit() |
 
 ---
 

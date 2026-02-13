@@ -137,6 +137,14 @@ enum Commands {
         /// Include raw specification text (requires/ensures clauses) in output
         #[arg(long)]
         with_spec_text: bool,
+
+        /// Path to taxonomy TOML config for spec classification labels
+        #[arg(long)]
+        taxonomy_config: Option<PathBuf>,
+
+        /// Print detailed taxonomy classification explanations (requires --taxonomy-config)
+        #[arg(long)]
+        taxonomy_explain: bool,
     },
 
     /// Convert .md files with YAML frontmatter to JSON
@@ -246,8 +254,17 @@ fn main() {
             output,
             with_atoms,
             with_spec_text,
+            taxonomy_config,
+            taxonomy_explain,
         } => {
-            cmd_specify(path, output, with_atoms, with_spec_text);
+            cmd_specify(
+                path,
+                output,
+                with_atoms,
+                with_spec_text,
+                taxonomy_config,
+                taxonomy_explain,
+            );
         }
         Commands::Stubify { path, output } => {
             cmd_stubify(path, output);

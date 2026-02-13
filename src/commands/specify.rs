@@ -2,9 +2,10 @@
 
 use probe_verus::constants::LINE_TOLERANCE;
 use probe_verus::path_utils::{extract_src_suffix, paths_match_by_suffix};
+use probe_verus::taxonomy;
 use probe_verus::verus_parser::{self, FunctionInfo, ParsedOutput};
-use serde::Deserialize;
-use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 /// Atom entry from atoms.json for code-name lookup.
@@ -24,11 +25,27 @@ struct CodeText {
     lines_start: usize,
 }
 
+/// Output entry: FunctionInfo enriched with optional taxonomy labels.
+#[derive(Serialize)]
+struct SpecifyEntry {
+    #[serde(flatten)]
+    info: FunctionInfo,
+    #[serde(rename = "spec-labels", skip_serializing_if = "Vec::is_empty")]
+    spec_labels: Vec<String>,
+}
+
 /// Execute the specify command.
 ///
 /// Extracts function specifications (requires/ensures) to JSON,
 /// keyed by code-name from atoms.json.
-pub fn cmd_specify(path: PathBuf, output: PathBuf, atoms_path: PathBuf, with_spec_text: bool) {
+pub fn cmd_specify(
+    path: PathBuf,
+    output: PathBuf,
+    atoms_path: PathBuf,
+    with_spec_text: bool,
+    taxonomy_config_path: Option<PathBuf>,
+    taxonomy_explain: bool,
+) {
     // Validate inputs
     if !path.exists() {
         eprintln!("Error: Path does not exist: {}", path.display());
@@ -39,6 +56,24 @@ pub fn cmd_specify(path: PathBuf, output: PathBuf, atoms_path: PathBuf, with_spe
         eprintln!("Error: atoms.json not found at {}", atoms_path.display());
         std::process::exit(1);
     }
+
+    // Load taxonomy config if provided
+    let taxonomy_config = taxonomy_config_path.map(|tc_path| {
+        if !tc_path.exists() {
+            eprintln!(
+                "Error: taxonomy config not found at {}",
+                tc_path.display()
+            );
+            std::process::exit(1);
+        }
+        match taxonomy::load_taxonomy_config(&tc_path) {
+            Ok(config) => config,
+            Err(e) => {
+                eprintln!("Error: {e}");
+                std::process::exit(1);
+            }
+        }
+    });
 
     // Load atoms.json to get code-name mappings
     let atoms = load_atoms(&atoms_path);
@@ -54,22 +89,103 @@ pub fn cmd_specify(path: PathBuf, output: PathBuf, atoms_path: PathBuf, with_spe
     );
 
     // Match functions to code-names and build output dictionary
-    let (output_map, matched_count, unmatched_count) = match_functions_to_atoms(parsed, &atoms);
+    let (matched_map, matched_count, unmatched_count) = match_functions_to_atoms(parsed, &atoms);
+
+    // Classify with taxonomy and build final output
+    let output_map: BTreeMap<String, SpecifyEntry> = matched_map
+        .into_iter()
+        .map(|(code_name, func)| {
+            // Print explain output if requested
+            if taxonomy_explain {
+                if let Some(config) = taxonomy_config.as_ref() {
+                    let explanations = taxonomy::explain_function(&func, config);
+                    let matched: Vec<_> =
+                        explanations.iter().filter(|e| e.matched).collect();
+                    let missed: Vec<_> =
+                        explanations.iter().filter(|e| !e.matched).collect();
+
+                    if !matched.is_empty() || func.specified {
+                        eprintln!("  {}", code_name);
+                        for exp in &matched {
+                            eprintln!("    MATCHED {}", exp.label);
+                        }
+                        for exp in &missed {
+                            let failed: Vec<_> = exp
+                                .criteria_results
+                                .iter()
+                                .filter(|(_, p)| !p)
+                                .map(|(name, _)| name.as_str())
+                                .collect();
+                            eprintln!(
+                                "    missed  {} (failed: {})",
+                                exp.label,
+                                failed.join(", ")
+                            );
+                        }
+                    }
+                }
+            }
+
+            let spec_labels = taxonomy_config
+                .as_ref()
+                .map(|config| taxonomy::classify_function(&func, config))
+                .unwrap_or_default();
+            (code_name, SpecifyEntry {
+                info: func,
+                spec_labels,
+            })
+        })
+        .collect();
 
     // Write JSON output
     let json = serde_json::to_string_pretty(&output_map).expect("Failed to serialize JSON");
     std::fs::write(&output, &json).expect("Failed to write JSON output");
 
-    println!(
-        "Wrote {} functions to {} ({} unmatched)",
-        matched_count,
-        output.display(),
-        unmatched_count
-    );
+    // L3: Coverage summary
+    if taxonomy_config.is_some() {
+        let specified_total = output_map.values().filter(|e| e.info.specified).count();
+        let specified_labeled = output_map
+            .values()
+            .filter(|e| e.info.specified && !e.spec_labels.is_empty())
+            .count();
+        let labeled_total = output_map
+            .values()
+            .filter(|e| !e.spec_labels.is_empty())
+            .count();
+
+        println!(
+            "Wrote {} functions to {} ({} unmatched)",
+            matched_count,
+            output.display(),
+            unmatched_count
+        );
+        if specified_total > 0 {
+            println!(
+                "Taxonomy: {}/{} specified functions classified ({:.0}%), {}/{} overall",
+                specified_labeled,
+                specified_total,
+                100.0 * specified_labeled as f64 / specified_total as f64,
+                labeled_total,
+                matched_count,
+            );
+        } else {
+            println!(
+                "Taxonomy: {}/{} functions classified",
+                labeled_total, matched_count
+            );
+        }
+    } else {
+        println!(
+            "Wrote {} functions to {} ({} unmatched)",
+            matched_count,
+            output.display(),
+            unmatched_count
+        );
+    }
 }
 
-/// Load atoms from a JSON file.
-fn load_atoms(atoms_path: &PathBuf) -> HashMap<String, AtomEntry> {
+/// Load atoms from a JSON file (BTreeMap for deterministic iteration order).
+fn load_atoms(atoms_path: &PathBuf) -> BTreeMap<String, AtomEntry> {
     let atoms_content = std::fs::read_to_string(atoms_path).expect("Failed to read atoms.json");
     serde_json::from_str(&atoms_content).expect("Failed to parse atoms.json")
 }
@@ -77,9 +193,9 @@ fn load_atoms(atoms_path: &PathBuf) -> HashMap<String, AtomEntry> {
 /// Match parsed functions to atoms by path and line number.
 fn match_functions_to_atoms(
     parsed: ParsedOutput,
-    atoms: &HashMap<String, AtomEntry>,
-) -> (HashMap<String, FunctionInfo>, usize, usize) {
-    let mut output_map: HashMap<String, FunctionInfo> = HashMap::new();
+    atoms: &BTreeMap<String, AtomEntry>,
+) -> (BTreeMap<String, FunctionInfo>, usize, usize) {
+    let mut output_map: BTreeMap<String, FunctionInfo> = BTreeMap::new();
     let mut matched_count = 0;
     let mut unmatched_count = 0;
 
@@ -106,7 +222,7 @@ fn match_functions_to_atoms(
 /// This handles the case where verus_syn includes doc comments in the span
 /// (reporting an earlier start_line) while verus-analyzer reports the actual
 /// function declaration line.
-fn find_matching_atom(func: &FunctionInfo, atoms: &HashMap<String, AtomEntry>) -> Option<String> {
+fn find_matching_atom(func: &FunctionInfo, atoms: &BTreeMap<String, AtomEntry>) -> Option<String> {
     let func_path = func.file.as_deref().unwrap_or("");
     let func_suffix = extract_src_suffix(func_path);
 

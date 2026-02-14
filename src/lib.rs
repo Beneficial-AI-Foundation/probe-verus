@@ -248,6 +248,37 @@ fn make_unique_key(
     }
 }
 
+/// For impl methods, prepend the Self type to produce "Type::method" display names.
+/// Free functions are returned unchanged.
+///
+/// Extracts the Self type from the SCIP symbol format:
+///   `path/Type#Trait<Args>#method().`  ->  `Type::method`
+///   `path/&Type#Type<Ret>#method().`   ->  `Type::method`
+///   `path/function().`                 ->  `function` (unchanged)
+fn enrich_display_name(scip_symbol: &str, base_display_name: &str) -> String {
+    let s = scip_symbol
+        .strip_prefix(SCIP_SYMBOL_PREFIX)
+        .unwrap_or(scip_symbol);
+    // After stripping the prefix, the remaining format is "crate version path/..."
+    let parts: Vec<&str> = s.splitn(3, ' ').collect();
+    if parts.len() < 3 {
+        return base_display_name.to_string();
+    }
+    let path_part = parts[2].trim_end_matches('.');
+    // Get the segment after the last '/'
+    let last_segment = path_part.rsplit('/').next().unwrap_or(path_part);
+    // If it contains '#', the part before the first '#' is the Self type
+    if let Some(hash_pos) = last_segment.find('#') {
+        let self_type = &last_segment[..hash_pos];
+        // Strip leading '&' for borrowed self
+        let self_type = self_type.strip_prefix('&').unwrap_or(self_type);
+        if !self_type.is_empty() {
+            return format!("{}::{}", self_type, base_display_name);
+        }
+    }
+    base_display_name.to_string()
+}
+
 /// Build a call graph from SCIP data.
 /// Returns the call graph and a map of all function symbols to their display names.
 ///
@@ -367,10 +398,12 @@ pub fn build_call_graph(
         for symbol in &doc.symbols {
             if is_function_like(symbol.kind) {
                 let signature = &symbol.signature_documentation.text;
-                let display_name = symbol
+                let base_display_name = symbol
                     .display_name
                     .clone()
                     .unwrap_or_else(|| "unknown".to_string());
+                let display_name =
+                    enrich_display_name(&symbol.symbol, &base_display_name);
 
                 // Track ALL function symbols for dependency tracking
                 all_function_symbols.insert(symbol.symbol.clone());
@@ -1432,4 +1465,82 @@ pub fn find_duplicate_code_names(atoms: &[AtomWithLines]) -> Vec<DuplicateCodeNa
                 .collect(),
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // =========================================================================
+    // enrich_display_name tests
+    // =========================================================================
+
+    #[test]
+    fn test_enrich_impl_method() {
+        // Trait impl: Type#Trait<Args>#method()
+        let symbol =
+            "rust-analyzer cargo curve25519-dalek 4.1.3 edwards/CompressedEdwardsY#ConstantTimeEq<&CompressedEdwardsY>#ct_eq().";
+        assert_eq!(
+            enrich_display_name(symbol, "ct_eq"),
+            "CompressedEdwardsY::ct_eq"
+        );
+    }
+
+    #[test]
+    fn test_enrich_borrowed_self() {
+        // Borrowed self: &Type#Type<Ret>#method()
+        let symbol =
+            "rust-analyzer cargo curve25519-dalek 4.1.3 edwards/&CompressedEdwardsY#CompressedEdwardsY<Option<EdwardsPoint>>#decompress().";
+        assert_eq!(
+            enrich_display_name(symbol, "decompress"),
+            "CompressedEdwardsY::decompress"
+        );
+    }
+
+    #[test]
+    fn test_enrich_inherent_impl() {
+        // Inherent impl: Type#method()
+        let symbol =
+            "rust-analyzer cargo curve25519-dalek 4.1.3 field/FieldElement51#square().";
+        assert_eq!(
+            enrich_display_name(symbol, "square"),
+            "FieldElement51::square"
+        );
+    }
+
+    #[test]
+    fn test_enrich_free_function_unchanged() {
+        // Free function: no '#', keep bare name
+        let symbol =
+            "rust-analyzer cargo curve25519-dalek 4.1.3 ristretto_specs/specs/spec_ristretto_decompress().";
+        assert_eq!(
+            enrich_display_name(symbol, "spec_ristretto_decompress"),
+            "spec_ristretto_decompress"
+        );
+    }
+
+    #[test]
+    fn test_enrich_trait_impl_add() {
+        // Trait impl: &EdwardsPoint#Add<&EdwardsPoint>#add()
+        let symbol =
+            "rust-analyzer cargo curve25519-dalek 4.1.3 edwards/&EdwardsPoint#Add<&EdwardsPoint>#add().";
+        assert_eq!(
+            enrich_display_name(symbol, "add"),
+            "EdwardsPoint::add"
+        );
+    }
+
+    #[test]
+    fn test_enrich_short_symbol_unchanged() {
+        // Symbols with fewer than 5 space-separated parts are returned unchanged
+        let symbol = "short symbol";
+        assert_eq!(enrich_display_name(symbol, "something"), "something");
+    }
+
+    #[test]
+    fn test_enrich_no_prefix_fallback() {
+        // Symbol without the expected prefix still works by splitting on spaces
+        let symbol = "other-tool cargo crate 1.0 module/Type#method().";
+        assert_eq!(enrich_display_name(symbol, "method"), "Type::method");
+    }
 }

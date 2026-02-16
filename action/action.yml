@@ -39,6 +39,10 @@ inputs:
     description: 'GitHub token for API calls (avoids rate limiting)'
     required: false
     default: ${{ github.token }}
+  verus-args:
+    description: 'Extra arguments passed to Verus (e.g. --log smt --log-dir ./smt-logs -V spinoff-all)'
+    required: false
+    default: ''
 
 outputs:
   results-file:
@@ -59,6 +63,9 @@ outputs:
   rust-version:
     description: 'Rust toolchain version used'
     value: ${{ steps.versions.outputs.rust_version }}
+  smt-log-dir:
+    description: 'Path to the SMT log directory (if verus-args includes --log smt)'
+    value: ${{ steps.verify.outputs.smt_log_dir }}
 
 runs:
   using: 'composite'
@@ -251,14 +258,29 @@ runs:
         echo "=== Running probe-verus verify ==="
         echo "Project: $PROJECT_PATH"
         
+        VERUS_ARGS="${{ inputs.verus-args }}"
+        
         # Build command
         CMD="probe-verus verify $PROJECT_PATH -o $RESULTS_FILE -a $ATOMS_FILE"
         if [ -n "$PACKAGE" ]; then
           CMD="$CMD -p $PACKAGE"
         fi
+        if [ -n "$VERUS_ARGS" ]; then
+          CMD="$CMD --verus-args $VERUS_ARGS"
+        fi
         
         echo "Running: $CMD"
         $CMD
+        
+        # If verus-args included --log-dir, expose it as output
+        SMT_LOG_DIR=""
+        if echo "$VERUS_ARGS" | grep -q "\-\-log-dir"; then
+          SMT_LOG_DIR=$(echo "$VERUS_ARGS" | grep -oP '(?<=--log-dir\s)\S+')
+          if [ -n "$SMT_LOG_DIR" ] && [ -d "$PROJECT_PATH/$SMT_LOG_DIR" ]; then
+            SMT_LOG_DIR="$PROJECT_PATH/$SMT_LOG_DIR"
+          fi
+        fi
+        echo "smt_log_dir=$SMT_LOG_DIR" >> $GITHUB_OUTPUT
         
         echo ""
         echo "=== Verification Results ==="

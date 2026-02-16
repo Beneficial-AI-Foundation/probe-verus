@@ -119,6 +119,10 @@ enum Commands {
         /// If no file specified, looks for atoms.json in current directory
         #[arg(short = 'a', long)]
         with_atoms: Option<Option<PathBuf>>,
+
+        /// Extra arguments passed to Verus after -- (e.g. --log smt --log-dir ./smt-logs -V spinoff-all)
+        #[arg(long, num_args = 1.., allow_hyphen_values = true)]
+        verus_args: Vec<String>,
     },
 
     /// Extract function specifications (requires/ensures) to JSON
@@ -236,6 +240,7 @@ fn main() {
             output,
             no_cache,
             with_atoms,
+            verus_args,
         } => {
             cmd_verify(
                 project_path,
@@ -247,6 +252,7 @@ fn main() {
                 output,
                 no_cache,
                 with_atoms,
+                verus_args,
             );
         }
         Commands::Specify {

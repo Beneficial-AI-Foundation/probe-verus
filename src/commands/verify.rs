@@ -41,6 +41,7 @@ pub fn cmd_verify(
     output: Option<PathBuf>,
     no_cache: bool,
     with_atoms: Option<Option<PathBuf>>,
+    verus_args: Vec<String>,
 ) {
     // Determine the project path and verification output source
     let (project_path, verification_output, exit_code) = get_verification_data(
@@ -49,6 +50,7 @@ pub fn cmd_verify(
         exit_code_arg,
         package.clone(),
         no_cache,
+        &verus_args,
     );
 
     // Analyze the output
@@ -137,9 +139,10 @@ fn get_verification_data(
     exit_code_arg: Option<i32>,
     package: Option<String>,
     no_cache: bool,
+    verus_args: &[String],
 ) -> (PathBuf, String, i32) {
     if let Some(ref path) = project_path {
-        get_verification_data_from_project(path, from_file, exit_code_arg, package, no_cache)
+        get_verification_data_from_project(path, from_file, exit_code_arg, package, no_cache, verus_args)
     } else {
         get_verification_data_from_cache()
     }
@@ -152,6 +155,7 @@ fn get_verification_data_from_project(
     exit_code_arg: Option<i32>,
     package: Option<String>,
     no_cache: bool,
+    verus_args: &[String],
 ) -> (PathBuf, String, i32) {
     if !path.exists() {
         eprintln!("Error: Project path does not exist: {}", path.display());
@@ -161,7 +165,7 @@ fn get_verification_data_from_project(
     let (output, code) = if let Some(ref output_file) = from_file {
         get_output_from_file(output_file, exit_code_arg)
     } else {
-        run_verification(path, package.as_deref(), no_cache, &package)
+        run_verification(path, package.as_deref(), no_cache, &package, verus_args)
     };
 
     (path.to_path_buf(), output, code)
@@ -198,13 +202,18 @@ fn run_verification(
     package: Option<&str>,
     no_cache: bool,
     package_for_cache: &Option<String>,
+    verus_args: &[String],
 ) -> (String, i32) {
     println!("════════════════════════════════════════════════════════════");
     println!("  Running Verus verification...");
+    if !verus_args.is_empty() {
+        println!("  Extra Verus args: {:?}", verus_args);
+    }
     println!("════════════════════════════════════════════════════════════");
 
     let runner = VerusRunner::new();
-    match runner.run_verification(path, package, None, None, None) {
+    let extra = if verus_args.is_empty() { None } else { Some(verus_args) };
+    match runner.run_verification(path, package, None, None, extra) {
         Ok((output, code)) => {
             println!();
             println!("════════════════════════════════════════════════════════════");
@@ -343,10 +352,23 @@ pub fn verify_internal(
     atoms_path: Option<&Path>,
     verbose: bool,
 ) -> Result<VerifySummary, String> {
+    verify_internal_with_args(project_path, output, package, atoms_path, verbose, &[])
+}
+
+/// Internal verify implementation with extra Verus args support.
+pub fn verify_internal_with_args(
+    project_path: &Path,
+    output: &Path,
+    package: Option<&str>,
+    atoms_path: Option<&Path>,
+    verbose: bool,
+    verus_args: &[String],
+) -> Result<VerifySummary, String> {
     let runner = VerusRunner::new();
 
+    let extra = if verus_args.is_empty() { None } else { Some(verus_args) };
     let (verification_output, exit_code) = runner
-        .run_verification(project_path, package, None, None, None)
+        .run_verification(project_path, package, None, None, extra)
         .map_err(|e| format!("Failed to run verification: {}", e))?;
 
     if verbose {

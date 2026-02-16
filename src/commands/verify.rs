@@ -142,7 +142,14 @@ fn get_verification_data(
     verus_args: &[String],
 ) -> (PathBuf, String, i32) {
     if let Some(ref path) = project_path {
-        get_verification_data_from_project(path, from_file, exit_code_arg, package, no_cache, verus_args)
+        get_verification_data_from_project(
+            path,
+            from_file,
+            exit_code_arg,
+            package,
+            no_cache,
+            verus_args,
+        )
     } else {
         get_verification_data_from_cache()
     }
@@ -212,7 +219,11 @@ fn run_verification(
     println!("════════════════════════════════════════════════════════════");
 
     let runner = VerusRunner::new();
-    let extra = if verus_args.is_empty() { None } else { Some(verus_args) };
+    let extra = if verus_args.is_empty() {
+        None
+    } else {
+        Some(verus_args)
+    };
     match runner.run_verification(path, package, None, None, extra) {
         Ok((output, code)) => {
             println!();
@@ -366,7 +377,11 @@ pub fn verify_internal_with_args(
 ) -> Result<VerifySummary, String> {
     let runner = VerusRunner::new();
 
-    let extra = if verus_args.is_empty() { None } else { Some(verus_args) };
+    let extra = if verus_args.is_empty() {
+        None
+    } else {
+        Some(verus_args)
+    };
     let (verification_output, exit_code) = runner
         .run_verification(project_path, package, None, None, extra)
         .map_err(|e| format!("Failed to run verification: {}", e))?;

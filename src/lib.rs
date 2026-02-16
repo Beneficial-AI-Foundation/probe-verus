@@ -402,8 +402,7 @@ pub fn build_call_graph(
                     .display_name
                     .clone()
                     .unwrap_or_else(|| "unknown".to_string());
-                let display_name =
-                    enrich_display_name(&symbol.symbol, &base_display_name);
+                let display_name = enrich_display_name(&symbol.symbol, &base_display_name);
 
                 // Track ALL function symbols for dependency tracking
                 all_function_symbols.insert(symbol.symbol.clone());
@@ -910,8 +909,11 @@ fn symbol_to_code_name_full(
         )
     })?;
 
-    // Step 2 & 3: Check if s ends with "display_name()."
-    let expected_suffix = format!("{}().", display_name);
+    // Step 2 & 3: Check if s ends with "method_name()."
+    // The display_name may be enriched (e.g., "Mul::mul") but the SCIP symbol uses
+    // "#" separators (e.g., "Mul#mul()."), so extract just the method name for matching.
+    let method_name = display_name.rsplit("::").next().unwrap_or(display_name);
+    let expected_suffix = format!("{}().", method_name);
 
     if !s.ends_with(&expected_suffix) {
         return Err(ProbeError::invalid_symbol(
@@ -1500,8 +1502,7 @@ mod tests {
     #[test]
     fn test_enrich_inherent_impl() {
         // Inherent impl: Type#method()
-        let symbol =
-            "rust-analyzer cargo curve25519-dalek 4.1.3 field/FieldElement51#square().";
+        let symbol = "rust-analyzer cargo curve25519-dalek 4.1.3 field/FieldElement51#square().";
         assert_eq!(
             enrich_display_name(symbol, "square"),
             "FieldElement51::square"
@@ -1524,10 +1525,7 @@ mod tests {
         // Trait impl: &EdwardsPoint#Add<&EdwardsPoint>#add()
         let symbol =
             "rust-analyzer cargo curve25519-dalek 4.1.3 edwards/&EdwardsPoint#Add<&EdwardsPoint>#add().";
-        assert_eq!(
-            enrich_display_name(symbol, "add"),
-            "EdwardsPoint::add"
-        );
+        assert_eq!(enrich_display_name(symbol, "add"), "EdwardsPoint::add");
     }
 
     #[test]

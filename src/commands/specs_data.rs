@@ -86,10 +86,7 @@ fn derive_short_module(module_path: &str) -> String {
             }
         }
         "lemmas" => "lemmas".to_string(),
-        "backend" => {
-            // "backend::serial::u64::scalar" -> "scalar" (leaf module)
-            parts.last().unwrap_or(&"backend").to_string()
-        }
+        "backend" => "backend".to_string(),
         other => other.to_string(),
     }
 }
@@ -239,13 +236,8 @@ struct FocusFunction {
 /// We store both the original path and the src-relative suffix so matching
 /// works regardless of whether `compute_project_prefix` adds a prefix.
 fn load_libsignal_entrypoints(path: &PathBuf) -> HashSet<(String, String)> {
-    let data = std::fs::read_to_string(path).unwrap_or_else(|e| {
-        panic!(
-            "Failed to read libsignal entrypoints {}: {}",
-            path.display(),
-            e
-        )
-    });
+    let data = std::fs::read_to_string(path)
+        .unwrap_or_else(|e| panic!("Failed to read libsignal entrypoints {}: {}", path.display(), e));
     let parsed: EntrypointsJson = serde_json::from_str(&data)
         .unwrap_or_else(|e| panic!("Failed to parse libsignal entrypoints JSON: {}", e));
     let mut set = HashSet::new();
@@ -299,11 +291,7 @@ pub fn cmd_specs_data(
     let libsignal_set: HashSet<(String, String)> = match &libsignal_entrypoints {
         Some(path) => {
             let set = load_libsignal_entrypoints(path);
-            eprintln!(
-                "Loaded {} libsignal entrypoints from {}",
-                set.len(),
-                path.display()
-            );
+            eprintln!("Loaded {} libsignal entrypoints from {}", set.len(), path.display());
             set
         }
         None => HashSet::new(),
@@ -472,8 +460,7 @@ pub fn cmd_specs_data(
 
                 let has_spec = func.has_requires || func.has_ensures;
                 let has_proof = func.is_proved();
-                let is_libsignal =
-                    libsignal_set.contains(&(func.name.clone(), full_file_path.clone()));
+                let is_libsignal = libsignal_set.contains(&(func.name.clone(), full_file_path.clone()));
 
                 let short_module = derive_short_module(module_path);
 
@@ -513,10 +500,7 @@ pub fn cmd_specs_data(
     let reachable = compute_reachable_specs(&verified_functions, &spec_ref_map);
     let pre_prune = spec_functions.len();
     spec_functions.retain(|s| s.category == "axiom" || reachable.contains(&s.name));
-    let axiom_count = spec_functions
-        .iter()
-        .filter(|s| s.category == "axiom")
-        .count();
+    let axiom_count = spec_functions.iter().filter(|s| s.category == "axiom").count();
     eprintln!(
         "Pruned spec/axiom functions: {} -> {} ({} specs + {} axioms, reachable from {} verified functions)",
         pre_prune,

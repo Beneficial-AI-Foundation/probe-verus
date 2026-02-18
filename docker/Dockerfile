@@ -61,14 +61,23 @@ RUN rustc --version && cargo --version
 # ============================================================================
 # Install Verus (configurable version)
 # ============================================================================
-# Resolve VERUS_VERSION to actual release tag, then install
+# Resolve VERUS_VERSION to actual release tag, then install.
+# Uses HTTP redirects instead of GitHub API to avoid rate limiting.
 RUN echo "Resolving Verus version: ${VERUS_VERSION}..." && \
-    RELEASE_JSON=$(curl -s https://api.github.com/repos/verus-lang/verus/releases) && \
     if [ "${VERUS_VERSION}" = "latest" ]; then \
-        RELEASE_TAG=$(echo "$RELEASE_JSON" | jq -r '.[] | select(.prerelease == false) | .tag_name' | head -n1); \
+        RELEASE_TAG=$(curl -sL -o /dev/null -w '%{url_effective}' \
+            https://github.com/verus-lang/verus/releases/latest | \
+            sed 's|.*/tag/||'); \
+        if [ -z "$RELEASE_TAG" ]; then \
+            echo "ERROR: could not resolve latest Verus release tag"; exit 1; \
+        fi; \
         echo "Resolved 'latest' to: $RELEASE_TAG"; \
     elif [ "${VERUS_VERSION}" = "prerelease" ]; then \
-        RELEASE_TAG=$(echo "$RELEASE_JSON" | jq -r '.[0].tag_name'); \
+        RELEASE_TAG=$(curl -s https://api.github.com/repos/verus-lang/verus/releases | \
+            jq -r '.[0].tag_name'); \
+        if [ -z "$RELEASE_TAG" ] || [ "$RELEASE_TAG" = "null" ]; then \
+            echo "ERROR: could not resolve prerelease tag (GitHub API may be rate-limited)"; exit 1; \
+        fi; \
         echo "Resolved 'prerelease' to: $RELEASE_TAG"; \
     else \
         RELEASE_TAG="${VERUS_VERSION}"; \
@@ -76,12 +85,8 @@ RUN echo "Resolving Verus version: ${VERUS_VERSION}..." && \
     fi && \
     echo "RELEASE_TAG=$RELEASE_TAG" > /tmp/verus_version.env && \
     echo "Installing Verus release: $RELEASE_TAG" && \
-    RELEASE_DATA=$(echo "$RELEASE_JSON" | jq -r --arg tag "$RELEASE_TAG" '.[] | select(.tag_name == $tag)') && \
-    if [ -z "$RELEASE_DATA" ] || [ "$RELEASE_DATA" = "null" ]; then \
-        echo "ERROR: Release tag '$RELEASE_TAG' not found"; \
-        exit 1; \
-    fi && \
-    DOWNLOAD_URL=$(echo "$RELEASE_DATA" | jq -r '.assets[] | select(.name | contains("x86-linux.zip")) | .browser_download_url') && \
+    VERUS_VER=$(echo "$RELEASE_TAG" | sed 's|^release/||') && \
+    DOWNLOAD_URL="https://github.com/verus-lang/verus/releases/download/${RELEASE_TAG}/verus-${VERUS_VER}-x86-linux.zip" && \
     echo "Download URL: $DOWNLOAD_URL" && \
     wget -q "$DOWNLOAD_URL" -O verus.zip && \
     unzip -q verus.zip && \

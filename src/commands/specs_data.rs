@@ -53,6 +53,7 @@ struct VerifiedFunctionEntry {
     file: String,
     line: usize,
     module: String,
+    sub_module: String,
     doc_comment: String,
     math_interpretation: String,
     informal_interpretation: String,
@@ -89,6 +90,30 @@ fn derive_short_module(module_path: &str) -> String {
         "backend" => "backend".to_string(),
         other => other.to_string(),
     }
+}
+
+/// Derive a display sub-module for grouping within a filter category.
+///
+/// For backend functions this returns the first meaningful directory under
+/// `backend::serial::` (e.g. "curve_models", "scalar_mul", "u64"), so that
+/// the "backend" filter pill groups all backend functions while the list still
+/// shows per-sub-module section headers.  For non-backend modules the
+/// sub-module equals the top-level module.
+fn derive_sub_module(module_path: &str) -> String {
+    let parts: Vec<&str> = module_path.split("::").collect();
+    if parts.is_empty() {
+        return String::new();
+    }
+    if parts[0] == "backend" {
+        for part in &parts[1..] {
+            if *part == "serial" {
+                continue;
+            }
+            return part.to_string();
+        }
+        return "backend".to_string();
+    }
+    derive_short_module(module_path)
 }
 
 /// Extract a math interpretation from a doc comment.
@@ -236,8 +261,13 @@ struct FocusFunction {
 /// We store both the original path and the src-relative suffix so matching
 /// works regardless of whether `compute_project_prefix` adds a prefix.
 fn load_libsignal_entrypoints(path: &PathBuf) -> HashSet<(String, String)> {
-    let data = std::fs::read_to_string(path)
-        .unwrap_or_else(|e| panic!("Failed to read libsignal entrypoints {}: {}", path.display(), e));
+    let data = std::fs::read_to_string(path).unwrap_or_else(|e| {
+        panic!(
+            "Failed to read libsignal entrypoints {}: {}",
+            path.display(),
+            e
+        )
+    });
     let parsed: EntrypointsJson = serde_json::from_str(&data)
         .unwrap_or_else(|e| panic!("Failed to parse libsignal entrypoints JSON: {}", e));
     let mut set = HashSet::new();
@@ -291,7 +321,11 @@ pub fn cmd_specs_data(
     let libsignal_set: HashSet<(String, String)> = match &libsignal_entrypoints {
         Some(path) => {
             let set = load_libsignal_entrypoints(path);
-            eprintln!("Loaded {} libsignal entrypoints from {}", set.len(), path.display());
+            eprintln!(
+                "Loaded {} libsignal entrypoints from {}",
+                set.len(),
+                path.display()
+            );
             set
         }
         None => HashSet::new(),
@@ -460,9 +494,11 @@ pub fn cmd_specs_data(
 
                 let has_spec = func.has_requires || func.has_ensures;
                 let has_proof = func.is_proved();
-                let is_libsignal = libsignal_set.contains(&(func.name.clone(), full_file_path.clone()));
+                let is_libsignal =
+                    libsignal_set.contains(&(func.name.clone(), full_file_path.clone()));
 
                 let short_module = derive_short_module(module_path);
+                let sub_mod = derive_sub_module(module_path);
 
                 verified_functions.push(VerifiedFunctionEntry {
                     id: fn_id,
@@ -476,6 +512,7 @@ pub fn cmd_specs_data(
                     file: full_file_path,
                     line,
                     module: short_module,
+                    sub_module: sub_mod,
                     doc_comment: doc_comment.to_string(),
                     math_interpretation: math_interp,
                     informal_interpretation: String::new(),
@@ -500,7 +537,10 @@ pub fn cmd_specs_data(
     let reachable = compute_reachable_specs(&verified_functions, &spec_ref_map);
     let pre_prune = spec_functions.len();
     spec_functions.retain(|s| s.category == "axiom" || reachable.contains(&s.name));
-    let axiom_count = spec_functions.iter().filter(|s| s.category == "axiom").count();
+    let axiom_count = spec_functions
+        .iter()
+        .filter(|s| s.category == "axiom")
+        .count();
     eprintln!(
         "Pruned spec/axiom functions: {} -> {} ({} specs + {} axioms, reachable from {} verified functions)",
         pre_prune,

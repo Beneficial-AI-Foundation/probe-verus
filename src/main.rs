@@ -17,8 +17,8 @@ use std::path::PathBuf;
 // Import command implementations
 mod commands;
 use commands::{
-    cmd_atomize, cmd_functions, cmd_run, cmd_specs_data, cmd_specify, cmd_stubify,
-    cmd_tracked_csv, cmd_verify, OutputFormat,
+    cmd_atomize, cmd_functions, cmd_run, cmd_specify, cmd_specs_data, cmd_stubify, cmd_tracked_csv,
+    cmd_verify, OutputFormat,
 };
 
 #[derive(Parser)]

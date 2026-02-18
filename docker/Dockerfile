@@ -139,9 +139,8 @@ RUN echo "Installing scip..." && \
 # ============================================================================
 WORKDIR /build
 
-# Copy probe-verus source
-# Note: Cargo.lock is generated during build if not present
-COPY Cargo.toml ./
+# Copy probe-verus source and lockfile for reproducible builds
+COPY Cargo.toml Cargo.lock ./
 COPY src/ ./src/
 
 # Build probe-verus in release mode

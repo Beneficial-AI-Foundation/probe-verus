@@ -2,7 +2,9 @@
 
 use probe_verus::{
     build_call_graph, convert_to_atoms_with_parsed_spans, find_duplicate_code_names,
-    parse_scip_json, scip_cache::ScipCache, AtomWithLines,
+    parse_scip_json,
+    scip_cache::{Analyzer, ScipCache},
+    AtomWithLines,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -15,6 +17,7 @@ pub fn cmd_atomize(
     output: PathBuf,
     regenerate_scip: bool,
     with_locations: bool,
+    use_rust_analyzer: bool,
 ) {
     println!("═══════════════════════════════════════════════════════════");
     println!("  Probe Verus - Atomize: Generate Call Graph Data");
@@ -29,7 +32,12 @@ pub fn cmd_atomize(
     println!("  ✓ Valid Rust project found");
 
     // Get or generate SCIP JSON
-    let scip_cache = ScipCache::new(&project_path);
+    let analyzer = if use_rust_analyzer {
+        Analyzer::RustAnalyzer
+    } else {
+        Analyzer::VerusAnalyzer
+    };
+    let scip_cache = ScipCache::with_analyzer(&project_path, analyzer);
     let json_path = get_scip_json(&scip_cache, regenerate_scip);
 
     // Parse SCIP JSON and build call graph
@@ -188,8 +196,14 @@ pub fn atomize_internal(
     output: &PathBuf,
     regenerate_scip: bool,
     verbose: bool,
+    use_rust_analyzer: bool,
 ) -> Result<usize, String> {
-    let cache = ScipCache::new(project_path);
+    let analyzer = if use_rust_analyzer {
+        Analyzer::RustAnalyzer
+    } else {
+        Analyzer::VerusAnalyzer
+    };
+    let cache = ScipCache::with_analyzer(project_path, analyzer);
 
     // Get or generate SCIP JSON
     let json_path = cache

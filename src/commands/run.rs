@@ -51,6 +51,7 @@ impl From<VerifySummary> for VerifySummaryOutput {
 /// Execute the run command.
 ///
 /// Runs both atomize and verify commands (designed for Docker/CI usage).
+#[allow(clippy::too_many_arguments)]
 pub fn cmd_run(
     project_path: PathBuf,
     output_dir: PathBuf,
@@ -59,6 +60,7 @@ pub fn cmd_run(
     package: Option<String>,
     regenerate_scip: bool,
     verbose: bool,
+    use_rust_analyzer: bool,
 ) {
     // Validate project path
     if !project_path.exists() {
@@ -102,6 +104,7 @@ pub fn cmd_run(
             &atoms_path,
             regenerate_scip,
             verbose,
+            use_rust_analyzer,
             &mut run_result,
         );
     }
@@ -158,6 +161,7 @@ fn run_atomize_step(
     atoms_path: &PathBuf,
     regenerate_scip: bool,
     verbose: bool,
+    use_rust_analyzer: bool,
     run_result: &mut RunResult,
 ) {
     println!("───────────────────────────────────────────────────────────────");
@@ -165,7 +169,13 @@ fn run_atomize_step(
     println!("───────────────────────────────────────────────────────────────");
     println!();
 
-    let atomize_result = atomize_internal(project_path, atoms_path, regenerate_scip, verbose);
+    let atomize_result = atomize_internal(
+        project_path,
+        atoms_path,
+        regenerate_scip,
+        verbose,
+        use_rust_analyzer,
+    );
 
     match &atomize_result {
         Ok(count) => {

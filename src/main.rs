@@ -17,8 +17,8 @@ use std::path::PathBuf;
 // Import command implementations
 mod commands;
 use commands::{
-    cmd_atomize, cmd_functions, cmd_run, cmd_specify, cmd_specs_data, cmd_stubify, cmd_tracked_csv,
-    cmd_verify, OutputFormat,
+    cmd_atomize, cmd_functions, cmd_run, cmd_specs_data, cmd_specify, cmd_stubify,
+    cmd_tracked_csv, cmd_verify, OutputFormat,
 };
 
 #[derive(Parser)]
@@ -47,6 +47,10 @@ enum Commands {
         /// Include dependencies-with-locations (detailed per-call location info)
         #[arg(long)]
         with_locations: bool,
+
+        /// Use rust-analyzer instead of verus-analyzer for SCIP generation
+        #[arg(long)]
+        rust_analyzer: bool,
     },
 
     /// List all functions in a Rust/Verus project
@@ -239,6 +243,10 @@ enum Commands {
         /// Enable verbose output
         #[arg(short, long)]
         verbose: bool,
+
+        /// Use rust-analyzer instead of verus-analyzer for SCIP generation
+        #[arg(long)]
+        rust_analyzer: bool,
     },
 }
 
@@ -251,8 +259,9 @@ fn main() {
             output,
             regenerate_scip,
             with_locations,
+            rust_analyzer,
         } => {
-            cmd_atomize(project_path, output, regenerate_scip, with_locations);
+            cmd_atomize(project_path, output, regenerate_scip, with_locations, rust_analyzer);
         }
         Commands::ListFunctions {
             path,
@@ -341,6 +350,7 @@ fn main() {
             package,
             regenerate_scip,
             verbose,
+            rust_analyzer,
         } => {
             cmd_run(
                 project_path,
@@ -350,6 +360,7 @@ fn main() {
                 package,
                 regenerate_scip,
                 verbose,
+                rust_analyzer,
             );
         }
     }

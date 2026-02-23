@@ -1,26 +1,48 @@
 //! SCIP index caching and generation module.
 //!
 //! This module handles the generation and caching of SCIP (Source Code Index Protocol)
-//! indexes from verus-analyzer. SCIP generation can be slow for large projects,
-//! so caching is important for developer experience.
+//! indexes from verus-analyzer or rust-analyzer. SCIP generation can be slow for large
+//! projects, so caching is important for developer experience.
 
 use crate::constants::{DATA_DIR, SCIP_INDEX_FILE, SCIP_INDEX_JSON_FILE};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
+/// Which language server to use for SCIP index generation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Analyzer {
+    VerusAnalyzer,
+    RustAnalyzer,
+}
+
+impl Analyzer {
+    pub fn command_name(&self) -> &'static str {
+        match self {
+            Analyzer::VerusAnalyzer => "verus-analyzer",
+            Analyzer::RustAnalyzer => "rust-analyzer",
+        }
+    }
+}
+
+impl std::fmt::Display for Analyzer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.command_name())
+    }
+}
+
 /// Error types for SCIP operations
 #[derive(Debug)]
 pub enum ScipError {
-    /// verus-analyzer command not found in PATH
-    VerusAnalyzerNotFound,
+    /// Analyzer command not found in PATH
+    AnalyzerNotFound(Analyzer),
     /// scip CLI command not found in PATH
     ScipCliNotFound,
-    /// verus-analyzer scip command failed
-    VerusAnalyzerFailed(String),
+    /// Analyzer scip command failed
+    AnalyzerFailed(Analyzer, String),
     /// scip print command failed
     ScipPrintFailed(String),
     /// index.scip file not generated
-    IndexNotGenerated,
+    IndexNotGenerated(Analyzer),
     /// Failed to create data directory
     CreateDirFailed(std::io::Error),
     /// Failed to move index file
@@ -32,22 +54,23 @@ pub enum ScipError {
 impl std::fmt::Display for ScipError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ScipError::VerusAnalyzerNotFound => {
-                write!(f, "verus-analyzer not found in PATH")
+            ScipError::AnalyzerNotFound(a) => {
+                write!(f, "{} not found in PATH", a)
             }
             ScipError::ScipCliNotFound => {
                 write!(f, "scip not found in PATH")
             }
-            ScipError::VerusAnalyzerFailed(msg) => {
-                write!(f, "verus-analyzer scip failed: {}", msg)
+            ScipError::AnalyzerFailed(a, msg) => {
+                write!(f, "{} scip failed: {}", a, msg)
             }
             ScipError::ScipPrintFailed(msg) => {
                 write!(f, "scip print failed: {}", msg)
             }
-            ScipError::IndexNotGenerated => {
+            ScipError::IndexNotGenerated(a) => {
                 write!(
                     f,
-                    "index.scip not generated (verus-analyzer may have failed silently)"
+                    "index.scip not generated ({} may have failed silently)",
+                    a
                 )
             }
             ScipError::CreateDirFailed(e) => {
@@ -68,17 +91,27 @@ impl std::error::Error for ScipError {}
 /// Manager for SCIP index caching.
 ///
 /// SCIP indexes are stored in `<project>/data/` directory:
-/// - `index.scip`: Binary SCIP index from verus-analyzer
+/// - `index.scip`: Binary SCIP index from verus-analyzer or rust-analyzer
 /// - `index.scip.json`: JSON representation for parsing
 pub struct ScipCache {
     project_path: PathBuf,
+    analyzer: Analyzer,
 }
 
 impl ScipCache {
-    /// Create a new ScipCache for the given project.
+    /// Create a new ScipCache for the given project using the default verus-analyzer.
     pub fn new(project_path: impl Into<PathBuf>) -> Self {
         Self {
             project_path: project_path.into(),
+            analyzer: Analyzer::VerusAnalyzer,
+        }
+    }
+
+    /// Create a new ScipCache with a specific analyzer choice.
+    pub fn with_analyzer(project_path: impl Into<PathBuf>, analyzer: Analyzer) -> Self {
+        Self {
+            project_path: project_path.into(),
+            analyzer,
         }
     }
 
@@ -132,8 +165,8 @@ impl ScipCache {
 
     /// Check that required external tools are available.
     fn check_prerequisites(&self) -> Result<(), ScipError> {
-        if !command_exists("verus-analyzer") {
-            return Err(ScipError::VerusAnalyzerNotFound);
+        if !command_exists(self.analyzer.command_name()) {
+            return Err(ScipError::AnalyzerNotFound(self.analyzer));
         }
         if !command_exists("scip") {
             return Err(ScipError::ScipCliNotFound);
@@ -141,16 +174,17 @@ impl ScipCache {
         Ok(())
     }
 
-    /// Generate the SCIP index using verus-analyzer.
+    /// Generate the SCIP index using the configured analyzer.
     fn generate_scip_index(&self, verbose: bool) -> Result<(), ScipError> {
         if verbose {
             println!(
-                "Generating SCIP index for {}...",
-                self.project_path.display()
+                "Generating SCIP index for {} (using {})...",
+                self.project_path.display(),
+                self.analyzer
             );
         }
 
-        let status = Command::new("verus-analyzer")
+        let status = Command::new(self.analyzer.command_name())
             .args(["scip", "."])
             .current_dir(&self.project_path)
             .stdout(if verbose {
@@ -168,20 +202,20 @@ impl ScipCache {
         match status {
             Ok(s) if s.success() => {}
             Ok(s) => {
-                return Err(ScipError::VerusAnalyzerFailed(format!(
-                    "exit status: {}",
-                    s
-                )));
+                return Err(ScipError::AnalyzerFailed(
+                    self.analyzer,
+                    format!("exit status: {}", s),
+                ));
             }
             Err(e) => {
-                return Err(ScipError::VerusAnalyzerFailed(e.to_string()));
+                return Err(ScipError::AnalyzerFailed(self.analyzer, e.to_string()));
             }
         }
 
         // Check that index.scip was generated
         let generated_path = self.project_path.join("index.scip");
         if !generated_path.exists() {
-            return Err(ScipError::IndexNotGenerated);
+            return Err(ScipError::IndexNotGenerated(self.analyzer));
         }
 
         // Ensure data directory exists
@@ -272,10 +306,20 @@ mod tests {
 
     #[test]
     fn test_scip_error_display() {
-        let err = ScipError::VerusAnalyzerNotFound;
+        let err = ScipError::AnalyzerNotFound(Analyzer::VerusAnalyzer);
         assert_eq!(err.to_string(), "verus-analyzer not found in PATH");
+
+        let err = ScipError::AnalyzerNotFound(Analyzer::RustAnalyzer);
+        assert_eq!(err.to_string(), "rust-analyzer not found in PATH");
 
         let err = ScipError::ScipCliNotFound;
         assert_eq!(err.to_string(), "scip not found in PATH");
+    }
+
+    #[test]
+    fn test_scip_cache_with_analyzer() {
+        let cache = ScipCache::with_analyzer("/path/to/project", Analyzer::RustAnalyzer);
+        assert_eq!(cache.analyzer, Analyzer::RustAnalyzer);
+        assert_eq!(cache.data_dir(), PathBuf::from("/path/to/project/data"));
     }
 }

@@ -23,6 +23,7 @@ verus_syn = { version = "0.0.0-2025-11-16-0050", features = ["full", "visit", "p
 proc-macro2 = { version = "1.0", features = ["span-locations"] }
 quote = "1.0"
 clap = { version = "4.5", features = ["derive"] }
+csv = "1.3"
 walkdir = "2.4"
 rust-lapper = "1.1"
 thiserror = "1.0"

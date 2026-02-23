@@ -6,7 +6,6 @@
 
 use probe_verus::verus_parser::{compute_project_prefix, parse_all_functions_ext};
 use probe_verus::FunctionMode;
-use std::io::Write;
 use std::path::PathBuf;
 
 /// Generate the tracked CSV file.
@@ -89,20 +88,19 @@ pub fn cmd_tracked_csv(src_path: PathBuf, output: PathBuf, github_base_url: Opti
     // Sort by function name for deterministic output
     rows.sort_by(|a, b| a.0.cmp(&b.0));
 
-    // Write CSV
+    // Write CSV (using csv crate to properly quote fields containing commas)
     if let Some(parent) = output.parent() {
         std::fs::create_dir_all(parent).ok();
     }
-    let mut file = std::fs::File::create(&output).expect("Failed to create output file");
-    writeln!(file, "function,module,link,has_spec,has_proof").unwrap();
-    for (function, module, link, has_spec, has_proof) in &rows {
-        writeln!(
-            file,
-            "{},{},{},{},{}",
-            function, module, link, has_spec, has_proof
-        )
+    let file = std::fs::File::create(&output).expect("Failed to create output file");
+    let mut wtr = csv::Writer::from_writer(file);
+    wtr.write_record(["function", "module", "link", "has_spec", "has_proof"])
         .unwrap();
+    for (function, module, link, has_spec, has_proof) in &rows {
+        wtr.write_record([function, module, link, has_spec, has_proof])
+            .unwrap();
     }
+    wtr.flush().unwrap();
 
     // Print summary
     let total = rows.len();

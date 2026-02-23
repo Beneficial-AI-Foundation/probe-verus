@@ -61,6 +61,7 @@ pub fn cmd_run(
     regenerate_scip: bool,
     verbose: bool,
     use_rust_analyzer: bool,
+    allow_duplicates: bool,
 ) {
     // Validate project path
     if !project_path.exists() {
@@ -105,6 +106,7 @@ pub fn cmd_run(
             regenerate_scip,
             verbose,
             use_rust_analyzer,
+            allow_duplicates,
             &mut run_result,
         );
     }
@@ -162,6 +164,7 @@ fn run_atomize_step(
     regenerate_scip: bool,
     verbose: bool,
     use_rust_analyzer: bool,
+    allow_duplicates: bool,
     run_result: &mut RunResult,
 ) {
     println!("───────────────────────────────────────────────────────────────");
@@ -175,6 +178,7 @@ fn run_atomize_step(
         regenerate_scip,
         verbose,
         use_rust_analyzer,
+        allow_duplicates,
     );
 
     match &atomize_result {

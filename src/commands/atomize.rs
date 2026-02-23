@@ -18,6 +18,7 @@ pub fn cmd_atomize(
     regenerate_scip: bool,
     with_locations: bool,
     use_rust_analyzer: bool,
+    allow_duplicates: bool,
 ) {
     println!("═══════════════════════════════════════════════════════════");
     println!("  Probe Verus - Atomize: Generate Call Graph Data");
@@ -70,18 +71,29 @@ pub fn cmd_atomize(
         println!("    (including dependencies-with-locations)");
     }
 
-    // Check for duplicate code_names - these are a fatal error
-    if let Err(msg) = check_duplicates(&atoms) {
-        eprintln!();
-        eprintln!("{}", msg);
-        std::process::exit(1);
+    // Check for duplicate code_names
+    let duplicates = find_duplicate_code_names(&atoms);
+    if !duplicates.is_empty() {
+        let report = format_duplicate_report(&duplicates);
+        if allow_duplicates {
+            eprintln!();
+            eprintln!("{}", report);
+            eprintln!(
+                "    Continuing because --allow-duplicates was specified.\n    \
+                 Duplicate entries will be dropped (first occurrence kept)."
+            );
+        } else {
+            eprintln!();
+            eprintln!("{}", report);
+            std::process::exit(1);
+        }
     }
 
-    // Convert atoms list to dictionary keyed by code_name
-    let atoms_dict: HashMap<String, _> = atoms
-        .into_iter()
-        .map(|atom| (atom.code_name.clone(), atom))
-        .collect();
+    // Convert atoms list to dictionary keyed by code_name (first occurrence wins)
+    let mut atoms_dict: HashMap<String, AtomWithLines> = HashMap::new();
+    for atom in atoms {
+        atoms_dict.entry(atom.code_name.clone()).or_insert(atom);
+    }
 
     // Write the output
     let json = serde_json::to_string_pretty(&atoms_dict).expect("Failed to serialize JSON");
@@ -140,18 +152,13 @@ fn get_scip_json(cache: &ScipCache, regenerate: bool) -> PathBuf {
     }
 }
 
-/// Check for duplicate code_names and return an error message if found.
-fn check_duplicates(atoms: &[AtomWithLines]) -> Result<(), String> {
-    let duplicates = find_duplicate_code_names(atoms);
-    if duplicates.is_empty() {
-        return Ok(());
-    }
-
+/// Format a human-readable report of duplicate code_names.
+fn format_duplicate_report(duplicates: &[probe_verus::DuplicateCodeName]) -> String {
     let mut msg = format!(
-        "✗ ERROR: Found {} duplicate code_name(s):\n",
+        "WARNING: Found {} duplicate code_name(s):\n",
         duplicates.len()
     );
-    for dup in &duplicates {
+    for dup in duplicates {
         msg.push_str(&format!("    - '{}'\n", dup.code_name));
         for occ in &dup.occurrences {
             msg.push_str(&format!(
@@ -162,9 +169,8 @@ fn check_duplicates(atoms: &[AtomWithLines]) -> Result<(), String> {
     }
     msg.push_str("\n    Duplicate code_names cannot be used as dictionary keys.\n");
     msg.push_str("    This may indicate trait implementations that cannot be distinguished.\n");
-    msg.push_str("    Consider filing an issue if this is unexpected.");
-
-    Err(msg)
+    msg.push_str("    Use --allow-duplicates to continue anyway (first occurrence kept).");
+    msg
 }
 
 /// Print the success summary.
@@ -197,6 +203,7 @@ pub fn atomize_internal(
     regenerate_scip: bool,
     verbose: bool,
     use_rust_analyzer: bool,
+    allow_duplicates: bool,
 ) -> Result<usize, String> {
     let analyzer = if use_rust_analyzer {
         Analyzer::RustAnalyzer
@@ -216,7 +223,6 @@ pub fn atomize_internal(
 
     let (call_graph, symbol_to_display_name) = build_call_graph(&scip_index);
 
-    // For `run` command, default to basic output (no locations)
     let atoms = convert_to_atoms_with_parsed_spans(
         &call_graph,
         &symbol_to_display_name,
@@ -227,16 +233,22 @@ pub fn atomize_internal(
     // Check for duplicates
     let duplicates = find_duplicate_code_names(&atoms);
     if !duplicates.is_empty() {
-        return Err(format!("Found {} duplicate code_name(s)", duplicates.len()));
+        if allow_duplicates {
+            eprintln!(
+                "Warning: Found {} duplicate code_name(s) (continuing with --allow-duplicates)",
+                duplicates.len()
+            );
+        } else {
+            return Err(format!("Found {} duplicate code_name(s)", duplicates.len()));
+        }
     }
 
-    let count = atoms.len();
-
-    // Convert to dictionary and write
-    let atoms_dict: HashMap<String, _> = atoms
-        .into_iter()
-        .map(|atom| (atom.code_name.clone(), atom))
-        .collect();
+    // Convert to dictionary (first occurrence wins)
+    let mut atoms_dict: HashMap<String, AtomWithLines> = HashMap::new();
+    for atom in atoms {
+        atoms_dict.entry(atom.code_name.clone()).or_insert(atom);
+    }
+    let count = atoms_dict.len();
 
     let json = serde_json::to_string_pretty(&atoms_dict)
         .map_err(|e| format!("Failed to serialize JSON: {}", e))?;

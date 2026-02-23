@@ -966,6 +966,7 @@ fn symbol_to_code_name_full(
     // This enriches the symbol to be more like rust-analyzer's format.
     // e.g., "window/NafLookupTable5#From<&EdwardsPoint>#from()"
     //    -> "window/NafLookupTable5<ProjectiveNielsPoint>#From<&EdwardsPoint>#from()"
+    let mut target_type_applied = false;
     if let Some(target_t) = target_type {
         // Find the struct name (first # after the module path)
         // Pattern: "version module/StructName#Trait..." or "version module/StructName#Trait<T>#..."
@@ -975,15 +976,18 @@ fn symbol_to_code_name_full(
             if !before_hash.ends_with('>') {
                 // No existing type parameter, add one
                 result = format!("{}<{}>{}", before_hash, target_t, &result[first_hash..]);
+                target_type_applied = true;
             }
         }
     }
 
-    // If line number is provided (and no target_type), add it as a suffix for disambiguation.
-    // This is a last resort for cases where symbol+signature+self_type are all identical
-    // (e.g., generic trait impls that differ only in type parameters not in the signature).
+    // Line number is a fallback when target_type couldn't be applied (no # in symbol,
+    // or existing type parameter prevents insertion). Also used directly when no
+    // target_type was provided.
     if let Some(line) = line_number {
-        result = format!("{}@{}", result, line);
+        if !target_type_applied {
+            result = format!("{}@{}", result, line);
+        }
     }
 
     // Convert to probe: URI format
@@ -1192,18 +1196,23 @@ fn convert_to_atoms_with_lines_internal(
                 > 1;
 
             if is_duplicate {
-                // Try to use discriminating type first, fall back to line number
+                // Always pass line_number so it can serve as fallback when target_type
+                // can't be applied (e.g., no # in symbol or existing type parameter).
+                let line_fallback = if data.lines_start > 0 {
+                    Some(data.lines_start)
+                } else {
+                    None
+                };
                 let result = if let Some(Some(target_type)) = node_discriminating_type.get(&idx) {
                     symbol_to_code_name_full(
                         &data.node.symbol,
                         &data.node.display_name,
                         Some(&data.node.signature_text),
                         data.node.self_type.as_deref(),
-                        None, // No line number needed
+                        line_fallback,
                         Some(target_type),
                     )
                 } else if data.lines_start > 0 {
-                    // Fall back to line number if no discriminating type found
                     symbol_to_code_name_full(
                         &data.node.symbol,
                         &data.node.display_name,

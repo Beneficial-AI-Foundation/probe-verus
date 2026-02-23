@@ -17,8 +17,8 @@ use std::path::PathBuf;
 // Import command implementations
 mod commands;
 use commands::{
-    cmd_atomize, cmd_functions, cmd_run, cmd_specs_data, cmd_specify, cmd_stubify,
-    cmd_tracked_csv, cmd_verify, OutputFormat,
+    cmd_atomize, cmd_functions, cmd_run, cmd_specify, cmd_specs_data, cmd_stubify, cmd_tracked_csv,
+    cmd_verify, OutputFormat,
 };
 
 #[derive(Parser)]
@@ -51,6 +51,10 @@ enum Commands {
         /// Use rust-analyzer instead of verus-analyzer for SCIP generation
         #[arg(long)]
         rust_analyzer: bool,
+
+        /// Continue with warnings instead of failing on duplicate code_names
+        #[arg(long)]
+        allow_duplicates: bool,
     },
 
     /// List all functions in a Rust/Verus project
@@ -247,6 +251,10 @@ enum Commands {
         /// Use rust-analyzer instead of verus-analyzer for SCIP generation
         #[arg(long)]
         rust_analyzer: bool,
+
+        /// Continue with warnings instead of failing on duplicate code_names
+        #[arg(long)]
+        allow_duplicates: bool,
     },
 }
 
@@ -260,8 +268,16 @@ fn main() {
             regenerate_scip,
             with_locations,
             rust_analyzer,
+            allow_duplicates,
         } => {
-            cmd_atomize(project_path, output, regenerate_scip, with_locations, rust_analyzer);
+            cmd_atomize(
+                project_path,
+                output,
+                regenerate_scip,
+                with_locations,
+                rust_analyzer,
+                allow_duplicates,
+            );
         }
         Commands::ListFunctions {
             path,
@@ -351,6 +367,7 @@ fn main() {
             regenerate_scip,
             verbose,
             rust_analyzer,
+            allow_duplicates,
         } => {
             cmd_run(
                 project_path,
@@ -361,6 +378,7 @@ fn main() {
                 regenerate_scip,
                 verbose,
                 rust_analyzer,
+                allow_duplicates,
             );
         }
     }

@@ -1228,16 +1228,28 @@ mod tests {
     fn test_find_code_name_exact_match() {
         let loc = make_loc("foo", "src/lib.rs", 10, 20);
         let mut atoms = HashMap::new();
-        atoms.insert("code_foo".to_string(), make_atom_entry("foo", "src/lib.rs", 10));
-        assert_eq!(find_code_name_in_atoms(&loc, &atoms).as_deref(), Some("code_foo"));
+        atoms.insert(
+            "code_foo".to_string(),
+            make_atom_entry("foo", "src/lib.rs", 10),
+        );
+        assert_eq!(
+            find_code_name_in_atoms(&loc, &atoms).as_deref(),
+            Some("code_foo")
+        );
     }
 
     #[test]
     fn test_find_code_name_suffix_match() {
         let loc = make_loc("bar", "src/impls.rs", 20, 30);
         let mut atoms = HashMap::new();
-        atoms.insert("code_bar".to_string(), make_atom_entry("MyType::bar", "src/impls.rs", 20));
-        assert_eq!(find_code_name_in_atoms(&loc, &atoms).as_deref(), Some("code_bar"));
+        atoms.insert(
+            "code_bar".to_string(),
+            make_atom_entry("MyType::bar", "src/impls.rs", 20),
+        );
+        assert_eq!(
+            find_code_name_in_atoms(&loc, &atoms).as_deref(),
+            Some("code_bar")
+        );
     }
 
     #[test]
@@ -1249,7 +1261,10 @@ mod tests {
             "code_compress".to_string(),
             make_atom_entry("EdwardsPoint::compress", "src/edwards.rs", 50),
         );
-        assert_eq!(find_code_name_in_atoms(&loc, &atoms).as_deref(), Some("code_compress"));
+        assert_eq!(
+            find_code_name_in_atoms(&loc, &atoms).as_deref(),
+            Some("code_compress")
+        );
     }
 
     #[test]
@@ -1264,7 +1279,10 @@ mod tests {
             "code_baz_close".to_string(),
             make_atom_entry("baz", "src/mod.rs", 101),
         );
-        assert_eq!(find_code_name_in_atoms(&loc, &atoms).as_deref(), Some("code_baz_close"));
+        assert_eq!(
+            find_code_name_in_atoms(&loc, &atoms).as_deref(),
+            Some("code_baz_close")
+        );
     }
 
     #[test]

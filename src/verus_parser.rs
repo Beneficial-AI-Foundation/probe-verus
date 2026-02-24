@@ -682,6 +682,11 @@ pub struct FunctionInfo {
         default
     )]
     pub module_path: Option<String>,
+    /// Line of the fn keyword / function name (from sig.ident), matching SCIP's
+    /// definition line. Unlike spec_text.lines_start (which includes preceding
+    /// attributes and doc comments), this points to the actual fn signature.
+    #[serde(skip)]
+    pub fn_line: usize,
 }
 
 impl FunctionInfo {
@@ -965,6 +970,7 @@ impl FunctionInfoVisitor {
 
         let start_line = span.start().line;
         let end_line = span.end().line;
+        let fn_line = sig.ident.span().start().line;
 
         // Extract function mode
         let mode = convert_mode(&sig.mode);
@@ -1084,6 +1090,7 @@ impl FunctionInfoVisitor {
             signature_text,
             body_text,
             module_path: None, // Set later by parse_all_functions
+            fn_line,
         });
     }
 }

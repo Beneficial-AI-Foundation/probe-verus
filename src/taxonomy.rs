@@ -504,6 +504,7 @@ mod tests {
             signature_text: None,
             body_text: None,
             module_path: None,
+            fn_line: 1,
         }
     }
 

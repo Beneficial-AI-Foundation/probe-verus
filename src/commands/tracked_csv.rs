@@ -53,7 +53,7 @@ pub fn cmd_tracked_csv(src_path: PathBuf, output: PathBuf, github_base_url: Opti
         } else {
             file.to_string()
         };
-        let line = func.spec_text.lines_start;
+        let line = func.fn_line;
         let module_path = func.module_path.as_deref().unwrap_or("");
 
         // function column: display_name (e.g., "FieldElement51::mul")

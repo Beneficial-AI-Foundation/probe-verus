@@ -247,7 +247,6 @@ fn find_matching_atom(func: &FunctionInfo, atoms: &BTreeMap<String, AtomEntry>) 
 
             if within_span || within_tolerance {
                 let effective_diff = line_diff;
-
                 if effective_diff < best_line_diff {
                     best_match = Some(code_name);
                     best_line_diff = effective_diff;

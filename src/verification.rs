@@ -1033,81 +1033,101 @@ struct AtomEntry {
     code_text: CodeTextInfo,
 }
 
+/// Find the code-name for a function location by matching against atoms.
+///
+/// Matching strategy:
+/// 1. Path must match (by suffix comparison)
+/// 2. Name must match: either exact equality or the atom's display name
+///    ends with `::loc.display_name` (handles impl methods where SCIP enriches
+///    display names to `Type::method` while verus_syn yields bare identifiers)
+/// 3. Atom line must fall within the function's span [lines_start, lines_end]
+///    OR be within LINE_TOLERANCE of lines_start.
+///    The span check is needed because loc.code_text comes from verus_syn's
+///    spec_text (which includes doc comments/attributes), while atom lines
+///    come from SCIP (the fn keyword line).
+fn find_code_name_in_atoms(
+    loc: &FunctionLocation,
+    atoms: &HashMap<String, AtomEntry>,
+) -> Option<String> {
+    let loc_suffix = extract_src_suffix(&loc.code_path);
+
+    let mut best_match: Option<&String> = None;
+    let mut best_line_diff: usize = usize::MAX;
+
+    for (code_name, atom) in atoms {
+        let atom_suffix = extract_src_suffix(&atom.code_path);
+
+        let path_matches =
+            paths_match_by_suffix(&loc.code_path, &atom.code_path) || loc_suffix == atom_suffix;
+
+        let name_matches = loc.display_name == atom.display_name
+            || atom
+                .display_name
+                .ends_with(&format!("::{}", loc.display_name));
+
+        if path_matches && name_matches {
+            let atom_line = atom.code_text.lines_start;
+
+            let within_span =
+                atom_line >= loc.code_text.lines_start && atom_line <= loc.code_text.lines_end;
+
+            let line_diff =
+                (loc.code_text.lines_start as isize - atom_line as isize).unsigned_abs();
+            let within_tolerance = line_diff <= LINE_TOLERANCE;
+
+            if within_span || within_tolerance {
+                let effective_diff = if within_span {
+                    atom_line - loc.code_text.lines_start
+                } else {
+                    line_diff
+                };
+
+                if effective_diff < best_line_diff {
+                    best_match = Some(code_name);
+                    best_line_diff = effective_diff;
+
+                    if effective_diff == 0 {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    best_match.cloned()
+}
+
 /// Enrich an AnalysisResult with code-names from an atoms.json file
 ///
-/// Matches functions by (code-path suffix, lines-start) to find the corresponding code-name.
+/// Matches functions by (code-path suffix, display name, lines-start) to find the corresponding code-name.
 pub fn enrich_with_code_names(
     result: &mut AnalysisResult,
     atoms_path: &Path,
 ) -> Result<usize, String> {
-    // Read and parse atoms.json (now a dictionary keyed by code-name)
     let content = fs::read_to_string(atoms_path)
         .map_err(|e| format!("Failed to read {}: {}", atoms_path.display(), e))?;
 
     let atoms: HashMap<String, AtomEntry> = serde_json::from_str(&content)
         .map_err(|e| format!("Failed to parse {}: {}", atoms_path.display(), e))?;
 
-    // Line tolerance for matching - verus-analyzer and verus_syn may report slightly
-    // different start lines due to attributes/doc comments handling
-    // (LINE_TOLERANCE is imported from crate::constants)
-
-    // Helper to find code-name with fuzzy path and line matching
-    let find_code_name = |loc: &FunctionLocation| -> Option<String> {
-        let loc_suffix = extract_src_suffix(&loc.code_path);
-        let loc_line = loc.code_text.lines_start;
-
-        let mut best_match: Option<&String> = None;
-        let mut best_line_diff: usize = usize::MAX;
-
-        for (code_name, atom) in &atoms {
-            let atom_suffix = extract_src_suffix(&atom.code_path);
-
-            // Check if paths match by suffix
-            let path_matches =
-                paths_match_by_suffix(&loc.code_path, &atom.code_path) || loc_suffix == atom_suffix;
-
-            if path_matches {
-                // Check line tolerance
-                let line_diff =
-                    (loc_line as isize - atom.code_text.lines_start as isize).unsigned_abs();
-
-                if line_diff <= LINE_TOLERANCE && line_diff < best_line_diff {
-                    // Also verify display names match to avoid false positives
-                    if loc.display_name == atom.display_name {
-                        best_match = Some(code_name);
-                        best_line_diff = line_diff;
-
-                        // Exact line match is the best we can do
-                        if line_diff == 0 {
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-
-        best_match.cloned()
-    };
-
-    // Enrich all function lists
     let mut enriched_count = 0;
 
     for func in &mut result.verification.failed_functions {
-        if let Some(code_name) = find_code_name(func) {
+        if let Some(code_name) = find_code_name_in_atoms(func, &atoms) {
             func.code_name = Some(code_name);
             enriched_count += 1;
         }
     }
 
     for func in &mut result.verification.verified_functions {
-        if let Some(code_name) = find_code_name(func) {
+        if let Some(code_name) = find_code_name_in_atoms(func, &atoms) {
             func.code_name = Some(code_name);
             enriched_count += 1;
         }
     }
 
     for func in &mut result.verification.unverified_functions {
-        if let Some(code_name) = find_code_name(func) {
+        if let Some(code_name) = find_code_name_in_atoms(func, &atoms) {
             func.code_name = Some(code_name);
             enriched_count += 1;
         }
@@ -1118,62 +1138,22 @@ pub fn enrich_with_code_names(
 
 /// Convert an AnalysisResult to the new ProofsOutput format (dictionary keyed by code-name)
 ///
-/// Matches functions by (code-path suffix, lines-start) to find the corresponding code-name.
+/// Matches functions by (code-path suffix, display name, lines-start) to find the corresponding code-name.
 /// Returns a HashMap where keys are code-names and values are FunctionVerificationEntry.
 pub fn convert_to_proofs_output(
     result: &AnalysisResult,
     atoms_path: &Path,
 ) -> Result<ProofsOutput, String> {
-    // Read and parse atoms.json (now a dictionary keyed by code-name)
     let content = fs::read_to_string(atoms_path)
         .map_err(|e| format!("Failed to read {}: {}", atoms_path.display(), e))?;
 
     let atoms: HashMap<String, AtomEntry> = serde_json::from_str(&content)
         .map_err(|e| format!("Failed to parse {}: {}", atoms_path.display(), e))?;
 
-    // Helper to find code-name with fuzzy path and line matching
-    let find_code_name = |loc: &FunctionLocation| -> Option<String> {
-        let loc_suffix = extract_src_suffix(&loc.code_path);
-        let loc_line = loc.code_text.lines_start;
-
-        let mut best_match: Option<&String> = None;
-        let mut best_line_diff: usize = usize::MAX;
-
-        for (code_name, atom) in &atoms {
-            let atom_suffix = extract_src_suffix(&atom.code_path);
-
-            // Check if paths match by suffix
-            let path_matches =
-                paths_match_by_suffix(&loc.code_path, &atom.code_path) || loc_suffix == atom_suffix;
-
-            if path_matches {
-                // Check line tolerance
-                let line_diff =
-                    (loc_line as isize - atom.code_text.lines_start as isize).unsigned_abs();
-
-                if line_diff <= LINE_TOLERANCE && line_diff < best_line_diff {
-                    // Also verify display names match to avoid false positives
-                    if loc.display_name == atom.display_name {
-                        best_match = Some(code_name);
-                        best_line_diff = line_diff;
-
-                        // Exact line match is the best we can do
-                        if line_diff == 0 {
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-
-        best_match.cloned()
-    };
-
     let mut output = ProofsOutput::new();
 
-    // Add verified functions (status: success, verified: true)
     for func in &result.verification.verified_functions {
-        if let Some(code_name) = find_code_name(func) {
+        if let Some(code_name) = find_code_name_in_atoms(func, &atoms) {
             output.insert(
                 code_name,
                 FunctionVerificationEntry {
@@ -1186,9 +1166,8 @@ pub fn convert_to_proofs_output(
         }
     }
 
-    // Add failed functions (status: failure, verified: false)
     for func in &result.verification.failed_functions {
-        if let Some(code_name) = find_code_name(func) {
+        if let Some(code_name) = find_code_name_in_atoms(func, &atoms) {
             output.insert(
                 code_name,
                 FunctionVerificationEntry {
@@ -1201,9 +1180,8 @@ pub fn convert_to_proofs_output(
         }
     }
 
-    // Add unverified functions with assume/admit (status: sorries, verified: false)
     for func in &result.verification.unverified_functions {
-        if let Some(code_name) = find_code_name(func) {
+        if let Some(code_name) = find_code_name_in_atoms(func, &atoms) {
             output.insert(
                 code_name,
                 FunctionVerificationEntry {
@@ -1222,6 +1200,72 @@ pub fn convert_to_proofs_output(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn make_loc(display_name: &str, code_path: &str, start: usize, end: usize) -> FunctionLocation {
+        FunctionLocation {
+            display_name: display_name.to_string(),
+            code_name: None,
+            code_path: code_path.to_string(),
+            code_text: CodeTextInfo {
+                lines_start: start,
+                lines_end: end,
+            },
+        }
+    }
+
+    fn make_atom_entry(display_name: &str, code_path: &str, start: usize) -> AtomEntry {
+        AtomEntry {
+            display_name: display_name.to_string(),
+            code_path: code_path.to_string(),
+            code_text: CodeTextInfo {
+                lines_start: start,
+                lines_end: start + 10,
+            },
+        }
+    }
+
+    #[test]
+    fn test_find_code_name_exact_match() {
+        let loc = make_loc("foo", "src/lib.rs", 10, 20);
+        let mut atoms = HashMap::new();
+        atoms.insert("code_foo".to_string(), make_atom_entry("foo", "src/lib.rs", 10));
+        assert_eq!(find_code_name_in_atoms(&loc, &atoms).as_deref(), Some("code_foo"));
+    }
+
+    #[test]
+    fn test_find_code_name_suffix_match() {
+        let loc = make_loc("bar", "src/impls.rs", 20, 30);
+        let mut atoms = HashMap::new();
+        atoms.insert("code_bar".to_string(), make_atom_entry("MyType::bar", "src/impls.rs", 20));
+        assert_eq!(find_code_name_in_atoms(&loc, &atoms).as_deref(), Some("code_bar"));
+    }
+
+    #[test]
+    fn test_find_code_name_within_span_for_doc_comments() {
+        // loc span starts at doc comment (line 40), atom at fn keyword (line 50)
+        let loc = make_loc("compress", "src/edwards.rs", 40, 70);
+        let mut atoms = HashMap::new();
+        atoms.insert(
+            "code_compress".to_string(),
+            make_atom_entry("EdwardsPoint::compress", "src/edwards.rs", 50),
+        );
+        assert_eq!(find_code_name_in_atoms(&loc, &atoms).as_deref(), Some("code_compress"));
+    }
+
+    #[test]
+    fn test_find_code_name_prefers_closest() {
+        let loc = make_loc("baz", "src/mod.rs", 100, 110);
+        let mut atoms = HashMap::new();
+        atoms.insert(
+            "code_baz_far".to_string(),
+            make_atom_entry("baz", "src/mod.rs", 100 + LINE_TOLERANCE),
+        );
+        atoms.insert(
+            "code_baz_close".to_string(),
+            make_atom_entry("baz", "src/mod.rs", 101),
+        );
+        assert_eq!(find_code_name_in_atoms(&loc, &atoms).as_deref(), Some("code_baz_close"));
+    }
 
     #[test]
     fn test_find_function_at_line_prefers_suffix_match_over_filename() {

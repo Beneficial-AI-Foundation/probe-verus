@@ -209,13 +209,15 @@ fn match_functions_to_atoms(
 ///
 /// Matching strategy:
 /// 1. Path must match (by suffix comparison)
-/// 2. Display name must match
+/// 2. Name must match: either exact equality or the atom's display name
+///    ends with `::func.name` (handles impl methods where SCIP enriches
+///    display names to `Type::method` while verus_syn yields bare identifiers)
 /// 3. SCIP line must fall within the function's span [start_line, end_line]
-///    OR be within LINE_TOLERANCE of start_line
+///    OR be within LINE_TOLERANCE of fn_line
 ///
-/// This handles the case where verus_syn includes doc comments in the span
-/// (reporting an earlier start_line) while verus-analyzer reports the actual
-/// function declaration line.
+/// Uses `fn_line` (the `fn` keyword line) for distance calculation since it
+/// closely matches SCIP's definition line, unlike `spec_text.lines_start`
+/// which includes preceding doc comments and attributes.
 fn find_matching_atom(func: &FunctionInfo, atoms: &BTreeMap<String, AtomEntry>) -> Option<String> {
     let func_path = func.file.as_deref().unwrap_or("");
     let func_suffix = extract_src_suffix(func_path);
@@ -229,7 +231,10 @@ fn find_matching_atom(func: &FunctionInfo, atoms: &BTreeMap<String, AtomEntry>) 
         let path_matches =
             paths_match_by_suffix(func_path, &atom.code_path) || func_suffix == atom_suffix;
 
-        if path_matches && func.name == atom.display_name {
+        let name_matches = func.name == atom.display_name
+            || atom.display_name.ends_with(&format!("::{}", func.name));
+
+        if path_matches && name_matches {
             let atom_line = atom.code_text.lines_start;
 
             // Check if SCIP line falls within the function span [start_line, end_line]
@@ -237,25 +242,16 @@ fn find_matching_atom(func: &FunctionInfo, atoms: &BTreeMap<String, AtomEntry>) 
             let within_span =
                 atom_line >= func.spec_text.lines_start && atom_line <= func.spec_text.lines_end;
 
-            // Also check traditional tolerance for cases without doc comments
-            let line_diff =
-                (func.spec_text.lines_start as isize - atom_line as isize).unsigned_abs();
+            let line_diff = (func.fn_line as isize - atom_line as isize).unsigned_abs();
             let within_tolerance = line_diff <= LINE_TOLERANCE;
 
             if within_span || within_tolerance {
-                // Prefer matches closer to start_line
-                let effective_diff = if within_span && !within_tolerance {
-                    // SCIP line is within span but after tolerance - use distance from start
-                    atom_line - func.spec_text.lines_start
-                } else {
-                    line_diff
-                };
+                let effective_diff = line_diff;
 
                 if effective_diff < best_line_diff {
                     best_match = Some(code_name);
                     best_line_diff = effective_diff;
 
-                    // Exact match - can't do better
                     if effective_diff == 0 {
                         break;
                     }
@@ -265,4 +261,176 @@ fn find_matching_atom(func: &FunctionInfo, atoms: &BTreeMap<String, AtomEntry>) 
     }
 
     best_match.map(|s| s.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use probe_verus::verus_parser::SpecText;
+    use probe_verus::FunctionMode;
+
+    fn make_func(
+        name: &str,
+        file: &str,
+        fn_line: usize,
+        span_start: usize,
+        span_end: usize,
+    ) -> FunctionInfo {
+        FunctionInfo {
+            name: name.to_string(),
+            file: Some(file.to_string()),
+            spec_text: SpecText {
+                lines_start: span_start,
+                lines_end: span_end,
+            },
+            mode: FunctionMode::Exec,
+            kind: None,
+            visibility: None,
+            context: None,
+            specified: false,
+            has_requires: false,
+            has_ensures: false,
+            has_decreases: false,
+            has_trusted_assumption: false,
+            is_external_body: false,
+            has_no_decreases_attr: false,
+            requires_text: None,
+            ensures_text: None,
+            ensures_calls: vec![],
+            requires_calls: vec![],
+            ensures_calls_full: vec![],
+            requires_calls_full: vec![],
+            ensures_fn_calls: vec![],
+            ensures_method_calls: vec![],
+            requires_fn_calls: vec![],
+            requires_method_calls: vec![],
+            display_name: None,
+            impl_type: None,
+            doc_comment: None,
+            signature_text: None,
+            body_text: None,
+            module_path: None,
+            fn_line,
+        }
+    }
+
+    fn make_atom(display_name: &str, code_path: &str, lines_start: usize) -> AtomEntry {
+        AtomEntry {
+            display_name: display_name.to_string(),
+            code_path: code_path.to_string(),
+            code_text: CodeText { lines_start },
+        }
+    }
+
+    #[test]
+    fn test_free_function_exact_match() {
+        let func = make_func("decompress", "src/edwards.rs", 50, 48, 60);
+        let mut atoms = BTreeMap::new();
+        atoms.insert(
+            "probe:crate/1.0/edwards/decompress()".to_string(),
+            make_atom("decompress", "src/edwards.rs", 50),
+        );
+        let result = find_matching_atom(&func, &atoms);
+        assert_eq!(
+            result,
+            Some("probe:crate/1.0/edwards/decompress()".to_string())
+        );
+    }
+
+    #[test]
+    fn test_inherent_impl_method_suffix_match() {
+        let func = make_func("square", "src/field.rs", 100, 98, 120);
+        let mut atoms = BTreeMap::new();
+        atoms.insert(
+            "probe:crate/1.0/field/FieldElement51#square()".to_string(),
+            make_atom("FieldElement51::square", "src/field.rs", 100),
+        );
+        let result = find_matching_atom(&func, &atoms);
+        assert_eq!(
+            result,
+            Some("probe:crate/1.0/field/FieldElement51#square()".to_string())
+        );
+    }
+
+    #[test]
+    fn test_trait_impl_method_suffix_match() {
+        let func = make_func("add", "src/edwards.rs", 200, 198, 220);
+        let mut atoms = BTreeMap::new();
+        atoms.insert(
+            "probe:crate/1.0/edwards/EdwardsPoint#Add#add()".to_string(),
+            make_atom("EdwardsPoint::add", "src/edwards.rs", 200),
+        );
+        let result = find_matching_atom(&func, &atoms);
+        assert_eq!(
+            result,
+            Some("probe:crate/1.0/edwards/EdwardsPoint#Add#add()".to_string())
+        );
+    }
+
+    #[test]
+    fn test_same_name_methods_disambiguated_by_line() {
+        let func_a = make_func("add", "src/edwards.rs", 100, 98, 110);
+        let func_b = make_func("add", "src/edwards.rs", 200, 198, 220);
+        let mut atoms = BTreeMap::new();
+        atoms.insert(
+            "probe:crate/1.0/edwards/EdwardsPoint#Add#add()".to_string(),
+            make_atom("EdwardsPoint::add", "src/edwards.rs", 100),
+        );
+        atoms.insert(
+            "probe:crate/1.0/edwards/RistrettoPoint#Add#add()".to_string(),
+            make_atom("RistrettoPoint::add", "src/edwards.rs", 200),
+        );
+
+        let result_a = find_matching_atom(&func_a, &atoms);
+        assert_eq!(
+            result_a,
+            Some("probe:crate/1.0/edwards/EdwardsPoint#Add#add()".to_string())
+        );
+
+        let result_b = find_matching_atom(&func_b, &atoms);
+        assert_eq!(
+            result_b,
+            Some("probe:crate/1.0/edwards/RistrettoPoint#Add#add()".to_string())
+        );
+    }
+
+    #[test]
+    fn test_no_match_when_path_differs() {
+        let func = make_func("add", "src/ristretto.rs", 100, 98, 110);
+        let mut atoms = BTreeMap::new();
+        atoms.insert(
+            "probe:crate/1.0/edwards/EdwardsPoint#Add#add()".to_string(),
+            make_atom("EdwardsPoint::add", "src/edwards.rs", 100),
+        );
+        let result = find_matching_atom(&func, &atoms);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_no_match_when_line_too_far() {
+        let func = make_func("add", "src/edwards.rs", 500, 498, 510);
+        let mut atoms = BTreeMap::new();
+        atoms.insert(
+            "probe:crate/1.0/edwards/EdwardsPoint#Add#add()".to_string(),
+            make_atom("EdwardsPoint::add", "src/edwards.rs", 100),
+        );
+        let result = find_matching_atom(&func, &atoms);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_fn_line_within_doc_comment_span() {
+        // verus_syn span starts at doc comment (line 45), fn keyword at line 50
+        let func = make_func("compress", "src/edwards.rs", 50, 45, 70);
+        let mut atoms = BTreeMap::new();
+        atoms.insert(
+            "probe:crate/1.0/edwards/EdwardsPoint#compress()".to_string(),
+            make_atom("EdwardsPoint::compress", "src/edwards.rs", 50),
+        );
+        let result = find_matching_atom(&func, &atoms);
+        assert_eq!(
+            result,
+            Some("probe:crate/1.0/edwards/EdwardsPoint#compress()".to_string())
+        );
+    }
 }

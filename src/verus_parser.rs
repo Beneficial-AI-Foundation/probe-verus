@@ -435,6 +435,15 @@ pub fn build_function_span_map(
     span_map
 }
 
+/// Extract the bare function name from a possibly enriched display name.
+///
+/// SCIP display names are enriched with type info (e.g., "EdwardsPoint::eq"),
+/// but verus_syn only stores the bare function name ("eq"). This strips the
+/// `Type::` prefix to enable matching.
+fn bare_function_name(function_name: &str) -> &str {
+    function_name.rsplit("::").next().unwrap_or(function_name)
+}
+
 /// Get the end line for a function given its path, name, and start line.
 ///
 /// If we can't find an exact match, we try to find a function with the same name
@@ -445,12 +454,10 @@ pub fn get_function_end_line(
     function_name: &str,
     start_line: usize,
 ) -> Option<usize> {
+    let bare_name = bare_function_name(function_name);
+
     // Try exact match first
-    let key = (
-        relative_path.to_string(),
-        function_name.to_string(),
-        start_line,
-    );
+    let key = (relative_path.to_string(), bare_name.to_string(), start_line);
     if let Some(span_and_mode) = span_map.get(&key) {
         return Some(span_and_mode.end_line);
     }
@@ -460,7 +467,7 @@ pub fn get_function_end_line(
     // This works because verus_syn includes attributes/docs in the span, so the
     // actual signature line (what SCIP reports) should be within that span.
     for ((path, name, parsed_start), span_and_mode) in span_map.iter() {
-        if path == relative_path && name == function_name {
+        if path == relative_path && name == bare_name {
             // SCIP's start_line should be within [parsed_start, end_line]
             if start_line >= *parsed_start && start_line <= span_and_mode.end_line {
                 return Some(span_and_mode.end_line);
@@ -480,12 +487,10 @@ pub fn get_function_mode(
     function_name: &str,
     start_line: usize,
 ) -> Option<FunctionMode> {
+    let bare_name = bare_function_name(function_name);
+
     // Try exact match first
-    let key = (
-        relative_path.to_string(),
-        function_name.to_string(),
-        start_line,
-    );
+    let key = (relative_path.to_string(), bare_name.to_string(), start_line);
     if let Some(span_and_mode) = span_map.get(&key) {
         return Some(span_and_mode.mode);
     }
@@ -493,7 +498,7 @@ pub fn get_function_mode(
     // Try containment match
     for ((path, name, parsed_start), span_and_mode) in span_map.iter() {
         if path == relative_path
-            && name == function_name
+            && name == bare_name
             && start_line >= *parsed_start
             && start_line <= span_and_mode.end_line
         {
@@ -513,12 +518,10 @@ pub fn get_function_spec_ranges(
     function_name: &str,
     start_line: usize,
 ) -> SpecRanges {
+    let bare_name = bare_function_name(function_name);
+
     // Try exact match first
-    let key = (
-        relative_path.to_string(),
-        function_name.to_string(),
-        start_line,
-    );
+    let key = (relative_path.to_string(), bare_name.to_string(), start_line);
     if let Some(span_and_mode) = span_map.get(&key) {
         return (span_and_mode.requires_range, span_and_mode.ensures_range);
     }
@@ -526,7 +529,7 @@ pub fn get_function_spec_ranges(
     // Try containment match
     for ((path, name, parsed_start), span_and_mode) in span_map.iter() {
         if path == relative_path
-            && name == function_name
+            && name == bare_name
             && start_line >= *parsed_start
             && start_line <= span_and_mode.end_line
         {

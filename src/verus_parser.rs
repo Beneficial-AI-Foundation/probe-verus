@@ -1157,10 +1157,21 @@ impl<'ast> Visit<'ast> for FunctionInfoVisitor {
             let ty = &node.self_ty;
             let type_str = quote::quote! { #ty }.to_string();
             // Clean up: remove spaces around :: and angle brackets for readability
-            let cleaned = type_str
+            let mut cleaned = type_str
                 .replace(" :: ", "::")
                 .replace("< ", "<")
                 .replace(" >", ">");
+            // Strip reference/lifetime prefixes from trait impls for reference types.
+            // e.g. `impl<'a> Neg for &'a EdwardsPoint` produces self_ty "& 'a EdwardsPoint";
+            // we want just "EdwardsPoint" for display purposes.
+            if cleaned.starts_with('&') {
+                cleaned = cleaned
+                    .trim_start_matches('&')
+                    .trim_start()
+                    .trim_start_matches(|c: char| c == '\'' || c.is_ascii_lowercase())
+                    .trim_start()
+                    .to_string();
+            }
             self.current_impl_type = Some(cleaned);
         }
         verus_syn::visit::visit_item_impl(self, node);

@@ -8,8 +8,8 @@ Probe Verus projects: generate call graph atoms and analyze verification results
 cargo install --path .
 ```
 
-**Prerequisites:** Some commands require external tools (verus-analyzer, scip, cargo verus).  
-See [INSTALL.md](INSTALL.md) for detailed installation instructions.
+**Prerequisites:** Some commands require external tools (verus-analyzer, scip, cargo verus).
+See [tools/INSTALL.md](tools/INSTALL.md) for detailed installation instructions.
 
 ## Commands
 

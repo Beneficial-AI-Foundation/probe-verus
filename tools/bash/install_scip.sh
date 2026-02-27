@@ -1,0 +1,352 @@
+#!/bin/bash
+#
+# SCIP (Source Code Intelligence Protocol) Latest Release Downloader
+#
+# Downloads the latest release of SCIP from GitHub releases.
+# Supports latest stable release or latest pre-release.
+#
+# Requirements: curl, jq, tar
+#
+
+set -e
+
+# Default values
+PRE_RELEASE=false
+OUTPUT_DIR="."
+INSTALL_DIR=""
+PLATFORM=""
+LIST_ASSETS=false
+NO_EXTRACT=false
+NO_PATH=false
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+GITHUB_REPO="sourcegraph/scip"
+TOOL_NAME="SCIP"
+BINARY_NAME="scip"
+DEFAULT_INSTALL_DIR="$HOME/.local/bin"
+
+usage() {
+    cat << EOF
+Usage: $(basename "$0") [OPTIONS]
+
+Download and install the latest SCIP release.
+
+Options:
+  -p, --pre-release       Download the latest pre-release version instead of stable
+  -o, --output-dir DIR    Download directory (default: current directory)
+  -i, --install-dir DIR   Installation directory (default: ~/.local/bin)
+  --platform PATTERN      Platform pattern to search for (e.g., scip-linux-amd64)
+  -l, --list-assets       List all available assets without downloading
+  --no-extract            Download only, do not extract or install
+  --no-path               Do not modify PATH configuration
+  -h, --help              Show this help message
+
+Examples:
+  $(basename "$0")
+  $(basename "$0") --pre-release
+  $(basename "$0") --install-dir /opt/scip
+  $(basename "$0") --list-assets
+EOF
+}
+
+get_platform_pattern() {
+    local os arch
+    os=$(uname -s | tr '[:upper:]' '[:lower:]')
+    arch=$(uname -m | tr '[:upper:]' '[:lower:]')
+
+    # Map OS names
+    case "$os" in
+        linux) os="linux" ;;
+        darwin) os="darwin" ;;
+        mingw*|msys*|cygwin*) os="windows" ;;
+        *) echo "Warning: Unknown OS $os" >&2; return 1 ;;
+    esac
+
+    # Map architecture names
+    case "$arch" in
+        x86_64|amd64) arch="amd64" ;;
+        aarch64|arm64) arch="arm64" ;;
+        armv7l|arm) arch="arm" ;;
+        *) echo "Warning: Unknown architecture $arch" >&2; return 1 ;;
+    esac
+
+    echo "scip-${os}-${arch}"
+}
+
+get_shell_config_file() {
+    local shell_name
+    shell_name=$(basename "$SHELL" 2>/dev/null || echo "bash")
+
+    case "$shell_name" in
+        zsh)
+            if [[ -f "$HOME/.zshrc" ]]; then echo "$HOME/.zshrc"
+            elif [[ -f "$HOME/.zprofile" ]]; then echo "$HOME/.zprofile"
+            else echo "$HOME/.zshrc"
+            fi
+            ;;
+        *)
+            if [[ -f "$HOME/.bashrc" ]]; then echo "$HOME/.bashrc"
+            elif [[ -f "$HOME/.bash_profile" ]]; then echo "$HOME/.bash_profile"
+            elif [[ -f "$HOME/.profile" ]]; then echo "$HOME/.profile"
+            else echo "$HOME/.bashrc"
+            fi
+            ;;
+    esac
+}
+
+ensure_path() {
+    local config_file
+    config_file=$(get_shell_config_file)
+    local path_line="export PATH=\"\$HOME/.local/bin:\$PATH\"  # Added by SCIP installer"
+
+    # Check if ~/.local/bin is already in PATH
+    if [[ ":$PATH:" == *":$HOME/.local/bin:"* ]]; then
+        echo -e "${GREEN}✓${NC} ~/.local/bin is already in PATH"
+        return 0
+    fi
+
+    # Check if it's already in the config file
+    if [[ -f "$config_file" ]] && grep -q '\.local/bin' "$config_file" 2>/dev/null; then
+        echo -e "${YELLOW}⚠${NC} ~/.local/bin is configured in $config_file but not in current session"
+        echo "   Run: source $config_file"
+        return 0
+    fi
+
+    echo "Adding ~/.local/bin to PATH in $config_file"
+    echo "" >> "$config_file"
+    echo "# Local binaries" >> "$config_file"
+    echo "$path_line" >> "$config_file"
+
+    echo -e "${GREEN}✓${NC} PATH updated in $config_file"
+    echo "   Run: source $config_file"
+}
+
+verify_installation() {
+    local binary_path="$1"
+    echo "Verifying SCIP installation..."
+
+    if "$binary_path" --version >/dev/null 2>&1; then
+        echo -e "${GREEN}✓${NC} SCIP is working! Version info:"
+        "$binary_path" --version 2>&1 || true
+        return 0
+    elif "$binary_path" --help >/dev/null 2>&1; then
+        echo -e "${GREEN}✓${NC} SCIP is working!"
+        return 0
+    else
+        echo -e "${YELLOW}⚠${NC} SCIP binary exists but may have issues"
+        return 1
+    fi
+}
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -p|--pre-release|--prerelease)
+            PRE_RELEASE=true
+            shift
+            ;;
+        -o|--output-dir)
+            OUTPUT_DIR="$2"
+            shift 2
+            ;;
+        -i|--install-dir)
+            INSTALL_DIR="$2"
+            shift 2
+            ;;
+        --platform)
+            PLATFORM="$2"
+            shift 2
+            ;;
+        -l|--list-assets)
+            LIST_ASSETS=true
+            shift
+            ;;
+        --no-extract)
+            NO_EXTRACT=true
+            shift
+            ;;
+        --no-path)
+            NO_PATH=true
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1"
+            usage
+            exit 1
+            ;;
+    esac
+done
+
+# Check dependencies
+for cmd in curl jq; do
+    if ! command -v "$cmd" &>/dev/null; then
+        echo "Error: $cmd is required but not installed."
+        exit 1
+    fi
+done
+
+# Set default install directory
+[[ -z "$INSTALL_DIR" ]] && INSTALL_DIR="$DEFAULT_INSTALL_DIR"
+
+# Fetch release information
+if $PRE_RELEASE; then
+    echo "Fetching latest SCIP pre-release..."
+    RELEASES_JSON=$(curl -fsSL "https://api.github.com/repos/${GITHUB_REPO}/releases")
+    RELEASE_JSON=$(echo "$RELEASES_JSON" | jq -r '[.[] | select(.prerelease == true)][0]')
+    if [[ "$RELEASE_JSON" == "null" ]]; then
+        echo "Error: No pre-release versions found"
+        exit 1
+    fi
+else
+    echo "Fetching latest stable SCIP release..."
+    RELEASE_JSON=$(curl -fsSL "https://api.github.com/repos/${GITHUB_REPO}/releases/latest")
+fi
+
+TAG_NAME=$(echo "$RELEASE_JSON" | jq -r '.tag_name')
+PUBLISHED=$(echo "$RELEASE_JSON" | jq -r '.published_at')
+IS_PRERELEASE=$(echo "$RELEASE_JSON" | jq -r '.prerelease')
+RELEASE_NAME=$(echo "$RELEASE_JSON" | jq -r '.name')
+
+echo "Found release: $TAG_NAME"
+echo "Published: $PUBLISHED"
+echo "Pre-release: $IS_PRERELEASE"
+echo "Description: $RELEASE_NAME"
+
+# Show release notes if available
+RELEASE_BODY=$(echo "$RELEASE_JSON" | jq -r '.body // empty')
+if [[ -n "$RELEASE_BODY" ]]; then
+    echo "Release notes:"
+    echo "$RELEASE_BODY" | head -c 200
+    if [[ ${#RELEASE_BODY} -gt 200 ]]; then
+        echo "..."
+    fi
+    echo ""
+fi
+
+# List assets if requested
+if $LIST_ASSETS; then
+    echo ""
+    echo "Available assets:"
+    echo "$RELEASE_JSON" | jq -r '.assets[] | "  - \(.name) (\(.size / 1048576 | floor) MB)"'
+    exit 0
+fi
+
+# Determine platform pattern
+if [[ -z "$PLATFORM" ]]; then
+    PLATFORM=$(get_platform_pattern) || {
+        echo "Could not determine platform automatically."
+        echo "Available assets:"
+        echo "$RELEASE_JSON" | jq -r '.assets[] | select(.name | endswith(".tar.gz")) | "  - \(.name)"'
+        exit 1
+    }
+fi
+
+# Find matching asset (select first match to avoid multiple results)
+ASSET_JSON=$(echo "$RELEASE_JSON" | jq -r --arg pattern "$PLATFORM" \
+    '[.assets[] | select(.name | ascii_downcase | contains($pattern | ascii_downcase)) | select(.name | endswith(".tar.gz"))][0]')
+
+if [[ -z "$ASSET_JSON" ]] || [[ "$ASSET_JSON" == "null" ]]; then
+    echo "No asset found for platform pattern: $PLATFORM"
+    echo "Available tar.gz assets:"
+    echo "$RELEASE_JSON" | jq -r '.assets[] | select(.name | endswith(".tar.gz")) | "  - \(.name)"'
+    exit 1
+fi
+
+ASSET_NAME=$(echo "$ASSET_JSON" | jq -r '.name')
+ASSET_SIZE=$(echo "$ASSET_JSON" | jq -r '.size')
+DOWNLOAD_URL=$(echo "$ASSET_JSON" | jq -r '.browser_download_url')
+SIZE_MB=$((ASSET_SIZE / 1048576))
+
+# Create output directory
+mkdir -p "$OUTPUT_DIR"
+FILENAME="$OUTPUT_DIR/$ASSET_NAME"
+
+echo ""
+echo "Downloading $ASSET_NAME (${SIZE_MB} MB)..."
+echo "URL: $DOWNLOAD_URL"
+echo "Saving to: $FILENAME"
+
+# Download with progress
+curl -L --progress-bar -o "$FILENAME" "$DOWNLOAD_URL"
+
+echo -e "${GREEN}✓${NC} Download completed: $FILENAME"
+
+# Extract and install
+if ! $NO_EXTRACT; then
+    if [[ "$FILENAME" == *.tar.gz ]]; then
+        echo ""
+        echo "Extracting $ASSET_NAME..."
+
+        TEMP_DIR=$(mktemp -d)
+        tar -xzf "$FILENAME" -C "$TEMP_DIR"
+
+        # Find the binary
+        BINARY_PATH=$(find "$TEMP_DIR" -name "$BINARY_NAME" -type f | head -1)
+        if [[ -z "$BINARY_PATH" ]]; then
+            # Try to find any executable
+            BINARY_PATH=$(find "$TEMP_DIR" -type f -perm -u+x | head -1)
+        fi
+
+        if [[ -z "$BINARY_PATH" ]]; then
+            echo "Error: Could not find $BINARY_NAME binary in archive"
+            rm -rf "$TEMP_DIR"
+            exit 1
+        fi
+
+        echo "Found binary: $BINARY_PATH"
+
+        # Install
+        if [[ -d "$INSTALL_DIR" ]]; then
+            echo "Removing existing installation at $INSTALL_DIR"
+            rm -rf "$INSTALL_DIR"
+        fi
+
+        echo "Installing SCIP to: $INSTALL_DIR"
+        mkdir -p "$INSTALL_DIR"
+
+        INSTALLED_BINARY="$INSTALL_DIR/$BINARY_NAME"
+        cp "$BINARY_PATH" "$INSTALLED_BINARY"
+        chmod +x "$INSTALLED_BINARY"
+
+        echo -e "${GREEN}✓${NC} SCIP installed to: $INSTALL_DIR"
+        echo -e "${GREEN}✓${NC} SCIP binary: $INSTALLED_BINARY"
+
+        # Verify
+        verify_installation "$INSTALLED_BINARY" || true
+
+        # Ensure ~/.local/bin is in PATH
+        if ! $NO_PATH; then
+            echo ""
+            ensure_path
+        fi
+
+        # Cleanup temp
+        rm -rf "$TEMP_DIR"
+
+        # Ask to remove archive
+        echo ""
+        read -p "Remove downloaded archive $FILENAME? (y/N): " REMOVE_ARCHIVE
+        if [[ "$REMOVE_ARCHIVE" =~ ^[Yy]$ ]]; then
+            rm -f "$FILENAME"
+            echo -e "${GREEN}✓${NC} Archive removed"
+        fi
+    else
+        echo "Downloaded file is not a tar.gz archive: $FILENAME"
+        echo "Manual installation may be required."
+    fi
+else
+    echo ""
+    echo "To manually extract and install:"
+    echo "  tar -xzf '$FILENAME'"
+    echo "  chmod +x scip"
+    echo "  mv scip /usr/local/bin/  # (or your preferred location)"
+fi

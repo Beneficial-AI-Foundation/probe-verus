@@ -7,11 +7,11 @@ Scripts for downloading and installing Verus development tools from GitHub relea
 | Tool | Python | Shell |
 |------|--------|-------|
 | Verus installer | `install_verus.py` | `install_verus.sh` |
-| Verus builder (from source) | - | `install_verus_from_source.sh` |
+| Verus builder (from source) | `install_verus_from_source.py` | `install_verus_from_source.sh` |
 | Rust Analyzer installer | `install_rust_analyzer.py` | `install_rust_analyzer.sh` |
 | Verus Analyzer installer | `install_verus_analyzer.py` | `install_verus_analyzer.sh` |
 | SCIP installer | `install_scip.py` | `install_scip.sh` |
-| Z3 SMT solver | - | `install_z3.sh` |
+| Z3 SMT solver | `install_z3.py` | `install_z3.sh` |
 
 Shell scripts require `curl` and `jq`. The Z3 installer also requires `unzip`.
 
@@ -81,25 +81,33 @@ python3 install_scip.py --list-assets
 
 ```bash
 # Interactive: lists releases and prompts for selection
-./install_z3.sh
+python3 install_z3.py
 
 # List available releases without installing
+python3 install_z3.py --list
+
+# Shell script alternative
+./install_z3.sh
 ./install_z3.sh --list
 ```
 
 ### Building Verus from Source
 
-For platforms without pre-built binaries (e.g., ARM64 Linux), use `install_verus_from_source.sh`:
+For platforms without pre-built binaries (e.g., ARM64 Linux):
 
 ```bash
 # Build latest stable release (requires rustup and Z3 pre-installed)
-./install_verus_from_source.sh
+python3 install_verus_from_source.py
 
 # Build specific version
-./install_verus_from_source.sh --version v0.2025.08.25
+python3 install_verus_from_source.py --version v0.2025.08.25
 
 # List available releases
-./install_verus_from_source.sh --list-releases
+python3 install_verus_from_source.py --list-releases
+
+# Shell script alternative
+./install_verus_from_source.sh
+./install_verus_from_source.sh --version v0.2025.08.25
 ```
 
 ## Command Line Options
@@ -151,6 +159,26 @@ For platforms without pre-built binaries (e.g., ARM64 Linux), use `install_verus
 --no-path                     Do not modify PATH configuration
 ```
 
+### Z3 Installer
+```
+-n, --num-releases N          Number of releases to show (default: 30)
+-l, --list                    List releases without installing
+--install-dir, -i             Installation directory (default: ~/.local/bin)
+--platform                    Platform pattern (e.g., x64-glibc, arm64-osx)
+--no-path                     Do not modify PATH configuration
+```
+
+### Verus from Source Builder
+```
+-v, --version VERSION         Build a specific version/tag (e.g., "v0.2025.08.25")
+-p, --pre-release             Build the latest pre-release version
+-i, --install-dir DIR         Installation directory (default: ~/.cargo/bin/verus-<version>)
+-b, --build-dir DIR           Build directory (default: temporary directory)
+-k, --keep-build              Keep the build directory after installation
+-j, --jobs N                  Number of parallel jobs for cargo (default: auto)
+-l, --list-releases           List available releases and exit
+```
+
 ## Running the Scripts
 
 ### Using python3
@@ -164,6 +192,8 @@ python3 install_verus.py
 python3 install_verus_analyzer.py
 python3 install_rust_analyzer.py
 python3 install_scip.py
+python3 install_z3.py
+python3 install_verus_from_source.py
 ```
 
 ### Using uv
@@ -175,6 +205,8 @@ uv run install_verus.py
 uv run install_verus_analyzer.py
 uv run install_rust_analyzer.py
 uv run install_scip.py
+uv run install_z3.py
+uv run install_verus_from_source.py
 ```
 
 ## Supported Platforms
@@ -193,6 +225,13 @@ uv run install_scip.py
 - Linux (amd64, arm64, arm)
 - macOS (amd64, arm64)
 - Windows (amd64, arm64)
+
+### Z3
+- Linux (x64, arm64) - glibc builds
+- macOS (x64, arm64)
+- Windows (x64)
+
+Note: Z3 arm64-glibc builds are sourced from Beneficial-AI-Foundation/z3 for better compatibility.
 
 ## After Installation
 

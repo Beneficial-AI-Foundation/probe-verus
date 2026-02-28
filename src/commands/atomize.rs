@@ -6,7 +6,7 @@ use probe_verus::{
     scip_cache::{Analyzer, ScipCache},
     AtomWithLines,
 };
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// Execute the atomize command.
@@ -90,7 +90,7 @@ pub fn cmd_atomize(
     }
 
     // Convert atoms list to dictionary keyed by code_name (first occurrence wins)
-    let mut atoms_dict: HashMap<String, AtomWithLines> = HashMap::new();
+    let mut atoms_dict: BTreeMap<String, AtomWithLines> = BTreeMap::new();
     for atom in atoms {
         atoms_dict.entry(atom.code_name.clone()).or_insert(atom);
     }
@@ -180,7 +180,7 @@ fn format_duplicate_report(duplicates: &[probe_verus::DuplicateCodeName]) -> Str
 }
 
 /// Print the success summary.
-fn print_success_summary(output: &Path, atoms_dict: &HashMap<String, AtomWithLines>) {
+fn print_success_summary(output: &Path, atoms_dict: &BTreeMap<String, AtomWithLines>) {
     println!();
     println!("═══════════════════════════════════════════════════════════");
     println!("  ✓ SUCCESS");
@@ -250,7 +250,7 @@ pub fn atomize_internal(
     }
 
     // Convert to dictionary (first occurrence wins)
-    let mut atoms_dict: HashMap<String, AtomWithLines> = HashMap::new();
+    let mut atoms_dict: BTreeMap<String, AtomWithLines> = BTreeMap::new();
     for atom in atoms {
         atoms_dict.entry(atom.code_name.clone()).or_insert(atom);
     }

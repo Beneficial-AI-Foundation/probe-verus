@@ -1,0 +1,37 @@
+{
+  "probe:crate-b/1.0/helpers/compute()": {
+    "display-name": "compute",
+    "dependencies": [
+      "probe:crate-b/1.0/helpers/validate()"
+    ],
+    "code-module": "helpers",
+    "code-path": "crate-b/src/helpers.rs",
+    "code-text": {
+      "lines-start": 5,
+      "lines-end": 15
+    },
+    "mode": "spec"
+  },
+  "probe:crate-b/1.0/helpers/validate()": {
+    "display-name": "validate",
+    "dependencies": [],
+    "code-module": "helpers",
+    "code-path": "crate-b/src/helpers.rs",
+    "code-text": {
+      "lines-start": 17,
+      "lines-end": 30
+    },
+    "mode": "proof"
+  },
+  "probe:crate-b/1.0/helpers/internal()": {
+    "display-name": "internal",
+    "dependencies": [],
+    "code-module": "helpers",
+    "code-path": "crate-b/src/helpers.rs",
+    "code-text": {
+      "lines-start": 32,
+      "lines-end": 40
+    },
+    "mode": "exec"
+  }
+}

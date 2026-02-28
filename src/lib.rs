@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::path::Path;
 
@@ -179,14 +179,15 @@ pub struct FunctionNode {
 pub struct AtomWithLines {
     #[serde(rename = "display-name")]
     pub display_name: String,
-    #[serde(skip_serializing)]
+    #[serde(skip_serializing, default)]
     pub code_name: String,
-    /// Set of dependency code_names (for backward compatibility)
-    pub dependencies: HashSet<String>,
+    /// Sorted set of dependency code_names (BTreeSet for deterministic JSON output)
+    pub dependencies: BTreeSet<String>,
     /// Dependencies with call location information (only included with --with-locations flag)
     #[serde(
         rename = "dependencies-with-locations",
-        skip_serializing_if = "Vec::is_empty"
+        skip_serializing_if = "Vec::is_empty",
+        default
     )]
     pub dependencies_with_locations: Vec<DependencyWithLocation>,
     #[serde(rename = "code-module")]
@@ -897,13 +898,10 @@ fn symbol_to_code_name_with_line(
         None,
     )
     .unwrap_or_else(|e| {
-        // Log warning and return a fallback name using the raw symbol
         eprintln!("Warning: {}", e);
-        format!(
-            "{}{}",
-            PROBE_URI_PREFIX,
-            symbol.replace("rust-analyzer cargo ", "").replace(' ', "/")
-        )
+        let raw = symbol.replace("rust-analyzer cargo ", "").replace(' ', "/");
+        let normalized = raw.strip_suffix('.').unwrap_or(&raw);
+        format!("{}{}", PROBE_URI_PREFIX, normalized)
     })
 }
 
@@ -1314,7 +1312,7 @@ fn convert_to_atoms_with_lines_internal(
         .zip(final_code_names)
         .map(|(data, code_name)| {
             // Resolve dependencies: map raw symbols to their full code_names
-            let mut dependencies = HashSet::new();
+            let mut dependencies = BTreeSet::new();
             let mut dependencies_with_locations: Vec<DependencyWithLocation> = Vec::new();
 
             for callee in &data.node.callees {
@@ -1528,16 +1526,24 @@ fn extract_display_name_from_code_name(code_name: &str) -> String {
     name.to_string()
 }
 
+/// Normalize a code_name by stripping a trailing dot if present.
+///
+/// SCIP external function symbols end with `().` but probe code_names use `()`.
+/// This function ensures consistent code_names for merging atoms from different sources.
+pub fn normalize_code_name(code_name: &str) -> String {
+    code_name.strip_suffix('.').unwrap_or(code_name).to_string()
+}
+
 /// Add stub atoms for external function dependencies that don't have their own atom entry.
 ///
 /// After building the atoms dict, some dependencies point to external (non-workspace) functions
 /// that have no atom. This function creates lightweight stub entries so they appear in the graph.
-pub fn add_external_stubs(atoms_dict: &mut HashMap<String, AtomWithLines>) -> usize {
+pub fn add_external_stubs(atoms_dict: &mut BTreeMap<String, AtomWithLines>) -> usize {
     let external_deps: Vec<String> = atoms_dict
         .values()
         .flat_map(|atom| atom.dependencies.iter().cloned())
         .filter(|dep| !atoms_dict.contains_key(dep))
-        .collect::<HashSet<_>>()
+        .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
 
@@ -1550,7 +1556,7 @@ pub fn add_external_stubs(atoms_dict: &mut HashMap<String, AtomWithLines>) -> us
             AtomWithLines {
                 display_name,
                 code_name: dep_code_name,
-                dependencies: HashSet::new(),
+                dependencies: BTreeSet::new(),
                 dependencies_with_locations: Vec::new(),
                 code_module,
                 code_path: String::new(),
@@ -1755,13 +1761,45 @@ mod tests {
     }
 
     // =========================================================================
+    // normalize_code_name tests
+    // =========================================================================
+
+    #[test]
+    fn test_normalize_code_name_strips_trailing_dot() {
+        assert_eq!(
+            normalize_code_name("probe:x25519-dalek/2.0.1/x25519/diffie_hellman()."),
+            "probe:x25519-dalek/2.0.1/x25519/diffie_hellman()"
+        );
+    }
+
+    #[test]
+    fn test_normalize_code_name_no_dot() {
+        assert_eq!(
+            normalize_code_name("probe:crate/1.0/module/func()"),
+            "probe:crate/1.0/module/func()"
+        );
+    }
+
+    #[test]
+    fn test_fallback_code_name_no_trailing_dot() {
+        let symbol =
+            "rust-analyzer cargo x25519-dalek 2.0.1 x25519/impl#[StaticSecret]diffie_hellman().";
+        let code_name = symbol_to_code_name(symbol, "wrong_name_triggers_fallback", None, None);
+        assert!(
+            !code_name.ends_with('.'),
+            "Fallback code_name should not end with '.': {}",
+            code_name
+        );
+    }
+
+    // =========================================================================
     // add_external_stubs tests
     // =========================================================================
 
     #[test]
     fn test_add_external_stubs_creates_missing() {
-        let mut atoms_dict = HashMap::new();
-        let mut deps = HashSet::new();
+        let mut atoms_dict = BTreeMap::new();
+        let mut deps = BTreeSet::new();
         deps.insert("probe:external-crate/1.0/mod/func()".to_string());
 
         atoms_dict.insert(
@@ -1796,8 +1834,8 @@ mod tests {
 
     #[test]
     fn test_add_external_stubs_skips_existing() {
-        let mut atoms_dict = HashMap::new();
-        let mut deps = HashSet::new();
+        let mut atoms_dict = BTreeMap::new();
+        let mut deps = BTreeSet::new();
         deps.insert("probe:my-crate/1.0/other()".to_string());
 
         atoms_dict.insert(
@@ -1821,7 +1859,7 @@ mod tests {
             AtomWithLines {
                 display_name: "other".to_string(),
                 code_name: "probe:my-crate/1.0/other()".to_string(),
-                dependencies: HashSet::new(),
+                dependencies: BTreeSet::new(),
                 dependencies_with_locations: Vec::new(),
                 code_module: String::new(),
                 code_path: "src/lib.rs".to_string(),

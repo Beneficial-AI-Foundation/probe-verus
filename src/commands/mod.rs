@@ -12,6 +12,7 @@
 
 mod atomize;
 mod functions;
+mod merge_atoms;
 mod run;
 mod specify;
 mod specs_data;
@@ -21,6 +22,7 @@ mod verify;
 
 pub use atomize::cmd_atomize;
 pub use functions::cmd_functions;
+pub use merge_atoms::cmd_merge_atoms;
 pub use run::cmd_run;
 pub use specify::cmd_specify;
 pub use specs_data::cmd_specs_data;

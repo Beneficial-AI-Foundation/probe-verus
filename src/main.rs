@@ -5,6 +5,7 @@
 //! - `list-functions`: List all functions in a Rust/Verus project
 //! - `verify`: Run Verus verification and analyze results (or analyze existing output)
 //! - `specify`: Extract function specifications (requires/ensures) to JSON
+//! - `merge-atoms`: Combine independently-indexed atoms.json files
 //! - `stubify`: Convert .md files with YAML frontmatter to JSON
 //! - `run`: Run both atomize and verify (designed for Docker/CI usage)
 
@@ -17,8 +18,8 @@ use std::path::PathBuf;
 // Import command implementations
 mod commands;
 use commands::{
-    cmd_atomize, cmd_functions, cmd_run, cmd_specify, cmd_specs_data, cmd_stubify, cmd_tracked_csv,
-    cmd_verify, OutputFormat,
+    cmd_atomize, cmd_functions, cmd_merge_atoms, cmd_run, cmd_specify, cmd_specs_data, cmd_stubify,
+    cmd_tracked_csv, cmd_verify, OutputFormat,
 };
 
 #[derive(Parser)]
@@ -55,6 +56,17 @@ enum Commands {
         /// Continue with warnings instead of failing on duplicate code_names
         #[arg(long)]
         allow_duplicates: bool,
+    },
+
+    /// Combine independently-indexed atoms.json files, replacing stubs with real atoms
+    MergeAtoms {
+        /// Two or more atoms.json files to merge
+        #[arg(required = true, num_args = 2..)]
+        inputs: Vec<PathBuf>,
+
+        /// Output file path (default: merged_atoms.json)
+        #[arg(short, long, default_value = "merged_atoms.json")]
+        output: PathBuf,
     },
 
     /// List all functions in a Rust/Verus project
@@ -278,6 +290,9 @@ fn main() {
                 rust_analyzer,
                 allow_duplicates,
             );
+        }
+        Commands::MergeAtoms { inputs, output } => {
+            cmd_merge_atoms(inputs, output);
         }
         Commands::ListFunctions {
             path,

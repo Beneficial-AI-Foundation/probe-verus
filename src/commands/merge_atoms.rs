@@ -35,7 +35,13 @@ fn normalize_atoms_map(
         atom.dependencies_with_locations
             .iter_mut()
             .for_each(|d| d.code_name = normalize_code_name(&d.code_name));
-        normalized.insert(norm_key, atom);
+        if let Some(existing) = normalized.get(&norm_key) {
+            if is_stub(existing) && !is_stub(&atom) {
+                normalized.insert(norm_key, atom);
+            }
+        } else {
+            normalized.insert(norm_key, atom);
+        }
     }
 
     (normalized, changed)

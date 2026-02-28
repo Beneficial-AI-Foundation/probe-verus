@@ -8,6 +8,7 @@
 use probe_verus::AtomWithLines;
 use std::collections::BTreeMap;
 use std::process::Command;
+use tempfile::TempDir;
 
 const FIXTURES: &str = "tests/fixtures/merge_test";
 
@@ -22,11 +23,8 @@ fn load_atoms(path: &str) -> BTreeMap<String, AtomWithLines> {
     atoms
 }
 
-#[test]
-fn test_merge_fixtures_match_expected() {
+fn run_merge(output_path: &std::path::Path) {
     let binary = env!("CARGO_BIN_EXE_probe-verus");
-    let output_path = std::env::temp_dir().join("merge_test_output.json");
-
     let status = Command::new(binary)
         .args([
             "merge-atoms",
@@ -37,8 +35,15 @@ fn test_merge_fixtures_match_expected() {
         ])
         .status()
         .expect("Failed to run probe-verus");
-
     assert!(status.success(), "merge-atoms command failed");
+}
+
+#[test]
+fn test_merge_fixtures_match_expected() {
+    let tmp = TempDir::new().unwrap();
+    let output_path = tmp.path().join("merged.json");
+
+    run_merge(&output_path);
 
     let merged = load_atoms(output_path.to_str().unwrap());
     let expected = load_atoms(&format!("{}/atoms_combined.json", FIXTURES));
@@ -92,8 +97,6 @@ fn test_merge_fixtures_match_expected() {
             key
         );
     }
-
-    std::fs::remove_file(&output_path).ok();
 }
 
 #[test]
@@ -113,43 +116,23 @@ fn test_merge_stubs_replaced_with_real_atoms() {
         "compute in atoms_b should be real"
     );
 
-    let binary = env!("CARGO_BIN_EXE_probe-verus");
-    let output_path = std::env::temp_dir().join("merge_test_stubs.json");
+    let tmp = TempDir::new().unwrap();
+    let output_path = tmp.path().join("merged.json");
 
-    Command::new(binary)
-        .args([
-            "merge-atoms",
-            &format!("{}/atoms_a.json", FIXTURES),
-            &format!("{}/atoms_b.json", FIXTURES),
-            "-o",
-            output_path.to_str().unwrap(),
-        ])
-        .status()
-        .expect("Failed to run probe-verus");
+    run_merge(&output_path);
 
     let merged = load_atoms(output_path.to_str().unwrap());
     let compute_merged = merged.get("probe:crate-b/1.0/helpers/compute()").unwrap();
     assert_eq!(compute_merged.code_path, "crate-b/src/helpers.rs");
     assert_eq!(compute_merged.mode, probe_verus::FunctionMode::Spec);
-
-    std::fs::remove_file(&output_path).ok();
 }
 
 #[test]
 fn test_merge_cross_project_edges_preserved() {
-    let binary = env!("CARGO_BIN_EXE_probe-verus");
-    let output_path = std::env::temp_dir().join("merge_test_edges.json");
+    let tmp = TempDir::new().unwrap();
+    let output_path = tmp.path().join("merged.json");
 
-    Command::new(binary)
-        .args([
-            "merge-atoms",
-            &format!("{}/atoms_a.json", FIXTURES),
-            &format!("{}/atoms_b.json", FIXTURES),
-            "-o",
-            output_path.to_str().unwrap(),
-        ])
-        .status()
-        .expect("Failed to run probe-verus");
+    run_merge(&output_path);
 
     let merged = load_atoms(output_path.to_str().unwrap());
 
@@ -168,6 +151,4 @@ fn test_merge_cross_project_edges_preserved() {
             .contains("probe:crate-b/1.0/helpers/validate()"),
         "process() should depend on validate()"
     );
-
-    std::fs::remove_file(&output_path).ok();
 }

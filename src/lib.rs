@@ -14,8 +14,8 @@ pub mod verus_parser;
 pub use error::{ProbeError, ProbeResult};
 
 use constants::{
-    is_definition, is_function_like_kind, PROBE_URI_PREFIX, SCIP_SYMBOL_PREFIX,
-    TYPE_CONTEXT_LOOKBACK_LINES,
+    is_definition, is_external_function_symbol, is_function_like_kind, PROBE_URI_PREFIX,
+    SCIP_SYMBOL_PREFIX, TYPE_CONTEXT_LOOKBACK_LINES,
 };
 
 // =============================================================================
@@ -277,6 +277,22 @@ fn enrich_display_name(scip_symbol: &str, base_display_name: &str) -> String {
         }
     }
     base_display_name.to_string()
+}
+
+/// Extract the base function/method name from a raw SCIP symbol.
+///
+/// For `rust-analyzer cargo x25519-dalek 2.0.1 x25519/StaticSecret#diffie_hellman().`
+/// returns `"diffie_hellman"`.
+/// For `rust-analyzer cargo core 1.0.0 mem/swap().` returns `"swap"`.
+fn extract_function_name_from_symbol(symbol: &str) -> String {
+    let s = symbol.strip_prefix(SCIP_SYMBOL_PREFIX).unwrap_or(symbol);
+    let without_suffix = s.strip_suffix("().").unwrap_or(s);
+    without_suffix
+        .rsplit_once('#')
+        .map(|(_, n)| n)
+        .or_else(|| without_suffix.rsplit_once('/').map(|(_, n)| n))
+        .unwrap_or(without_suffix)
+        .to_string()
 }
 
 /// Build a call graph from SCIP data.
@@ -591,7 +607,18 @@ pub fn build_call_graph(
 
             // Track ALL function calls (including to external functions)
             // Note: References use the base symbol, not the unique key
-            if !is_def && all_function_symbols.contains(&occurrence.symbol) {
+            if !is_def
+                && (all_function_symbols.contains(&occurrence.symbol)
+                    || is_external_function_symbol(&occurrence.symbol, &all_function_symbols))
+            {
+                // Register newly-discovered external function symbols so downstream
+                // code can resolve their display names and code_names without fallback
+                if all_function_symbols.insert(occurrence.symbol.clone()) {
+                    let base_name = extract_function_name_from_symbol(&occurrence.symbol);
+                    let enriched = enrich_display_name(&occurrence.symbol, &base_name);
+                    symbol_to_display_name.insert(occurrence.symbol.clone(), enriched);
+                }
+
                 if let Some(caller_key) = &current_function_key {
                     if let Some(caller_node) = call_graph.get_mut(caller_key) {
                         // For callees, we store the base symbol with type hints
@@ -1478,6 +1505,66 @@ pub fn find_duplicate_code_names(atoms: &[AtomWithLines]) -> Vec<DuplicateCodeNa
         .collect()
 }
 
+/// Extract a display name from a probe-style code_name.
+///
+/// Given `probe:x25519-dalek/2.0.1/x25519/impl#[StaticSecret]diffie_hellman()`,
+/// returns `"diffie_hellman"`.
+fn extract_display_name_from_code_name(code_name: &str) -> String {
+    let s = code_name
+        .strip_prefix(PROBE_URI_PREFIX)
+        .unwrap_or(code_name);
+    // Strip trailing `().` or `()` (SCIP symbols use `().`, probe code_names use `()`)
+    let without_parens = s
+        .strip_suffix("().")
+        .or_else(|| s.strip_suffix("()"))
+        .unwrap_or(s);
+    // Take the part after the last delimiter
+    let name = without_parens
+        .rsplit_once(']')
+        .map(|(_, n)| n)
+        .or_else(|| without_parens.rsplit_once('#').map(|(_, n)| n))
+        .or_else(|| without_parens.rsplit_once('/').map(|(_, n)| n))
+        .unwrap_or(without_parens);
+    name.to_string()
+}
+
+/// Add stub atoms for external function dependencies that don't have their own atom entry.
+///
+/// After building the atoms dict, some dependencies point to external (non-workspace) functions
+/// that have no atom. This function creates lightweight stub entries so they appear in the graph.
+pub fn add_external_stubs(atoms_dict: &mut HashMap<String, AtomWithLines>) -> usize {
+    let external_deps: Vec<String> = atoms_dict
+        .values()
+        .flat_map(|atom| atom.dependencies.iter().cloned())
+        .filter(|dep| !atoms_dict.contains_key(dep))
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+
+    let count = external_deps.len();
+    for dep_code_name in external_deps {
+        let display_name = extract_display_name_from_code_name(&dep_code_name);
+        let code_module = extract_code_module(&dep_code_name);
+        atoms_dict.insert(
+            dep_code_name.clone(),
+            AtomWithLines {
+                display_name,
+                code_name: dep_code_name,
+                dependencies: HashSet::new(),
+                dependencies_with_locations: Vec::new(),
+                code_module,
+                code_path: String::new(),
+                code_text: CodeTextInfo {
+                    lines_start: 0,
+                    lines_end: 0,
+                },
+                mode: FunctionMode::Exec,
+            },
+        );
+    }
+    count
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1549,5 +1636,205 @@ mod tests {
         // Symbol without the expected prefix still works by splitting on spaces
         let symbol = "other-tool cargo crate 1.0 module/Type#method().";
         assert_eq!(enrich_display_name(symbol, "method"), "Type::method");
+    }
+
+    // =========================================================================
+    // extract_function_name_from_symbol tests
+    // =========================================================================
+
+    #[test]
+    fn test_extract_function_name_method() {
+        assert_eq!(
+            extract_function_name_from_symbol(
+                "rust-analyzer cargo x25519-dalek 2.0.1 x25519/StaticSecret#diffie_hellman()."
+            ),
+            "diffie_hellman"
+        );
+    }
+
+    #[test]
+    fn test_extract_function_name_free_function() {
+        assert_eq!(
+            extract_function_name_from_symbol("rust-analyzer cargo core 1.0.0 mem/swap()."),
+            "swap"
+        );
+    }
+
+    #[test]
+    fn test_extract_function_name_trait_impl() {
+        assert_eq!(
+            extract_function_name_from_symbol(
+                "rust-analyzer cargo curve25519-dalek 4.1.3 edwards/CompressedEdwardsY#ConstantTimeEq#ct_eq()."
+            ),
+            "ct_eq"
+        );
+    }
+
+    // =========================================================================
+    // extract_display_name_from_code_name tests
+    // =========================================================================
+
+    #[test]
+    fn test_extract_display_name_method() {
+        assert_eq!(
+            extract_display_name_from_code_name(
+                "probe:x25519-dalek/2.0.1/x25519/impl#[StaticSecret]diffie_hellman()"
+            ),
+            "diffie_hellman"
+        );
+    }
+
+    #[test]
+    fn test_extract_display_name_scip_suffix() {
+        // SCIP symbols end with `().` (trailing dot)
+        assert_eq!(
+            extract_display_name_from_code_name(
+                "probe:x25519-dalek/2.0.1/x25519/impl#[StaticSecret]diffie_hellman()."
+            ),
+            "diffie_hellman"
+        );
+    }
+
+    #[test]
+    fn test_extract_display_name_free_function() {
+        assert_eq!(
+            extract_display_name_from_code_name("probe:curve25519-dalek/4.1.3/field/reduce()"),
+            "reduce"
+        );
+    }
+
+    #[test]
+    fn test_extract_display_name_trait_impl() {
+        assert_eq!(
+            extract_display_name_from_code_name(
+                "probe:curve25519-dalek/4.1.3/edwards/CompressedEdwardsY#[ConstantTimeEq]ct_eq()"
+            ),
+            "ct_eq"
+        );
+    }
+
+    // =========================================================================
+    // is_external_function_symbol tests
+    // =========================================================================
+
+    #[test]
+    fn test_external_function_detected() {
+        let known = HashSet::new();
+        assert!(constants::is_external_function_symbol(
+            "rust-analyzer cargo x25519-dalek 2.0.1 x25519/impl#[StaticSecret]diffie_hellman().",
+            &known,
+        ));
+    }
+
+    #[test]
+    fn test_known_symbol_not_external() {
+        let mut known = HashSet::new();
+        known.insert("rust-analyzer cargo crate 1.0 foo/bar().".to_string());
+        assert!(!constants::is_external_function_symbol(
+            "rust-analyzer cargo crate 1.0 foo/bar().",
+            &known,
+        ));
+    }
+
+    #[test]
+    fn test_type_symbol_not_external_function() {
+        let known = HashSet::new();
+        assert!(!constants::is_external_function_symbol(
+            "rust-analyzer cargo x25519-dalek 2.0.1 x25519/StaticSecret#",
+            &known,
+        ));
+    }
+
+    #[test]
+    fn test_field_symbol_not_external_function() {
+        let known = HashSet::new();
+        assert!(!constants::is_external_function_symbol(
+            "rust-analyzer cargo crate 1.0 module/Struct#field.",
+            &known,
+        ));
+    }
+
+    // =========================================================================
+    // add_external_stubs tests
+    // =========================================================================
+
+    #[test]
+    fn test_add_external_stubs_creates_missing() {
+        let mut atoms_dict = HashMap::new();
+        let mut deps = HashSet::new();
+        deps.insert("probe:external-crate/1.0/mod/func()".to_string());
+
+        atoms_dict.insert(
+            "probe:my-crate/1.0/caller()".to_string(),
+            AtomWithLines {
+                display_name: "caller".to_string(),
+                code_name: "probe:my-crate/1.0/caller()".to_string(),
+                dependencies: deps,
+                dependencies_with_locations: Vec::new(),
+                code_module: String::new(),
+                code_path: "src/lib.rs".to_string(),
+                code_text: CodeTextInfo {
+                    lines_start: 10,
+                    lines_end: 20,
+                },
+                mode: FunctionMode::Exec,
+            },
+        );
+
+        let count = add_external_stubs(&mut atoms_dict);
+        assert_eq!(count, 1);
+        assert_eq!(atoms_dict.len(), 2);
+
+        let stub = atoms_dict
+            .get("probe:external-crate/1.0/mod/func()")
+            .unwrap();
+        assert_eq!(stub.display_name, "func");
+        assert!(stub.code_path.is_empty());
+        assert_eq!(stub.code_text.lines_start, 0);
+        assert!(stub.dependencies.is_empty());
+    }
+
+    #[test]
+    fn test_add_external_stubs_skips_existing() {
+        let mut atoms_dict = HashMap::new();
+        let mut deps = HashSet::new();
+        deps.insert("probe:my-crate/1.0/other()".to_string());
+
+        atoms_dict.insert(
+            "probe:my-crate/1.0/caller()".to_string(),
+            AtomWithLines {
+                display_name: "caller".to_string(),
+                code_name: "probe:my-crate/1.0/caller()".to_string(),
+                dependencies: deps,
+                dependencies_with_locations: Vec::new(),
+                code_module: String::new(),
+                code_path: "src/lib.rs".to_string(),
+                code_text: CodeTextInfo {
+                    lines_start: 10,
+                    lines_end: 20,
+                },
+                mode: FunctionMode::Exec,
+            },
+        );
+        atoms_dict.insert(
+            "probe:my-crate/1.0/other()".to_string(),
+            AtomWithLines {
+                display_name: "other".to_string(),
+                code_name: "probe:my-crate/1.0/other()".to_string(),
+                dependencies: HashSet::new(),
+                dependencies_with_locations: Vec::new(),
+                code_module: String::new(),
+                code_path: "src/lib.rs".to_string(),
+                code_text: CodeTextInfo {
+                    lines_start: 30,
+                    lines_end: 40,
+                },
+                mode: FunctionMode::Exec,
+            },
+        );
+
+        let count = add_external_stubs(&mut atoms_dict);
+        assert_eq!(count, 0);
+        assert_eq!(atoms_dict.len(), 2);
     }
 }

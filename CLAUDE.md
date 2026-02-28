@@ -96,3 +96,37 @@ Examples from history:
 - `feat(specify): output dictionary keyed by probe-name from atoms.json`
 - `fix(verification): update atoms.json reader for new schema`
 - `perf(verify): use interval tree for error-to-function mapping`
+
+## Versioning Policy
+
+This project follows [Semantic Versioning](https://semver.org/) (see [issue #7](https://github.com/Beneficial-AI-Foundation/probe-verus/issues/7)). Downstream tools like `verilib-cli` invoke `probe-verus` as a subprocess and depend on a stable CLI contract. The version number must accurately signal compatibility.
+
+All notable changes must be recorded in `CHANGELOG.md` using [Keep a Changelog](https://keepachangelog.com/) format.
+
+### What requires a major version bump
+
+Any non-backward-compatible change to the **public contract**:
+
+- Renamed or removed subcommands (`atomize`, `verify`, `specify`, `list-functions`, `stubify`, `run`, `specs-data`, `tracked-csv`)
+- Renamed or removed CLI flags (e.g., `--with-atoms`, `--output`, `--with-locations`)
+- Changed semantics of existing flags
+- Changed JSON output field names or structure (e.g., renaming `display-name`, changing dict output to array)
+- Changed exit codes (currently 0 = success, 1 = error)
+- Changed required input file formats
+
+Major bumps must include a `Breaking` section in `CHANGELOG.md`.
+
+### What is a minor version bump
+
+Backward-compatible additions:
+
+- New subcommands
+- New optional flags on existing subcommands
+- New optional fields in JSON output (additive)
+- New output formats selectable via new flags
+
+### What is a patch version bump
+
+- Bug fixes that don't change the public contract
+- Performance improvements
+- Documentation updates

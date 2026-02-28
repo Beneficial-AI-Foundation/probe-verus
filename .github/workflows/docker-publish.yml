@@ -6,8 +6,8 @@
 #
 # Images are published to:
 #   ghcr.io/beneficial-ai-foundation/probe-verus:latest (main branch + releases)
-#   ghcr.io/beneficial-ai-foundation/probe-verus:v1 (on release with v1 tag)
-#   ghcr.io/beneficial-ai-foundation/probe-verus:1.0.0 (on semver release)
+#   ghcr.io/beneficial-ai-foundation/probe-verus:vN (on release with major version tag)
+#   ghcr.io/beneficial-ai-foundation/probe-verus:N.N.N (on semver release)
 #   ghcr.io/beneficial-ai-foundation/probe-verus:<sha> (all builds)
 #
 name: Docker Publish

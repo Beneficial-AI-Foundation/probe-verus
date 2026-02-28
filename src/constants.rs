@@ -3,6 +3,8 @@
 //! This module centralizes magic numbers and configuration values
 //! to improve readability and maintainability.
 
+use std::collections::HashSet;
+
 // =============================================================================
 // SCIP Symbol Kinds
 // =============================================================================
@@ -108,6 +110,24 @@ pub const DEFAULT_OUTPUT_DIR: &str = "./output";
 
 /// Expected prefix for SCIP symbols from rust-analyzer/verus-analyzer
 pub const SCIP_SYMBOL_PREFIX: &str = "rust-analyzer cargo ";
+
+/// Suffix pattern that identifies function/method symbols in SCIP notation.
+/// Function symbols end with `().` (e.g., `diffie_hellman().`),
+/// while types end with `#` and fields end with just `.`.
+pub const SCIP_FUNCTION_SUFFIX: &str = "().";
+
+/// Check if a SCIP symbol string represents an external function reference.
+///
+/// External function symbols are those from non-workspace crates that appear
+/// as reference occurrences but not in any document's `symbols` section.
+/// They are detected by their string format: starts with the standard SCIP
+/// prefix and ends with the function suffix pattern `().`.
+#[inline]
+pub fn is_external_function_symbol(symbol: &str, known_symbols: &HashSet<String>) -> bool {
+    !known_symbols.contains(symbol)
+        && symbol.starts_with(SCIP_SYMBOL_PREFIX)
+        && symbol.ends_with(SCIP_FUNCTION_SUFFIX)
+}
 
 /// Prefix for probe-style URIs
 pub const PROBE_URI_PREFIX: &str = "probe:";

@@ -1,8 +1,8 @@
 //! Atomize command - Generate call graph atoms from SCIP indexes.
 
 use probe_verus::{
-    build_call_graph, convert_to_atoms_with_parsed_spans, find_duplicate_code_names,
-    parse_scip_json,
+    add_external_stubs, build_call_graph, convert_to_atoms_with_parsed_spans,
+    find_duplicate_code_names, parse_scip_json,
     scip_cache::{Analyzer, ScipCache},
     AtomWithLines,
 };
@@ -93,6 +93,12 @@ pub fn cmd_atomize(
     let mut atoms_dict: HashMap<String, AtomWithLines> = HashMap::new();
     for atom in atoms {
         atoms_dict.entry(atom.code_name.clone()).or_insert(atom);
+    }
+
+    // Add stub atoms for external function dependencies
+    let stub_count = add_external_stubs(&mut atoms_dict);
+    if stub_count > 0 {
+        println!("  ✓ Added {} external function stub(s)", stub_count);
     }
 
     // Write the output
@@ -248,6 +254,10 @@ pub fn atomize_internal(
     for atom in atoms {
         atoms_dict.entry(atom.code_name.clone()).or_insert(atom);
     }
+
+    // Add stub atoms for external function dependencies
+    add_external_stubs(&mut atoms_dict);
+
     let count = atoms_dict.len();
 
     let json = serde_json::to_string_pretty(&atoms_dict)

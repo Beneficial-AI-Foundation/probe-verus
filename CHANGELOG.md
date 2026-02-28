@@ -10,10 +10,13 @@ what constitutes a breaking change.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-02-28
+
 ### Added
 - Track calls to external (non-workspace) functions in call graph
 - Stub atoms for external function dependencies in `atoms.json` output
 - Installation scripts for Verus development tools (`tools/`)
+- `CHANGELOG.md` and semver versioning policy ([#7](https://github.com/Beneficial-AI-Foundation/probe-verus/issues/7))
 
 ### Fixed
 - Strip reference/lifetime prefix from impl Self type in parser
@@ -84,7 +87,8 @@ what constitutes a breaking change.
 
 Initial release. SCIP-based call graph generation for Rust/Verus projects.
 
-[Unreleased]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v0.1.0...v1.0.0
 [0.1.0]: https://github.com/Beneficial-AI-Foundation/probe-verus/releases/tag/v0.1.0

@@ -258,6 +258,11 @@ let atoms: HashMap<String, Atom> = serde_json::from_str(&file_content)?;
 
 ## Version History
 
+### v1.2.0 (2026-02-28)
+
+- Added external function stub entries for non-workspace dependencies
+- Existing atoms may now list external function dependencies
+
 ### v1.1.0 (2026-02-24)
 
 - Added `mode` field for Verus function modes (`exec`, `proof`, `spec`)

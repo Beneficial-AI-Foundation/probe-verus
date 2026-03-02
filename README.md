@@ -4,12 +4,49 @@ Probe Verus projects: generate call graph atoms and analyze verification results
 
 ## Installation
 
+### Pre-built binaries (recommended)
+
+Download the latest release for your platform from
+[GitHub Releases](https://github.com/Beneficial-AI-Foundation/probe-verus/releases),
+or use the one-line installers:
+
+```bash
+# macOS / Linux
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/Beneficial-AI-Foundation/probe-verus/releases/latest/download/probe-verus-installer.sh | sh
+
+# Windows (PowerShell)
+powershell -ExecutionPolicy ByPass -c "irm https://github.com/Beneficial-AI-Foundation/probe-verus/releases/latest/download/probe-verus-installer.ps1 | iex"
+```
+
+### From source
+
 ```bash
 cargo install --path .
 ```
 
-**Prerequisites:** Some commands require external tools (verus-analyzer, scip, cargo verus).
-See [tools/INSTALL.md](tools/INSTALL.md) for detailed installation instructions.
+### External tool dependencies
+
+Some commands (`atomize`, `verify`) require external tools. After installing
+probe-verus, run `setup` to auto-download them:
+
+```bash
+probe-verus setup            # downloads verus-analyzer and scip
+probe-verus setup --status   # check what's installed and where
+```
+
+Version resolution picks the latest GitHub release by default. Override with
+environment variables (`PROBE_VERUS_ANALYZER_VERSION`, `PROBE_SCIP_VERSION`)
+or place your own binaries on `PATH`.
+
+For manual installation options, see [tools/INSTALL.md](tools/INSTALL.md).
+
+| Command | Required Tools |
+|---------|----------------|
+| `atomize` | verus-analyzer, scip |
+| `list-functions` | None |
+| `verify` | cargo verus |
+| `specify` | None |
+| `setup` | None |
 
 ## Commands
 
@@ -17,11 +54,15 @@ See [tools/INSTALL.md](tools/INSTALL.md) for detailed installation instructions.
 probe-verus <COMMAND>
 
 Commands:
-  stubify         Convert .md files with YAML frontmatter to JSON
   atomize         Generate call graph atoms with line numbers from SCIP indexes
+  callee-crates   Find which crates a function's callees belong to
   list-functions  List all functions in a Rust/Verus project
+  merge-atoms     Combine independently-indexed atoms.json files
+  setup           Install or check status of external tools
   specify         Extract function specifications from atoms.json
+  stubify         Convert .md files with YAML frontmatter to JSON
   verify          Run Verus verification and analyze results
+  run             Run both atomize and verify (designed for Docker/CI)
 ```
 
 ---
@@ -93,6 +134,7 @@ Options:
   -o, --output <FILE>     Output file path (default: atoms.json)
   -r, --regenerate-scip   Force regeneration of the SCIP index
       --with-locations    Include detailed per-call location info (precondition/postcondition/inner)
+      --auto-install      Automatically download missing tools without prompting
 ```
 
 **Examples:**
@@ -101,6 +143,7 @@ probe-verus atomize ./my-rust-project
 probe-verus atomize ./my-rust-project -o atoms.json
 probe-verus atomize ./my-rust-project --regenerate-scip
 probe-verus atomize ./my-rust-project --with-locations  # extended output
+probe-verus atomize ./my-rust-project --auto-install    # download tools if missing
 ```
 
 **Output format:**
@@ -438,6 +481,53 @@ When using `--with-atoms`, the output is a dictionary keyed by code-name:
   - `warning`: Passed with warnings
 
 **Note:** The `-a/--with-atoms` flag is required to generate this format. Without it, the legacy format is used for backwards compatibility.
+
+---
+
+### `setup` - Manage External Tools
+
+Install or check status of external tool dependencies (verus-analyzer, scip).
+
+```bash
+probe-verus setup [OPTIONS]
+
+Options:
+      --status    Show installation status instead of installing
+```
+
+**Examples:**
+```bash
+probe-verus setup             # download and install verus-analyzer + scip
+probe-verus setup --status    # show what's installed and where
+```
+
+Version resolution uses, in order:
+1. Environment variable overrides (`PROBE_VERUS_ANALYZER_VERSION`, `PROBE_SCIP_VERSION`)
+2. Latest stable release from GitHub
+3. Compiled-in fallback version (if GitHub is unreachable)
+
+Tools are installed to `~/.probe-verus/tools/`. Existing tools on your `PATH` are also recognized.
+
+---
+
+### `run` - Atomize + Verify (CI/Docker)
+
+Run both `atomize` and `verify` in a single command. Designed for Docker containers and CI pipelines.
+
+```bash
+probe-verus run <PROJECT_PATH> [OPTIONS]
+
+Options:
+  -o, --output <DIR>       Output directory for results (default: ./output)
+  -p, --package <NAME>     Package to verify (for workspaces)
+      --auto-install       Automatically download missing tools without prompting
+```
+
+**Examples:**
+```bash
+probe-verus run ./my-verus-project -p my-crate
+probe-verus run ./my-verus-project --auto-install   # CI-friendly
+```
 
 ---
 

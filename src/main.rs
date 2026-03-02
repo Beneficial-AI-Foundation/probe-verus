@@ -8,6 +8,7 @@
 //! - `specify`: Extract function specifications (requires/ensures) to JSON
 //! - `merge-atoms`: Combine independently-indexed atoms.json files
 //! - `stubify`: Convert .md files with YAML frontmatter to JSON
+//! - `setup`: Install or check status of external tools (verus-analyzer, scip)
 //! - `run`: Run both atomize and verify (designed for Docker/CI usage)
 
 use clap::{Parser, Subcommand};
@@ -19,8 +20,8 @@ use std::path::PathBuf;
 // Import command implementations
 mod commands;
 use commands::{
-    cmd_atomize, cmd_callee_crates, cmd_functions, cmd_merge_atoms, cmd_run, cmd_specify,
-    cmd_specs_data, cmd_stubify, cmd_tracked_csv, cmd_verify, OutputFormat,
+    cmd_atomize, cmd_callee_crates, cmd_functions, cmd_merge_atoms, cmd_run, cmd_setup,
+    cmd_specify, cmd_specs_data, cmd_stubify, cmd_tracked_csv, cmd_verify, OutputFormat,
 };
 
 #[derive(Parser)]
@@ -57,6 +58,10 @@ enum Commands {
         /// Continue with warnings instead of failing on duplicate code_names
         #[arg(long)]
         allow_duplicates: bool,
+
+        /// Automatically download missing external tools (verus-analyzer, scip) without prompting
+        #[arg(long)]
+        auto_install: bool,
     },
 
     /// Combine independently-indexed atoms.json files, replacing stubs with real atoms
@@ -251,6 +256,19 @@ enum Commands {
         output: Option<PathBuf>,
     },
 
+    /// Install or check status of external tools (verus-analyzer, scip)
+    ///
+    /// Resolves and installs verus-analyzer and scip into ~/.probe-verus/tools/.
+    /// Version resolution uses, in order: environment variable overrides
+    /// (PROBE_VERUS_ANALYZER_VERSION, PROBE_SCIP_VERSION), the latest GitHub
+    /// release, and a compiled-in fallback version. Use --status to see which
+    /// tools are installed and where they are located.
+    Setup {
+        /// Show installation status instead of installing
+        #[arg(long)]
+        status: bool,
+    },
+
     /// Run both atomize and verify commands (designed for Docker/CI usage)
     ///
     /// This is the recommended entrypoint for Docker containers and CI pipelines.
@@ -290,6 +308,10 @@ enum Commands {
         /// Continue with warnings instead of failing on duplicate code_names
         #[arg(long)]
         allow_duplicates: bool,
+
+        /// Automatically download missing external tools without prompting
+        #[arg(long)]
+        auto_install: bool,
     },
 }
 
@@ -304,6 +326,7 @@ fn main() {
             with_locations,
             rust_analyzer,
             allow_duplicates,
+            auto_install,
         } => {
             cmd_atomize(
                 project_path,
@@ -312,6 +335,7 @@ fn main() {
                 with_locations,
                 rust_analyzer,
                 allow_duplicates,
+                auto_install,
             );
         }
         Commands::MergeAtoms { inputs, output } => {
@@ -404,6 +428,9 @@ fn main() {
         Commands::Stubify { path, output } => {
             cmd_stubify(path, output);
         }
+        Commands::Setup { status } => {
+            cmd_setup(status);
+        }
         Commands::Run {
             project_path,
             output,
@@ -414,6 +441,7 @@ fn main() {
             verbose,
             rust_analyzer,
             allow_duplicates,
+            auto_install,
         } => {
             cmd_run(
                 project_path,
@@ -425,6 +453,7 @@ fn main() {
                 verbose,
                 rust_analyzer,
                 allow_duplicates,
+                auto_install,
             );
         }
     }

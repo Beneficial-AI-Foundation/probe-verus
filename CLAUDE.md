@@ -4,11 +4,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-probe-verus is a Rust CLI tool that generates compact function call graph data from SCIP (Source Code Index Protocol) indexes and analyzes Verus verification results. It has four subcommands:
+probe-verus is a Rust CLI tool that generates compact function call graph data from SCIP (Source Code Index Protocol) indexes and analyzes Verus verification results. Subcommands:
 - **atomize**: Generate call graph atoms with accurate line numbers
+- **callee-crates**: Find which crates a function's callees belong to at a given depth
 - **list-functions**: List all functions in a Rust/Verus project (no external tools needed)
-- **verify**: Run Verus verification and analyze results
+- **merge-atoms**: Combine independently-indexed atoms.json files
+- **setup**: Install or check status of external tools (verus-analyzer, scip) via auto-download
 - **specify**: Extract function specifications from atoms.json, with optional taxonomy classification
+- **stubify**: Convert .md files with YAML frontmatter to JSON
+- **verify**: Run Verus verification and analyze results
+- **run**: Run both atomize and verify (designed for Docker/CI usage)
 
 ## Build and Test Commands
 
@@ -38,19 +43,24 @@ cargo fmt && cargo clippy --all-targets && cargo test
 src/
 ├── main.rs           # CLI entry point with subcommand routing
 ├── lib.rs            # Core data structures and SCIP JSON parsing
+├── commands/         # Subcommand implementations (atomize, verify, setup, run, etc.)
+├── scip_cache.rs     # SCIP index generation, caching, and tool resolution
 ├── taxonomy.rs       # Spec taxonomy classification from TOML rules
+├── tool_manager.rs   # Auto-download manager for external tools (verus-analyzer, scip)
 ├── verification.rs   # Verification output parsing & analysis
 └── verus_parser.rs   # AST parsing using verus_syn for function spans
 ```
 
 ## Architecture
 
-### Four Main Pipelines
+### Main Pipelines
 
 1. **Atomize Pipeline** (`atomize` command): SCIP JSON → call graph parsing → spans via verus_syn → JSON output
 2. **List Functions Pipeline** (`list-functions` command): Source files → AST visitor → function list
 3. **Verification Pipeline** (`verify` command): Cargo verus output → error parsing → function mapping → analysis
 4. **Specify Pipeline** (`specify` command): Source files + atoms.json → spec extraction → optional taxonomy classification via TOML rules → JSON output
+5. **Setup Pipeline** (`setup` command): Resolve versions → download from GitHub → decompress to `~/.probe-verus/tools/`
+6. **Run Pipeline** (`run` command): Atomize + verify in one step (CI/Docker entrypoint)
 
 ### Key Architectural Patterns
 
@@ -61,6 +71,8 @@ src/
 **Trait Implementation Disambiguation**: Multiple strategies to resolve SCIP symbol conflicts for trait impls: signature text extraction, self type from parameters, definition type context, line number fallback.
 
 **SCIP Data Caching**: Generated SCIP data is cached in `<project>/data/` to avoid re-running slow external tools.
+
+**Auto-download Tool Manager**: External tools (verus-analyzer, scip) can be auto-downloaded to `~/.probe-verus/tools/`. Version resolution: env var override → GitHub `/releases/latest` API → compiled-in fallback. Supports `--auto-install` flag for non-interactive CI usage.
 
 **AST-based Spec Taxonomy**: The `specify` command can classify specs using taxonomy rules defined in TOML. Classification uses structured AST data (function mode, called function names extracted via `verus_syn` visitor) rather than regex on text. A `CallNameCollector` visitor walks `ExprCall`/`ExprMethodCall` nodes in ensures/requires clauses to extract called function names.
 
@@ -75,10 +87,12 @@ src/
 
 ## External Tool Dependencies
 
-- **atomize command**: Requires `verus-analyzer` and `scip` CLI
+- **atomize command**: Requires `verus-analyzer` and `scip` CLI (auto-downloadable via `setup` or `--auto-install`)
 - **list-functions command**: None (uses verus_syn only)
 - **verify command**: Requires `cargo verus`
 - **specify command**: None (uses verus_syn only; optional TOML config for taxonomy)
+- **setup command**: None (downloads tools itself)
+- **run command**: Same as atomize + verify
 
 ## Before Committing
 

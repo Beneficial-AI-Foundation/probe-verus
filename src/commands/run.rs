@@ -62,6 +62,7 @@ pub fn cmd_run(
     verbose: bool,
     use_rust_analyzer: bool,
     allow_duplicates: bool,
+    auto_install: bool,
 ) {
     // Validate project path
     if !project_path.exists() {
@@ -107,6 +108,7 @@ pub fn cmd_run(
             verbose,
             use_rust_analyzer,
             allow_duplicates,
+            auto_install,
             &mut run_result,
         );
     }
@@ -158,6 +160,7 @@ fn print_header(project_path: &Path, output_dir: &Path, package: &Option<String>
 }
 
 /// Run the atomize step.
+#[allow(clippy::too_many_arguments)]
 fn run_atomize_step(
     project_path: &PathBuf,
     atoms_path: &PathBuf,
@@ -165,6 +168,7 @@ fn run_atomize_step(
     verbose: bool,
     use_rust_analyzer: bool,
     allow_duplicates: bool,
+    auto_install: bool,
     run_result: &mut RunResult,
 ) {
     println!("───────────────────────────────────────────────────────────────");
@@ -179,6 +183,7 @@ fn run_atomize_step(
         verbose,
         use_rust_analyzer,
         allow_duplicates,
+        auto_install,
     );
 
     match &atomize_result {

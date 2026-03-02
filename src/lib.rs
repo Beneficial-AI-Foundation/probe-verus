@@ -8,6 +8,7 @@ pub mod error;
 pub mod path_utils;
 pub mod scip_cache;
 pub mod taxonomy;
+pub mod tool_manager;
 pub mod verification;
 pub mod verus_parser;
 

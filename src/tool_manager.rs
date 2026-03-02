@@ -118,7 +118,11 @@ impl std::fmt::Display for ToolError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ToolError::PlatformNotSupported(tool, detail) => {
-                write!(f, "{tool}: platform not supported ({detail}). See https://github.com/verus-lang/verus-analyzer/releases for available platforms.")
+                write!(
+                    f,
+                    "{tool}: platform not supported ({detail}). See https://github.com/{}/releases for available platforms.",
+                    tool.github_repo()
+                )
             }
             ToolError::DownloadFailed(tool, msg) => {
                 write!(f, "{tool}: download failed: {msg}")
@@ -129,14 +133,18 @@ impl std::fmt::Display for ToolError {
             ToolError::IoError(tool, e) => {
                 write!(f, "{tool}: I/O error: {e}")
             }
-            ToolError::NotInstalled(tool) => {
-                write!(
+            ToolError::NotInstalled(tool) => match tool {
+                Tool::RustAnalyzer => write!(
+                    f,
+                    "rust-analyzer not found. Install it with: rustup component add rust-analyzer"
+                ),
+                _ => write!(
                     f,
                     "{tool} not found. Install it with: probe-verus setup\n\
                      Or download manually: {}",
                     download_url(tool).unwrap_or_else(|_| "see upstream releases".into())
-                )
-            }
+                ),
+            },
         }
     }
 }
@@ -413,6 +421,9 @@ pub fn download_tool(tool: Tool) -> Result<PathBuf, ToolError> {
         .map_err(|e| ToolError::DownloadFailed(tool, e.to_string()))?;
 
     match tool {
+        Tool::VerusAnalyzer if platform.os == "windows" => {
+            extract_zip(&compressed_bytes, &dest_path, tool)?
+        }
         Tool::VerusAnalyzer => decompress_gzip(&compressed_bytes, &dest_path, tool)?,
         Tool::Scip => extract_tar_gz(&compressed_bytes, &dest_path, tool)?,
         Tool::RustAnalyzer => {
@@ -488,6 +499,42 @@ fn extract_tar_gz(data: &[u8], dest: &Path, tool: Tool) -> Result<(), ToolError>
     }
 
     Ok(())
+}
+
+/// Extract a .zip archive and pull out the tool binary (used for Windows assets).
+fn extract_zip(data: &[u8], dest: &Path, tool: Tool) -> Result<(), ToolError> {
+    use std::io::Cursor;
+
+    let reader = Cursor::new(data);
+    let mut archive = zip::ZipArchive::new(reader)
+        .map_err(|e| ToolError::DecompressFailed(tool, e.to_string()))?;
+
+    let binary_name = tool.binary_name();
+    let exe_name = format!("{binary_name}.exe");
+
+    for i in 0..archive.len() {
+        let mut file = archive
+            .by_index(i)
+            .map_err(|e| ToolError::DecompressFailed(tool, e.to_string()))?;
+
+        let name = file
+            .enclosed_name()
+            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()));
+
+        if let Some(name) = name {
+            if name == binary_name || name == exe_name {
+                let mut out = fs::File::create(dest).map_err(|e| ToolError::IoError(tool, e))?;
+                io::copy(&mut file, &mut out)
+                    .map_err(|e| ToolError::DecompressFailed(tool, e.to_string()))?;
+                return Ok(());
+            }
+        }
+    }
+
+    Err(ToolError::DecompressFailed(
+        tool,
+        format!("binary '{binary_name}' not found in zip archive"),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -569,10 +616,35 @@ pub fn print_status() {
 }
 
 /// Install all manageable tools. Returns a list of errors for tools that failed.
+/// Tools already available (managed or on PATH) are skipped.
+/// Tools unsupported on the current platform are reported but not treated as errors.
 pub fn install_all() -> Vec<ToolError> {
     let tools = [Tool::VerusAnalyzer, Tool::Scip];
+    let platform = current_platform();
     let mut errors = Vec::new();
+
     for tool in &tools {
+        if resolve_tool(*tool).is_ok() {
+            eprintln!("{tool}: already available, skipping download.");
+            continue;
+        }
+
+        let supported = match tool {
+            Tool::VerusAnalyzer => verus_analyzer_target(&platform).is_ok(),
+            Tool::Scip => scip_target(&platform).is_ok(),
+            Tool::RustAnalyzer => false,
+        };
+
+        if !supported {
+            eprintln!(
+                "{tool}: not available for {}-{}, skipping. See https://github.com/{}/releases",
+                platform.os,
+                platform.arch,
+                tool.github_repo()
+            );
+            continue;
+        }
+
         if let Err(e) = download_tool(*tool) {
             errors.push(e);
         }
@@ -587,6 +659,11 @@ pub fn install_all() -> Vec<ToolError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Guards tests that mutate process-wide environment variables.
+    /// Rust tests run in parallel; without this, `set_var`/`remove_var` calls race.
+    static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_platform_mapping_verus_analyzer() {
@@ -720,21 +797,21 @@ mod tests {
 
     #[test]
     fn test_resolve_version_env_override() {
-        // Set an env var and verify it takes priority
-        std::env::set_var(VERUS_ANALYZER_VERSION_ENV, "custom-version");
+        let _guard = ENV_MUTEX.lock().unwrap();
+        unsafe { std::env::set_var(VERUS_ANALYZER_VERSION_ENV, "custom-version") };
         let resolved = resolve_version(&Tool::VerusAnalyzer);
+        unsafe { std::env::remove_var(VERUS_ANALYZER_VERSION_ENV) };
         assert_eq!(resolved.tag, "custom-version");
         assert_eq!(resolved.source, VersionSource::EnvVar);
-        std::env::remove_var(VERUS_ANALYZER_VERSION_ENV);
     }
 
     #[test]
     fn test_resolve_version_empty_env_ignored() {
-        std::env::set_var(SCIP_VERSION_ENV, "");
+        let _guard = ENV_MUTEX.lock().unwrap();
+        unsafe { std::env::set_var(SCIP_VERSION_ENV, "") };
         let resolved = resolve_version(&Tool::Scip);
-        // Empty env var should be ignored, so source should NOT be EnvVar
+        unsafe { std::env::remove_var(SCIP_VERSION_ENV) };
         assert_ne!(resolved.source, VersionSource::EnvVar);
-        std::env::remove_var(SCIP_VERSION_ENV);
     }
 
     #[test]

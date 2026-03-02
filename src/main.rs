@@ -258,8 +258,11 @@ enum Commands {
 
     /// Install or check status of external tools (verus-analyzer, scip)
     ///
-    /// Downloads pinned versions of verus-analyzer and scip to ~/.probe-verus/tools/.
-    /// Use --status to see which tools are installed and where they are located.
+    /// Resolves and installs verus-analyzer and scip into ~/.probe-verus/tools/.
+    /// Version resolution uses, in order: environment variable overrides
+    /// (PROBE_VERUS_ANALYZER_VERSION, PROBE_SCIP_VERSION), the latest GitHub
+    /// release, and a compiled-in fallback version. Use --status to see which
+    /// tools are installed and where they are located.
     Setup {
         /// Show installation status instead of installing
         #[arg(long)]

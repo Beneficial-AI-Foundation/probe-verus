@@ -20,6 +20,14 @@ what constitutes a breaking change.
 ### Changed
 - Tool resolution now checks `~/.probe-verus/tools/` (managed) before PATH (user-installed), falling back to helpful error messages with install instructions
 
+### Fixed
+- `PlatformNotSupported` error messages now link to the correct upstream repo per tool (not always verus-analyzer)
+- `NotInstalled` error for rust-analyzer now recommends `rustup component add rust-analyzer` instead of `probe-verus setup`
+- Windows verus-analyzer installs now correctly handle `.zip` archives (previously assumed gzip)
+- `probe-verus setup` now skips tools unsupported on the current platform instead of failing
+- `setup` subcommand help text now accurately describes the version resolution strategy
+- Env var tests use a mutex guard to prevent parallel test races
+
 ## [1.4.0] - 2026-03-02
 
 ### Added

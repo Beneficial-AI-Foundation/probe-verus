@@ -11,7 +11,7 @@ what constitutes a breaking change.
 ## [1.4.0] - 2026-03-02
 
 ### Added
-- `callee-crates` subcommand to find which crates a function's callees belong to at a given depth
+- `callee-crates` subcommand to find which crates a function's callees belong to at a given depth, with corresponding README documentation for its usage, options, and JSON output format
 
 ## [1.3.0] - 2026-02-28
 

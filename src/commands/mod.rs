@@ -2,6 +2,7 @@
 //!
 //! This module contains the implementation of each CLI subcommand:
 //! - `atomize`: Generate call graph atoms from SCIP indexes
+//! - `callee-crates`: Find which crates a function's callees belong to
 //! - `verify`: Run Verus verification and analyze results
 //! - `functions`: List all functions in a project
 //! - `specify`: Extract function specifications to JSON
@@ -11,6 +12,7 @@
 //! - `run`: Run both atomize and verify (for CI/Docker)
 
 mod atomize;
+mod callee_crates;
 mod functions;
 mod merge_atoms;
 mod run;
@@ -21,6 +23,7 @@ mod tracked_csv;
 mod verify;
 
 pub use atomize::cmd_atomize;
+pub use callee_crates::cmd_callee_crates;
 pub use functions::cmd_functions;
 pub use merge_atoms::cmd_merge_atoms;
 pub use run::cmd_run;

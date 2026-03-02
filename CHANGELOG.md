@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 See the [Versioning Policy section in CLAUDE.md](CLAUDE.md#versioning-policy) for
 what constitutes a breaking change.
 
+## [1.4.0] - 2026-03-02
+
+### Added
+- `callee-crates` subcommand to find which crates a function's callees belong to at a given depth, with corresponding README documentation for its usage, options, and JSON output format
+
 ## [1.3.0] - 2026-02-28
 
 ### Added
@@ -99,7 +104,8 @@ what constitutes a breaking change.
 
 Initial release. SCIP-based call graph generation for Rust/Verus projects.
 
-[Unreleased]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v1.0.0...v1.1.0

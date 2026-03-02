@@ -2,6 +2,7 @@
 //!
 //! This tool provides multiple subcommands:
 //! - `atomize`: Generate call graph atoms with line numbers from SCIP indexes
+//! - `callee-crates`: Find which crates a function's callees belong to at a given depth
 //! - `list-functions`: List all functions in a Rust/Verus project
 //! - `verify`: Run Verus verification and analyze results (or analyze existing output)
 //! - `specify`: Extract function specifications (requires/ensures) to JSON
@@ -18,8 +19,8 @@ use std::path::PathBuf;
 // Import command implementations
 mod commands;
 use commands::{
-    cmd_atomize, cmd_functions, cmd_merge_atoms, cmd_run, cmd_specify, cmd_specs_data, cmd_stubify,
-    cmd_tracked_csv, cmd_verify, OutputFormat,
+    cmd_atomize, cmd_callee_crates, cmd_functions, cmd_merge_atoms, cmd_run, cmd_specify,
+    cmd_specs_data, cmd_stubify, cmd_tracked_csv, cmd_verify, OutputFormat,
 };
 
 #[derive(Parser)]
@@ -228,6 +229,28 @@ enum Commands {
         output: PathBuf,
     },
 
+    /// Find which crates a function's callees belong to
+    ///
+    /// Given a function and a depth N, traverses the call graph up to depth N
+    /// and reports which crates the discovered callees belong to.
+    #[command(name = "callee-crates")]
+    CalleeCrates {
+        /// Function code-name (probe:...) or display-name to search for
+        function: String,
+
+        /// Maximum traversal depth (1 = direct callees, 2 = callees of callees, etc.)
+        #[arg(short, long)]
+        depth: usize,
+
+        /// Path to atoms.json file (reads from stdin if omitted)
+        #[arg(short, long)]
+        atoms_file: Option<PathBuf>,
+
+        /// Output file path (prints to stdout if omitted)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+
     /// Run both atomize and verify commands (designed for Docker/CI usage)
     ///
     /// This is the recommended entrypoint for Docker containers and CI pipelines.
@@ -369,6 +392,14 @@ fn main() {
             github_base_url,
         } => {
             cmd_tracked_csv(src_path, output, github_base_url);
+        }
+        Commands::CalleeCrates {
+            function,
+            depth,
+            atoms_file,
+            output,
+        } => {
+            cmd_callee_crates(function, depth, atoms_file, output);
         }
         Commands::Stubify { path, output } => {
             cmd_stubify(path, output);

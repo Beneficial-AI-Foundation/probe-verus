@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 See the [Versioning Policy section in CLAUDE.md](CLAUDE.md#versioning-policy) for
 what constitutes a breaking change.
 
+## [1.4.0] - 2026-03-02
+
+### Added
+- `callee-crates` subcommand to find which crates a function's callees belong to at a given depth
+
 ## [1.3.0] - 2026-02-28
 
 ### Added

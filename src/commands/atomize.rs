@@ -19,6 +19,7 @@ pub fn cmd_atomize(
     with_locations: bool,
     use_rust_analyzer: bool,
     allow_duplicates: bool,
+    auto_install: bool,
 ) {
     println!("═══════════════════════════════════════════════════════════");
     println!("  Probe Verus - Atomize: Generate Call Graph Data");
@@ -38,8 +39,9 @@ pub fn cmd_atomize(
     } else {
         Analyzer::VerusAnalyzer
     };
-    let scip_cache = ScipCache::with_analyzer(&project_path, analyzer);
-    let json_path = get_scip_json(&scip_cache, regenerate_scip);
+    let mut scip_cache =
+        ScipCache::with_analyzer(&project_path, analyzer).with_auto_install(auto_install);
+    let json_path = get_scip_json(&mut scip_cache, regenerate_scip);
 
     // Parse SCIP JSON and build call graph
     println!("Parsing SCIP JSON and building call graph...");
@@ -130,7 +132,7 @@ fn validate_project(project_path: &Path) -> Result<(), String> {
 }
 
 /// Get the SCIP JSON path, generating if necessary.
-fn get_scip_json(cache: &ScipCache, regenerate: bool) -> PathBuf {
+fn get_scip_json(cache: &mut ScipCache, regenerate: bool) -> PathBuf {
     if cache.has_cached_json() && !regenerate {
         println!(
             "  ✓ Found existing SCIP JSON at {}",
@@ -210,13 +212,15 @@ pub fn atomize_internal(
     verbose: bool,
     use_rust_analyzer: bool,
     allow_duplicates: bool,
+    auto_install: bool,
 ) -> Result<usize, String> {
     let analyzer = if use_rust_analyzer {
         Analyzer::RustAnalyzer
     } else {
         Analyzer::VerusAnalyzer
     };
-    let cache = ScipCache::with_analyzer(project_path, analyzer);
+    let mut cache =
+        ScipCache::with_analyzer(project_path, analyzer).with_auto_install(auto_install);
 
     // Get or generate SCIP JSON
     let json_path = cache

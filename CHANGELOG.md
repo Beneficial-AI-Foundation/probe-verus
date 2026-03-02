@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 See the [Versioning Policy section in CLAUDE.md](CLAUDE.md#versioning-policy) for
 what constitutes a breaking change.
 
+## [1.5.0] - 2026-03-02
+
+### Added
+- `setup` subcommand to install and manage external tool dependencies (verus-analyzer, scip)
+- Auto-download tool manager: probe-verus can fetch the latest stable verus-analyzer and scip to `~/.probe-verus/tools/` on demand, with env var overrides (`PROBE_VERUS_ANALYZER_VERSION`, `PROBE_SCIP_VERSION`) and compiled-in fallback versions
+- `--auto-install` flag on `atomize` and `run` subcommands for non-interactive CI tool download
+- Pre-built binary releases via cargo-dist for Linux (x86_64, aarch64), macOS (Intel, Apple Silicon), and Windows
+- Shell and PowerShell installer scripts for one-line installation
+
+### Changed
+- Tool resolution now checks `~/.probe-verus/tools/` (managed) before PATH (user-installed), falling back to helpful error messages with install instructions
+
 ## [1.4.0] - 2026-03-02
 
 ### Added
@@ -104,7 +116,8 @@ what constitutes a breaking change.
 
 Initial release. SCIP-based call graph generation for Rust/Verus projects.
 
-[Unreleased]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v1.1.0...v1.2.0

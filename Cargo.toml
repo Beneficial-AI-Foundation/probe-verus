@@ -2,7 +2,7 @@
 
 [package]
 name = "probe-verus"
-version = "1.4.0"
+version = "1.5.0"
 edition = "2021"
 description = "Probe Verus projects: generate call graph atoms and analyze verification results"
 license = "MIT OR Apache-2.0"
@@ -28,14 +28,21 @@ walkdir = "2.4"
 rust-lapper = "1.1"
 thiserror = "1.0"
 toml = "0.8"
+ureq = "2.9"
+flate2 = "1.0"
+tar = "0.4"
+dirs = "5.0"
 
 [dev-dependencies]
 tempfile = "3.10"
-ureq = "2.9"
 
 [profile.release]
 lto = true
 codegen-units = 1
 opt-level = 3
 strip = true
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
 

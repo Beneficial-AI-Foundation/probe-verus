@@ -10,7 +10,7 @@
       "lines-start": 5,
       "lines-end": 15
     },
-    "mode": "spec"
+    "kind": "spec"
   },
   "probe:crate-b/1.0/helpers/validate()": {
     "display-name": "validate",
@@ -21,7 +21,7 @@
       "lines-start": 17,
       "lines-end": 30
     },
-    "mode": "proof"
+    "kind": "proof"
   },
   "probe:crate-b/1.0/helpers/internal()": {
     "display-name": "internal",
@@ -32,6 +32,6 @@
       "lines-start": 32,
       "lines-end": 40
     },
-    "mode": "exec"
+    "kind": "exec"
   }
 }

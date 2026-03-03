@@ -185,7 +185,7 @@ pub fn cmd_merge_atoms(inputs: Vec<PathBuf>, output: PathBuf) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use probe_verus::{CodeTextInfo, FunctionMode};
+    use probe_verus::{CodeTextInfo, DeclKind};
     use std::collections::BTreeSet;
 
     fn make_real_atom(name: &str, code_name: &str, code_path: &str) -> AtomWithLines {
@@ -200,7 +200,7 @@ mod tests {
                 lines_start: 10,
                 lines_end: 20,
             },
-            mode: FunctionMode::Exec,
+            kind: DeclKind::Exec,
         }
     }
 
@@ -216,7 +216,7 @@ mod tests {
                 lines_start: 0,
                 lines_end: 0,
             },
-            mode: FunctionMode::Exec,
+            kind: DeclKind::Exec,
         }
     }
 

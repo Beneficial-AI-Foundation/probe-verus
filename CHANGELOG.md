@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 See the [Versioning Policy section in CLAUDE.md](CLAUDE.md#versioning-policy) for
 what constitutes a breaking change.
 
+## [2.0.0] - 2026-03-03
+
+### Changed
+- **BREAKING**: Rename `FunctionMode` enum to `DeclKind` and JSON field `"mode"` to `"kind"` across all output formats. This unifies the declaration classification field name with `probe-lean`, enabling a single web viewer to handle both Verus and Lean atom graphs.
+- Rename helper functions: `convert_mode` -> `convert_kind`, `mode_to_string` -> `kind_to_string`
+
 ## [1.5.0] - 2026-03-02
 
 ### Added
@@ -124,7 +130,8 @@ what constitutes a breaking change.
 
 Initial release. SCIP-based call graph generation for Rust/Verus projects.
 
-[Unreleased]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v1.5.0...v2.0.0
 [1.5.0]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v1.2.0...v1.3.0

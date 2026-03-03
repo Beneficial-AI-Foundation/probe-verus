@@ -239,9 +239,9 @@ pub fn cmd_callee_crates(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use probe_verus::{CodeTextInfo, FunctionMode};
+    use probe_verus::{CodeTextInfo, DeclKind};
 
-    fn make_atom(name: &str, code_path: &str, deps: &[&str], mode: FunctionMode) -> AtomWithLines {
+    fn make_atom(name: &str, code_path: &str, deps: &[&str], kind: DeclKind) -> AtomWithLines {
         AtomWithLines {
             display_name: name.to_string(),
             code_name: String::new(),
@@ -253,12 +253,12 @@ mod tests {
                 lines_start: 1,
                 lines_end: 10,
             },
-            mode,
+            kind,
         }
     }
 
     fn make_stub(name: &str, deps: &[&str]) -> AtomWithLines {
-        make_atom(name, "", deps, FunctionMode::Exec)
+        make_atom(name, "", deps, DeclKind::Exec)
     }
 
     #[test]
@@ -301,17 +301,12 @@ mod tests {
                 "f",
                 "src/lib.rs",
                 &["probe:a/1.0/mod/g()", "probe:b/1.0/mod/h()"],
-                FunctionMode::Exec,
+                DeclKind::Exec,
             ),
         );
         atoms.insert(
             "probe:a/1.0/mod/g()".to_string(),
-            make_atom(
-                "g",
-                "src/lib.rs",
-                &["probe:c/1.0/mod/i()"],
-                FunctionMode::Proof,
-            ),
+            make_atom("g", "src/lib.rs", &["probe:c/1.0/mod/i()"], DeclKind::Proof),
         );
         atoms.insert("probe:b/1.0/mod/h()".to_string(), make_stub("h", &[]));
         atoms.insert("probe:c/1.0/mod/i()".to_string(), make_stub("i", &[]));
@@ -332,17 +327,12 @@ mod tests {
                 "f",
                 "src/lib.rs",
                 &["probe:a/1.0/mod/g()", "probe:b/1.0/mod/h()"],
-                FunctionMode::Exec,
+                DeclKind::Exec,
             ),
         );
         atoms.insert(
             "probe:a/1.0/mod/g()".to_string(),
-            make_atom(
-                "g",
-                "src/lib.rs",
-                &["probe:c/1.0/mod/i()"],
-                FunctionMode::Proof,
-            ),
+            make_atom("g", "src/lib.rs", &["probe:c/1.0/mod/i()"], DeclKind::Proof),
         );
         atoms.insert("probe:b/1.0/mod/h()".to_string(), make_stub("h", &[]));
         atoms.insert("probe:c/1.0/mod/i()".to_string(), make_stub("i", &[]));
@@ -359,21 +349,11 @@ mod tests {
         let mut atoms = BTreeMap::new();
         atoms.insert(
             "probe:a/1.0/mod/f()".to_string(),
-            make_atom(
-                "f",
-                "src/lib.rs",
-                &["probe:a/1.0/mod/g()"],
-                FunctionMode::Exec,
-            ),
+            make_atom("f", "src/lib.rs", &["probe:a/1.0/mod/g()"], DeclKind::Exec),
         );
         atoms.insert(
             "probe:a/1.0/mod/g()".to_string(),
-            make_atom(
-                "g",
-                "src/lib.rs",
-                &["probe:a/1.0/mod/f()"],
-                FunctionMode::Exec,
-            ),
+            make_atom("g", "src/lib.rs", &["probe:a/1.0/mod/f()"], DeclKind::Exec),
         );
 
         let callees = collect_callees_up_to_depth(&atoms, "probe:a/1.0/mod/f()", 10);
@@ -386,12 +366,7 @@ mod tests {
         let mut atoms = BTreeMap::new();
         atoms.insert(
             "probe:a/1.0/mod/f()".to_string(),
-            make_atom(
-                "f",
-                "src/lib.rs",
-                &["probe:a/1.0/mod/g()"],
-                FunctionMode::Exec,
-            ),
+            make_atom("f", "src/lib.rs", &["probe:a/1.0/mod/g()"], DeclKind::Exec),
         );
 
         let callees = collect_callees_up_to_depth(&atoms, "probe:a/1.0/mod/f()", 0);
@@ -422,7 +397,7 @@ mod tests {
         let mut atoms = BTreeMap::new();
         atoms.insert(
             "probe:a/1.0/mod/f()".to_string(),
-            make_atom("f", "src/lib.rs", &[], FunctionMode::Exec),
+            make_atom("f", "src/lib.rs", &[], DeclKind::Exec),
         );
 
         let resolved = resolve_function(&atoms, "probe:a/1.0/mod/f()").unwrap();
@@ -434,7 +409,7 @@ mod tests {
         let mut atoms = BTreeMap::new();
         atoms.insert(
             "probe:a/1.0/mod/my_func()".to_string(),
-            make_atom("my_func", "src/lib.rs", &[], FunctionMode::Exec),
+            make_atom("my_func", "src/lib.rs", &[], DeclKind::Exec),
         );
 
         let resolved = resolve_function(&atoms, "my_func").unwrap();
@@ -452,11 +427,11 @@ mod tests {
         let mut atoms = BTreeMap::new();
         atoms.insert(
             "probe:a/1.0/mod/f()".to_string(),
-            make_atom("f", "src/a.rs", &[], FunctionMode::Exec),
+            make_atom("f", "src/a.rs", &[], DeclKind::Exec),
         );
         atoms.insert(
             "probe:b/1.0/mod/f()".to_string(),
-            make_atom("f", "src/b.rs", &[], FunctionMode::Exec),
+            make_atom("f", "src/b.rs", &[], DeclKind::Exec),
         );
 
         assert!(resolve_function(&atoms, "f").is_err());
@@ -467,11 +442,11 @@ mod tests {
         let mut atoms = BTreeMap::new();
         atoms.insert(
             "probe:a/1.0/mod/unique_name()".to_string(),
-            make_atom("unique_name", "src/lib.rs", &[], FunctionMode::Exec),
+            make_atom("unique_name", "src/lib.rs", &[], DeclKind::Exec),
         );
         atoms.insert(
             "probe:a/1.0/mod/other()".to_string(),
-            make_atom("other", "src/lib.rs", &[], FunctionMode::Exec),
+            make_atom("other", "src/lib.rs", &[], DeclKind::Exec),
         );
 
         let resolved = resolve_function(&atoms, "unique").unwrap();

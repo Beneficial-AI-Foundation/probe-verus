@@ -6,7 +6,7 @@
 //! This module also provides functionality to find all functions in a project,
 //! including support for Verus-specific constructs (spec, proof, exec functions).
 
-use crate::FunctionMode;
+use crate::DeclKind;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -26,20 +26,20 @@ pub struct FunctionSpan {
     pub name: String,
     pub start_line: usize,
     pub end_line: usize,
-    /// Verus function mode
-    pub mode: FunctionMode,
+    /// Declaration kind (spec, proof, exec)
+    pub kind: DeclKind,
     /// Line range of requires clause (start, end), if present
     pub requires_range: Option<(usize, usize)>,
     /// Line range of ensures clause (start, end), if present
     pub ensures_range: Option<(usize, usize)>,
 }
 
-/// Convert FnMode to FunctionMode
-fn convert_mode(mode: &FnMode) -> FunctionMode {
+/// Convert FnMode to DeclKind
+fn convert_kind(mode: &FnMode) -> DeclKind {
     match mode {
-        FnMode::Spec(_) | FnMode::SpecChecked(_) => FunctionMode::Spec,
-        FnMode::Proof(_) | FnMode::ProofAxiom(_) => FunctionMode::Proof,
-        FnMode::Exec(_) | FnMode::Default => FunctionMode::Exec,
+        FnMode::Spec(_) | FnMode::SpecChecked(_) => DeclKind::Spec,
+        FnMode::Proof(_) | FnMode::ProofAxiom(_) => DeclKind::Proof,
+        FnMode::Exec(_) | FnMode::Default => DeclKind::Exec,
     }
 }
 
@@ -184,14 +184,14 @@ impl<'ast> Visit<'ast> for FunctionSpanVisitor {
         let span = node.span();
         let start_line = span.start().line;
         let end_line = span.end().line;
-        let mode = convert_mode(&node.sig.mode);
+        let kind = convert_kind(&node.sig.mode);
         let (requires_range, ensures_range) = Self::extract_spec_ranges(&node.sig);
 
         self.functions.push(FunctionSpan {
             name,
             start_line,
             end_line,
-            mode,
+            kind,
             requires_range,
             ensures_range,
         });
@@ -205,14 +205,14 @@ impl<'ast> Visit<'ast> for FunctionSpanVisitor {
         let span = node.span();
         let start_line = span.start().line;
         let end_line = span.end().line;
-        let mode = convert_mode(&node.sig.mode);
+        let kind = convert_kind(&node.sig.mode);
         let (requires_range, ensures_range) = Self::extract_spec_ranges(&node.sig);
 
         self.functions.push(FunctionSpan {
             name,
             start_line,
             end_line,
-            mode,
+            kind,
             requires_range,
             ensures_range,
         });
@@ -226,14 +226,14 @@ impl<'ast> Visit<'ast> for FunctionSpanVisitor {
         let span = node.span();
         let start_line = span.start().line;
         let end_line = span.end().line;
-        let mode = convert_mode(&node.sig.mode);
+        let kind = convert_kind(&node.sig.mode);
         let (requires_range, ensures_range) = Self::extract_spec_ranges(&node.sig);
 
         self.functions.push(FunctionSpan {
             name,
             start_line,
             end_line,
-            mode,
+            kind,
             requires_range,
             ensures_range,
         });
@@ -386,11 +386,11 @@ pub fn parse_file_for_spans(file_path: &Path) -> Result<Vec<FunctionSpan>, Strin
     Ok(visitor.functions)
 }
 
-/// Span and mode information for a function
+/// Span and declaration kind information for a function
 #[derive(Debug, Clone)]
 pub struct SpanAndMode {
     pub end_line: usize,
-    pub mode: FunctionMode,
+    pub kind: DeclKind,
     /// Line range of requires clause (start, end), if present
     pub requires_range: Option<(usize, usize)>,
     /// Line range of ensures clause (start, end), if present
@@ -423,7 +423,7 @@ pub fn build_function_span_map(
                     key,
                     SpanAndMode {
                         end_line: func.end_line,
-                        mode: func.mode,
+                        kind: func.kind,
                         requires_range: func.requires_range,
                         ensures_range: func.ensures_range,
                     },
@@ -478,21 +478,21 @@ pub fn get_function_end_line(
     None
 }
 
-/// Get the function mode (exec, proof, spec) given its path, name, and start line.
+/// Get the declaration kind (exec, proof, spec) given its path, name, and start line.
 ///
 /// Uses the same lookup strategy as get_function_end_line.
-pub fn get_function_mode(
+pub fn get_function_kind(
     span_map: &HashMap<(String, String, usize), SpanAndMode>,
     relative_path: &str,
     function_name: &str,
     start_line: usize,
-) -> Option<FunctionMode> {
+) -> Option<DeclKind> {
     let bare_name = bare_function_name(function_name);
 
     // Try exact match first
     let key = (relative_path.to_string(), bare_name.to_string(), start_line);
     if let Some(span_and_mode) = span_map.get(&key) {
-        return Some(span_and_mode.mode);
+        return Some(span_and_mode.kind);
     }
 
     // Try containment match
@@ -502,7 +502,7 @@ pub fn get_function_mode(
             && start_line >= *parsed_start
             && start_line <= span_and_mode.end_line
         {
-            return Some(span_and_mode.mode);
+            return Some(span_and_mode.kind);
         }
     }
 
@@ -558,10 +558,10 @@ pub struct FunctionInfo {
     pub file: Option<String>,
     #[serde(rename = "spec-text")]
     pub spec_text: SpecText,
-    /// Function mode: exec, proof, or spec (from sig.mode)
-    pub mode: FunctionMode,
+    /// Declaration kind (spec, proof, exec)
+    pub kind: DeclKind,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub kind: Option<String>,
+    pub kind_display: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub visibility: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -959,7 +959,7 @@ impl FunctionInfoVisitor {
             return;
         }
 
-        let kind = if self.show_kind {
+        let kind_display = if self.show_kind {
             Some(self.extract_function_kind(sig))
         } else {
             None
@@ -975,8 +975,8 @@ impl FunctionInfoVisitor {
         let end_line = span.end().line;
         let fn_line = sig.ident.span().start().line;
 
-        // Extract function mode
-        let mode = convert_mode(&sig.mode);
+        // Extract declaration kind
+        let kind = convert_kind(&sig.mode);
 
         // Extract spec information
         let has_requires = sig.spec.requires.is_some();
@@ -1053,7 +1053,7 @@ impl FunctionInfoVisitor {
         };
         let doc_comment = self.extract_doc_comment(start_line);
         let signature_text = self.extract_signature_text(start_line, end_line);
-        let body_text = if self.include_extended_info && mode == FunctionMode::Spec {
+        let body_text = if self.include_extended_info && kind == DeclKind::Spec {
             self.extract_body_text(start_line, end_line)
         } else {
             None
@@ -1066,8 +1066,8 @@ impl FunctionInfoVisitor {
                 lines_start: start_line,
                 lines_end: end_line,
             },
-            mode,
             kind,
+            kind_display,
             visibility,
             context,
             specified: has_requires || has_ensures,

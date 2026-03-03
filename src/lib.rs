@@ -20,47 +20,47 @@ use constants::{
 };
 
 // =============================================================================
-// Function Mode Enum
+// Declaration Kind Enum
 // =============================================================================
 
-/// Verus function mode - indicates what kind of verification is performed.
+/// Declaration kind - indicates what kind of verification is performed.
 ///
 /// - `Exec`: Executable code, compiled to native code and verified
 /// - `Proof`: Proof code, verified but not compiled (erased at runtime)
 /// - `Spec`: Specification code, defines logical properties (erased at runtime)
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum FunctionMode {
+pub enum DeclKind {
     #[default]
     Exec,
     Proof,
     Spec,
 }
 
-impl FunctionMode {
+impl DeclKind {
     /// Parse a function mode from a string.
     ///
     /// Accepts: "exec", "proof", "spec" (case-insensitive)
     /// Returns `Exec` for unrecognized values (the default mode).
     pub fn parse(s: &str) -> Self {
         match s.to_lowercase().as_str() {
-            "proof" => FunctionMode::Proof,
-            "spec" => FunctionMode::Spec,
-            _ => FunctionMode::Exec,
+            "proof" => DeclKind::Proof,
+            "spec" => DeclKind::Spec,
+            _ => DeclKind::Exec,
         }
     }
 
     /// Convert to a string representation.
     pub fn as_str(&self) -> &'static str {
         match self {
-            FunctionMode::Exec => "exec",
-            FunctionMode::Proof => "proof",
-            FunctionMode::Spec => "spec",
+            DeclKind::Exec => "exec",
+            DeclKind::Proof => "proof",
+            DeclKind::Spec => "spec",
         }
     }
 }
 
-impl fmt::Display for FunctionMode {
+impl fmt::Display for DeclKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.as_str())
     }
@@ -197,8 +197,8 @@ pub struct AtomWithLines {
     pub code_path: String,
     #[serde(rename = "code-text")]
     pub code_text: CodeTextInfo,
-    /// Verus function mode: exec, proof, or spec
-    pub mode: FunctionMode,
+    /// Declaration kind: exec, proof, or spec
+    pub kind: DeclKind,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1079,7 +1079,7 @@ fn convert_to_atoms_with_lines_internal(
         lines_start: usize,
         lines_end: usize,
         base_code_name: String,
-        mode: FunctionMode,
+        kind: DeclKind,
         /// Line range of requires clause, if present
         requires_range: Option<(usize, usize)>,
         /// Line range of ensures clause, if present
@@ -1110,17 +1110,17 @@ fn convert_to_atoms_with_lines_internal(
                 }
             };
 
-            // Get mode from span_map (defaults to Exec if not found)
-            let mode = if let Some(map) = span_map {
-                verus_parser::get_function_mode(
+            // Get kind from span_map (defaults to Exec if not found)
+            let kind = if let Some(map) = span_map {
+                verus_parser::get_function_kind(
                     map,
                     &node.relative_path,
                     &node.display_name,
                     lines_start,
                 )
-                .unwrap_or(FunctionMode::Exec)
+                .unwrap_or(DeclKind::Exec)
             } else {
-                FunctionMode::Exec
+                DeclKind::Exec
             };
 
             // Get spec ranges (requires/ensures line ranges)
@@ -1148,7 +1148,7 @@ fn convert_to_atoms_with_lines_internal(
                 lines_start,
                 lines_end,
                 base_code_name,
-                mode,
+                kind,
                 requires_range,
                 ensures_range,
             }
@@ -1452,7 +1452,7 @@ fn convert_to_atoms_with_lines_internal(
                     lines_start: data.lines_start,
                     lines_end: data.lines_end,
                 },
-                mode: data.mode,
+                kind: data.kind,
             }
         })
         .collect()
@@ -1565,7 +1565,7 @@ pub fn add_external_stubs(atoms_dict: &mut BTreeMap<String, AtomWithLines>) -> u
                     lines_start: 0,
                     lines_end: 0,
                 },
-                mode: FunctionMode::Exec,
+                kind: DeclKind::Exec,
             },
         );
     }
@@ -1816,7 +1816,7 @@ mod tests {
                     lines_start: 10,
                     lines_end: 20,
                 },
-                mode: FunctionMode::Exec,
+                kind: DeclKind::Exec,
             },
         );
 
@@ -1852,7 +1852,7 @@ mod tests {
                     lines_start: 10,
                     lines_end: 20,
                 },
-                mode: FunctionMode::Exec,
+                kind: DeclKind::Exec,
             },
         );
         atoms_dict.insert(
@@ -1868,7 +1868,7 @@ mod tests {
                     lines_start: 30,
                     lines_end: 40,
                 },
-                mode: FunctionMode::Exec,
+                kind: DeclKind::Exec,
             },
         );
 

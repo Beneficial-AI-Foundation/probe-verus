@@ -1,11 +1,11 @@
 //! Taxonomy classification for function specifications.
 //!
 //! Loads classification rules from a TOML config file and evaluates them
-//! against structured function metadata (mode, ensures_calls, etc.)
+//! against structured function metadata (kind, ensures_calls, etc.)
 //! to produce spec taxonomy labels.
 
 use crate::verus_parser::FunctionInfo;
-use crate::FunctionMode;
+use crate::DeclKind;
 use serde::Deserialize;
 use std::path::Path;
 
@@ -165,7 +165,7 @@ fn explain_rule_match(func: &FunctionInfo, criteria: &MatchCriteria) -> Vec<(Str
     let mut results = Vec::new();
 
     if let Some(modes) = &criteria.mode {
-        let func_mode = mode_to_string(&func.mode);
+        let func_mode = kind_to_string(&func.kind);
         let passed = modes.iter().any(|m| m == func_mode);
         results.push((format!("mode={:?}", modes), passed));
     }
@@ -300,7 +300,7 @@ fn explain_rule_match(func: &FunctionInfo, criteria: &MatchCriteria) -> Vec<(Str
 fn rule_matches(func: &FunctionInfo, criteria: &MatchCriteria) -> bool {
     // Mode check
     if let Some(modes) = &criteria.mode {
-        let func_mode = mode_to_string(&func.mode);
+        let func_mode = kind_to_string(&func.kind);
         if !modes.iter().any(|m| m == func_mode) {
             return false;
         }
@@ -456,11 +456,11 @@ fn rule_matches(func: &FunctionInfo, criteria: &MatchCriteria) -> bool {
     true
 }
 
-fn mode_to_string(mode: &FunctionMode) -> &'static str {
-    match mode {
-        FunctionMode::Exec => "exec",
-        FunctionMode::Proof => "proof",
-        FunctionMode::Spec => "spec",
+fn kind_to_string(kind: &DeclKind) -> &'static str {
+    match kind {
+        DeclKind::Exec => "exec",
+        DeclKind::Proof => "proof",
+        DeclKind::Spec => "spec",
     }
 }
 
@@ -469,7 +469,7 @@ mod tests {
     use super::*;
     use crate::verus_parser::SpecText;
 
-    fn make_func(mode: FunctionMode, ensures_calls: Vec<&str>) -> FunctionInfo {
+    fn make_func(kind: DeclKind, ensures_calls: Vec<&str>) -> FunctionInfo {
         FunctionInfo {
             name: "test_fn".to_string(),
             file: Some("src/test.rs".to_string()),
@@ -477,8 +477,8 @@ mod tests {
                 lines_start: 1,
                 lines_end: 10,
             },
-            mode,
-            kind: None,
+            kind,
+            kind_display: None,
             visibility: None,
             context: Some("standalone".to_string()),
             specified: !ensures_calls.is_empty(),
@@ -526,10 +526,10 @@ mod tests {
             mode = ["spec"]
         "#,
         );
-        let func = make_func(FunctionMode::Spec, vec![]);
+        let func = make_func(DeclKind::Spec, vec![]);
         assert_eq!(classify_function(&func, &config), vec!["spec-def"]);
 
-        let exec_func = make_func(FunctionMode::Exec, vec![]);
+        let exec_func = make_func(DeclKind::Exec, vec![]);
         assert!(classify_function(&exec_func, &config).is_empty());
     }
 
@@ -548,12 +548,12 @@ mod tests {
         "#,
         );
         let func = make_func(
-            FunctionMode::Exec,
+            DeclKind::Exec,
             vec!["is_canonical_scalar52", "scalar52_to_nat"],
         );
         assert_eq!(classify_function(&func, &config), vec!["data-invariant"]);
 
-        let no_match = make_func(FunctionMode::Exec, vec!["scalar52_to_nat"]);
+        let no_match = make_func(DeclKind::Exec, vec!["scalar52_to_nat"]);
         assert!(classify_function(&no_match, &config).is_empty());
     }
 
@@ -579,7 +579,7 @@ mod tests {
         "#,
         );
         let func = make_func(
-            FunctionMode::Exec,
+            DeclKind::Exec,
             vec!["is_canonical_scalar52", "scalar52_to_nat"],
         );
         let labels = classify_function(&func, &config);
@@ -603,16 +603,16 @@ mod tests {
         "#,
         );
         // Exec function with ensures but NO function calls in ensures -> should match
-        let mut func = make_func(FunctionMode::Exec, vec![]);
+        let mut func = make_func(DeclKind::Exec, vec![]);
         func.has_ensures = true;
         assert_eq!(classify_function(&func, &config), vec!["memory-safety"]);
 
         // Exec function with ensures AND function calls -> should NOT match
-        let func2 = make_func(FunctionMode::Exec, vec!["spec_foo"]);
+        let func2 = make_func(DeclKind::Exec, vec!["spec_foo"]);
         assert!(classify_function(&func2, &config).is_empty());
 
         // Exec function with no ensures at all -> should NOT match
-        let func3 = make_func(FunctionMode::Exec, vec![]);
+        let func3 = make_func(DeclKind::Exec, vec![]);
         assert!(classify_function(&func3, &config).is_empty());
     }
 
@@ -634,12 +634,12 @@ mod tests {
         "#,
         );
         // Function with ensures calls that are ALL stop words -> after filtering, empty
-        let mut func = make_func(FunctionMode::Exec, vec!["len", "old"]);
+        let mut func = make_func(DeclKind::Exec, vec!["len", "old"]);
         func.has_ensures = true;
         assert_eq!(classify_function(&func, &config), vec!["memory-safety"]);
 
         // Function with ensures calls that include non-stop-word -> not empty after filtering
-        let mut func2 = make_func(FunctionMode::Exec, vec!["len", "recover"]);
+        let mut func2 = make_func(DeclKind::Exec, vec!["len", "recover"]);
         func2.has_ensures = true;
         assert!(classify_function(&func2, &config).is_empty());
     }
@@ -659,13 +659,13 @@ mod tests {
             mode = ["exec"]
         "#,
         );
-        let func = make_func(FunctionMode::Exec, vec!["spec_foo"]);
+        let func = make_func(DeclKind::Exec, vec!["spec_foo"]);
         let explanations = explain_function(&func, &config);
         assert_eq!(explanations.len(), 1);
         assert!(explanations[0].matched);
         assert!(explanations[0].criteria_results.iter().all(|(_, p)| *p));
 
-        let func2 = make_func(FunctionMode::Proof, vec!["spec_foo"]);
+        let func2 = make_func(DeclKind::Proof, vec!["spec_foo"]);
         let explanations2 = explain_function(&func2, &config);
         assert!(!explanations2[0].matched);
         // mode criterion should have failed
@@ -693,11 +693,11 @@ mod tests {
         "#,
         );
         // proof mode + spec_ call -> should NOT match (mode fails)
-        let func = make_func(FunctionMode::Proof, vec!["spec_foo"]);
+        let func = make_func(DeclKind::Proof, vec!["spec_foo"]);
         assert!(classify_function(&func, &config).is_empty());
 
         // exec mode + spec_ call -> should match
-        let func2 = make_func(FunctionMode::Exec, vec!["spec_foo"]);
+        let func2 = make_func(DeclKind::Exec, vec!["spec_foo"]);
         assert_eq!(classify_function(&func2, &config), vec!["fc"]);
     }
 }

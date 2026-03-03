@@ -5,7 +5,7 @@
 //! `function,module,link,has_spec,has_proof`
 
 use probe_verus::verus_parser::{compute_project_prefix, parse_all_functions_ext};
-use probe_verus::FunctionMode;
+use probe_verus::DeclKind;
 use std::path::PathBuf;
 
 /// Generate the tracked CSV file.
@@ -36,7 +36,7 @@ pub fn cmd_tracked_csv(src_path: PathBuf, output: PathBuf, github_base_url: Opti
     for func in &parsed.functions {
         // Only track exec-mode functions (the actual Rust implementations).
         // Proof-mode functions are Verus lemmas, and spec functions have no bodies.
-        if func.mode != FunctionMode::Exec {
+        if func.kind != DeclKind::Exec {
             continue;
         }
 

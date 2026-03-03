@@ -76,7 +76,7 @@ pub fn cmd_functions(
         OutputFormat::Detailed => {
             for func in &parsed_output.functions {
                 print!("{}", func.name);
-                if let Some(ref kind) = func.kind {
+                if let Some(ref kind) = func.kind_display {
                     print!(" [{}]", kind);
                 }
                 if let Some(ref vis) = func.visibility {

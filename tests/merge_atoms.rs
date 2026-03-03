@@ -82,7 +82,7 @@ fn test_merge_fixtures_match_expected() {
             key
         );
         assert_eq!(
-            merged_atom.mode, expected_atom.mode,
+            merged_atom.kind, expected_atom.kind,
             "mode mismatch for {}",
             key
         );
@@ -124,7 +124,7 @@ fn test_merge_stubs_replaced_with_real_atoms() {
     let merged = load_atoms(output_path.to_str().unwrap());
     let compute_merged = merged.get("probe:crate-b/1.0/helpers/compute()").unwrap();
     assert_eq!(compute_merged.code_path, "crate-b/src/helpers.rs");
-    assert_eq!(compute_merged.mode, probe_verus::FunctionMode::Spec);
+    assert_eq!(compute_merged.kind, probe_verus::DeclKind::Spec);
 }
 
 #[test]

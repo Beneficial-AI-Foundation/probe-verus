@@ -6,7 +6,7 @@
 //! existing specs_data.json schema consumed by docs/specs.js.
 
 use probe_verus::verus_parser::{compute_project_prefix, parse_all_functions_ext, FunctionInfo};
-use probe_verus::FunctionMode;
+use probe_verus::DeclKind;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -352,7 +352,7 @@ pub fn cmd_specs_data(
     let spec_names: HashSet<String> = parsed
         .functions
         .iter()
-        .filter(|f| f.mode == FunctionMode::Spec)
+        .filter(|f| f.kind == DeclKind::Spec)
         .map(|f| f.name.clone())
         .collect();
 
@@ -386,12 +386,12 @@ pub fn cmd_specs_data(
             .map(|v: &str| v.starts_with("pub"))
             .unwrap_or(false);
 
-        match func.mode {
-            FunctionMode::Spec => {
+        match func.kind {
+            DeclKind::Spec => {
                 let signature = func.signature_text.as_deref().unwrap_or("").to_string();
                 let body = func.body_text.as_deref().unwrap_or("").to_string();
                 let vis = func
-                    .kind
+                    .kind_display
                     .as_deref()
                     .map(|k: &str| {
                         if is_public {
@@ -437,7 +437,7 @@ pub fn cmd_specs_data(
                     referenced_specs: spec_refs,
                 });
             }
-            FunctionMode::Proof if func.name.starts_with("axiom_") => {
+            DeclKind::Proof if func.name.starts_with("axiom_") => {
                 let signature = func.signature_text.as_deref().unwrap_or("").to_string();
                 let body = func.body_text.as_deref().unwrap_or("").to_string();
                 let short_module = derive_short_module(module_path);
@@ -461,11 +461,11 @@ pub fn cmd_specs_data(
                     referenced_specs: refs,
                 });
             }
-            FunctionMode::Proof => {
+            DeclKind::Proof => {
                 // Non-axiom proof functions (lemmas) are excluded from the
                 // specs browser to stay consistent with the homepage dashboard.
             }
-            FunctionMode::Exec => {
+            DeclKind::Exec => {
                 // Only exec-mode functions with real specs, excluding external_body.
                 // This matches the tracked-csv selection so the specs browser
                 // count is consistent with the homepage dashboard.

@@ -266,7 +266,7 @@ fn find_matching_atom(func: &FunctionInfo, atoms: &BTreeMap<String, AtomEntry>) 
 mod tests {
     use super::*;
     use probe_verus::verus_parser::SpecText;
-    use probe_verus::FunctionMode;
+    use probe_verus::DeclKind;
 
     fn make_func(
         name: &str,
@@ -282,8 +282,8 @@ mod tests {
                 lines_start: span_start,
                 lines_end: span_end,
             },
-            mode: FunctionMode::Exec,
-            kind: None,
+            kind: DeclKind::Exec,
+            kind_display: None,
             visibility: None,
             context: None,
             specified: false,

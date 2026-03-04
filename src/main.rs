@@ -254,6 +254,14 @@ enum Commands {
         /// Output file path (prints to stdout if omitted)
         #[arg(short, long)]
         output: Option<PathBuf>,
+
+        /// Exclude standard library crates (core, alloc, std) from output
+        #[arg(long)]
+        exclude_stdlib: bool,
+
+        /// Exclude specific crates from output (comma-separated list)
+        #[arg(long, value_delimiter = ',')]
+        exclude_crates: Vec<String>,
     },
 
     /// Install or check status of external tools (verus-analyzer, scip)
@@ -422,8 +430,17 @@ fn main() {
             depth,
             atoms_file,
             output,
+            exclude_stdlib,
+            exclude_crates,
         } => {
-            cmd_callee_crates(function, depth, atoms_file, output);
+            cmd_callee_crates(
+                function,
+                depth,
+                atoms_file,
+                output,
+                exclude_stdlib,
+                exclude_crates,
+            );
         }
         Commands::Stubify { path, output } => {
             cmd_stubify(path, output);

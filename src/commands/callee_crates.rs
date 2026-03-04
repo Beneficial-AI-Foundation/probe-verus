@@ -74,12 +74,25 @@ pub fn collect_callees_up_to_depth(
     result
 }
 
+const STDLIB_CRATES: &[&str] = &["core", "alloc", "std"];
+
 /// Group a set of code-names by (crate, version), returning sorted CrateEntry list.
-pub fn group_by_crate(code_names: &BTreeSet<String>) -> Vec<CrateEntry> {
+/// Optionally excludes stdlib crates and/or a custom set of crate names.
+pub fn group_by_crate(
+    code_names: &BTreeSet<String>,
+    exclude_stdlib: bool,
+    exclude_crates: &[String],
+) -> Vec<CrateEntry> {
     let mut groups: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
 
     for name in code_names {
         if let Some((crate_name, version)) = extract_crate_info(name) {
+            if exclude_stdlib && STDLIB_CRATES.contains(&crate_name) {
+                continue;
+            }
+            if exclude_crates.iter().any(|e| e == crate_name) {
+                continue;
+            }
             groups
                 .entry((crate_name.to_string(), version.to_string()))
                 .or_default()
@@ -197,6 +210,8 @@ pub fn cmd_callee_crates(
     depth: usize,
     atoms_file: Option<PathBuf>,
     output: Option<PathBuf>,
+    exclude_stdlib: bool,
+    exclude_crates: Vec<String>,
 ) {
     let atoms = match load_atoms(atoms_file) {
         Ok(a) => a,
@@ -215,7 +230,7 @@ pub fn cmd_callee_crates(
     };
 
     let callees = collect_callees_up_to_depth(&atoms, &resolved, depth);
-    let crates = group_by_crate(&callees);
+    let crates = group_by_crate(&callees, exclude_stdlib, &exclude_crates);
 
     let output_data = CalleeCratesOutput {
         function: resolved,
@@ -380,7 +395,7 @@ mod tests {
         names.insert("probe:vstd/0.1.0/mod/g()".to_string());
         names.insert("probe:dalek/4.1.3/scalar/add()".to_string());
 
-        let groups = group_by_crate(&names);
+        let groups = group_by_crate(&names, false, &[]);
         assert_eq!(groups.len(), 2);
 
         assert_eq!(groups[0].crate_name, "dalek");
@@ -390,6 +405,60 @@ mod tests {
         assert_eq!(groups[1].crate_name, "vstd");
         assert_eq!(groups[1].version, "0.1.0");
         assert_eq!(groups[1].functions.len(), 2);
+    }
+
+    #[test]
+    fn test_group_by_crate_exclude_stdlib() {
+        let mut names = BTreeSet::new();
+        names.insert(
+            "probe:core/https://github.com/rust-lang/rust/library/core/option/impl#map()"
+                .to_string(),
+        );
+        names.insert(
+            "probe:alloc/https://github.com/rust-lang/rust/library/alloc/vec/impl#push()"
+                .to_string(),
+        );
+        names.insert(
+            "probe:std/https://github.com/rust-lang/rust/library/std/time/impl#now()".to_string(),
+        );
+        names.insert("probe:spqr/1.5.0/send()".to_string());
+        names.insert("probe:signal-crypto/0.1.0/aes_cbc/encrypt()".to_string());
+
+        let groups = group_by_crate(&names, true, &[]);
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].crate_name, "signal-crypto");
+        assert_eq!(groups[1].crate_name, "spqr");
+    }
+
+    #[test]
+    fn test_group_by_crate_exclude_custom() {
+        let mut names = BTreeSet::new();
+        names.insert("probe:spqr/1.5.0/send()".to_string());
+        names.insert("probe:hex/0.4.3/encode()".to_string());
+        names.insert("probe:prost/0.14.1/message/Message#encode()".to_string());
+        names.insert("probe:signal-crypto/0.1.0/aes_cbc/encrypt()".to_string());
+
+        let exclude = vec!["hex".to_string(), "prost".to_string()];
+        let groups = group_by_crate(&names, false, &exclude);
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].crate_name, "signal-crypto");
+        assert_eq!(groups[1].crate_name, "spqr");
+    }
+
+    #[test]
+    fn test_group_by_crate_exclude_both() {
+        let mut names = BTreeSet::new();
+        names.insert(
+            "probe:core/https://github.com/rust-lang/rust/library/core/option/impl#map()"
+                .to_string(),
+        );
+        names.insert("probe:hex/0.4.3/encode()".to_string());
+        names.insert("probe:spqr/1.5.0/send()".to_string());
+
+        let exclude = vec!["hex".to_string()];
+        let groups = group_by_crate(&names, true, &exclude);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].crate_name, "spqr");
     }
 
     #[test]

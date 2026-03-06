@@ -4,9 +4,12 @@
 //! from other indexed projects, enabling cross-project call graphs without
 //! requiring a single combined workspace.
 
+use probe_verus::metadata::{
+    extract_envelope_inputs, unwrap_envelope, wrap_merged_envelope, MergedInput,
+};
 use probe_verus::{normalize_code_name, AtomWithLines};
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// A stub is an atom with no source: empty code_path and zero-length span.
 fn is_stub(atom: &AtomWithLines) -> bool {
@@ -47,19 +50,30 @@ fn normalize_atoms_map(
     (normalized, changed)
 }
 
-/// Load an atoms.json file into a BTreeMap, reconstructing code_name fields
-/// from the dictionary keys (since code_name is skip_serializing).
-fn load_atoms_file(path: &PathBuf) -> Result<BTreeMap<String, AtomWithLines>, String> {
+/// Load an atoms.json file into a BTreeMap, supporting both bare-dict and enveloped formats.
+/// Reconstructs code_name fields from the dictionary keys (since code_name is skip_serializing).
+/// Returns the atoms and any `MergedInput` entries extracted from the envelope metadata.
+/// For single-source envelopes this is one entry; for merged envelopes all nested inputs
+/// are propagated, preserving provenance on recursive merge.
+fn load_atoms_file(
+    path: &Path,
+) -> Result<(BTreeMap<String, AtomWithLines>, Vec<MergedInput>), String> {
     let content = std::fs::read_to_string(path)
         .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
-    let mut atoms: BTreeMap<String, AtomWithLines> = serde_json::from_str(&content)
+    let json: serde_json::Value = serde_json::from_str(&content)
         .map_err(|e| format!("Failed to parse {}: {}", path.display(), e))?;
+
+    let inputs = extract_envelope_inputs(&json);
+    let data = unwrap_envelope(json);
+
+    let mut atoms: BTreeMap<String, AtomWithLines> = serde_json::from_value(data)
+        .map_err(|e| format!("Failed to deserialize atoms from {}: {}", path.display(), e))?;
 
     for (key, atom) in atoms.iter_mut() {
         atom.code_name = key.clone();
     }
 
-    Ok(atoms)
+    Ok((atoms, inputs))
 }
 
 /// Merge result statistics.
@@ -142,11 +156,13 @@ pub fn cmd_merge_atoms(inputs: Vec<PathBuf>, output: PathBuf) {
     }
 
     let mut maps = Vec::new();
+    let mut envelope_inputs: Vec<MergedInput> = Vec::new();
     for path in &inputs {
         println!("  Loading {}...", path.display());
         match load_atoms_file(path) {
-            Ok(atoms) => {
+            Ok((atoms, file_inputs)) => {
                 println!("    {} atoms loaded", atoms.len());
+                envelope_inputs.extend(file_inputs);
                 maps.push(atoms);
             }
             Err(e) => {
@@ -160,7 +176,9 @@ pub fn cmd_merge_atoms(inputs: Vec<PathBuf>, output: PathBuf) {
     println!("Merging {} files...", inputs.len());
     let (merged, stats) = merge_atoms_maps(maps);
 
-    let json = serde_json::to_string_pretty(&merged).expect("Failed to serialize JSON");
+    let timestamp = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let envelope = wrap_merged_envelope(&merged, envelope_inputs, &timestamp);
+    let json = serde_json::to_string_pretty(&envelope).expect("Failed to serialize JSON");
     std::fs::write(&output, &json).expect("Failed to write output file");
 
     println!();
@@ -201,6 +219,7 @@ mod tests {
                 lines_end: 20,
             },
             kind: DeclKind::Exec,
+            language: "rust".to_string(),
         }
     }
 
@@ -217,6 +236,7 @@ mod tests {
                 lines_end: 0,
             },
             kind: DeclKind::Exec,
+            language: "rust".to_string(),
         }
     }
 

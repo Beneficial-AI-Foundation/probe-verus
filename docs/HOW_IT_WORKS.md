@@ -110,14 +110,14 @@ When `--show-visibility` or `--show-kind` are enabled:
 
 ## Specification Extraction (`specify` command)
 
-The `specify` command extracts function specifications (requires/ensures clauses) from source files, keyed by probe-name from atoms.json. It can optionally classify each spec with taxonomy labels.
+The `specify` command extracts function specifications (requires/ensures clauses) from source files, keyed by probe-name from atoms. It can optionally classify each spec with taxonomy labels.
 
 ### Pipeline
 
-1. **Load atoms.json** to get the probe-name → function mappings
+1. **Load atoms** (from `.verilib/probes/` or an explicit path) to get the probe-name → function mappings
 2. **Parse source files** with `verus_syn` to extract:
    - Function definitions with their spans
-   - Function mode (`exec`, `proof`, `spec`) from `sig.mode`
+   - Declaration kind (`exec`, `proof`, `spec`) from the verus_syn AST
    - Whether each function has `requires`, `ensures`, or `decreases` clauses
    - Whether each function contains `assume()` or `admit()` calls
    - Called function names in ensures/requires (via `CallNameCollector` AST visitor)
@@ -158,7 +158,7 @@ These extracted call names are the basis for taxonomy classification — no rege
 
 When `--taxonomy-config` is provided, each function is classified against TOML-defined rules. Rules match on structured fields:
 
-- **`mode`**: Function mode (exec/proof/spec)
+- **`mode`**: Declaration kind (exec/proof/spec) — the TOML key is `mode` for historical reasons; it matches against the internal `DeclKind` enum
 - **`ensures_calls_contain`**: Substring match against extracted call names
 - **`has_ensures`**, **`has_requires`**, **`has_decreases`**: Boolean flags
 - **`context`**, **`name_contains`**, **`path_contains`**: Additional filters
@@ -171,7 +171,7 @@ An example config for curve25519-dalek (`spec_taxonomy_examples/spec-taxonomy-cu
 
 - **`code-path`**: Source file path
 - **`spec-text`**: Line range with `lines-start` and `lines-end`
-- **`mode`**: Verus function mode (`exec`, `proof`, or `spec`)
+- **`kind`**: Declaration kind (`exec`, `proof`, or `spec`)
 - **`specified`**: Whether the function has any specification (`has_requires` or `has_ensures`)
 - **`has_requires`**: Whether the function has a `requires` clause
 - **`has_ensures`**: Whether the function has an `ensures` clause
@@ -251,59 +251,56 @@ The analysis determines an overall status:
 
 ## Output Formats
 
-### Atoms JSON Format
+All JSON outputs are wrapped in a [Schema 2.0 metadata envelope](https://github.com/Beneficial-AI-Foundation/probe/blob/main/docs/envelope-rationale.md). Default output paths use the `.verilib/probes/` convention: `verus_<pkg>_<ver>[_suffix].json`.
+
+### Atoms (`probe-verus/atoms`)
+
+The `data` payload is a dictionary keyed by code-name:
 
 ```json
 {
-  "display-name": "my_function",
-  "code-name": "curve25519-dalek 4.1.3 module/my_function()",
-  "dependencies": ["..."],
-  "code-path": "src/lib.rs",
-  "code-text": {
-    "lines-start": 42,
-    "lines-end": 100
+  "schema": "probe-verus/atoms",
+  "schema-version": "2.0",
+  "tool": { "name": "probe-verus", "version": "2.0.0", "command": "atomize" },
+  "source": { "repo": "...", "commit": "...", "language": "rust", "package": "...", "package-version": "..." },
+  "timestamp": "2026-03-06T12:00:00Z",
+  "data": {
+    "probe:crate/1.0.0/module/my_function()": {
+      "display-name": "my_function",
+      "dependencies": ["..."],
+      "code-module": "module",
+      "code-path": "src/lib.rs",
+      "code-text": { "lines-start": 42, "lines-end": 100 },
+      "kind": "exec",
+      "language": "rust"
+    }
   }
 }
 ```
 
-### Analysis JSON Format
+### Proofs (`probe-verus/proofs`)
 
-The verification analysis output format is aligned with `atoms.json` for consistency:
+When atoms are available, the `data` payload is a dictionary keyed by code-name with verification status per function.
+
+### Verification Report (`probe-verus/verification-report`)
+
+When no atoms are available, the verify command produces a structured analysis result:
 
 ```json
 {
-  "status": "success|verification_failed|compilation_failed",
-  "summary": {
-    "total_functions": 42,
-    "verified_functions": 40,
-    "failed_functions": 2,
-    "compilation_errors": 0,
-    "compilation_warnings": 1,
-    "verification_errors": 2
-  },
-  "compilation": {
-    "errors": [...],
-    "warnings": [...]
-  },
-  "verification": {
-    "verified_functions": [
-      {
-        "display-name": "my_function",
-        "code-path": "src/lib.rs",
-        "code-text": { "lines-start": 10, "lines-end": 25 }
-      }
-    ],
-    "failed_functions": [
-      {
-        "display-name": "failing_function",
-        "code-path": "src/other.rs",
-        "code-text": { "lines-start": 30, "lines-end": 45 }
-      }
-    ],
-    "errors": [...]
+  "schema": "probe-verus/verification-report",
+  "...envelope fields...",
+  "data": {
+    "status": "success|verification_failed|compilation_failed",
+    "summary": {
+      "total_functions": 42,
+      "verified_functions": 40,
+      "failed_functions": 2
+    },
+    "verification": { "verified_functions": [...], "failed_functions": [...] },
+    "compilation": { "errors": [...], "warnings": [...] }
   }
 }
 ```
 
-Note: `verified_functions` and `failed_functions` use the same format as atoms.json entries (`display-name`, `code-path`, `code-text`).
-```
+Note: `verified_functions` and `failed_functions` use the same format as atoms entries (`display-name`, `code-path`, `code-text`).

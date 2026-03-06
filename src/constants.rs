@@ -89,18 +89,6 @@ pub const SCIP_INDEX_JSON_FILE: &str = "index.scip.json";
 // Default Output Filenames
 // =============================================================================
 
-/// Default output filename for atomize command
-pub const DEFAULT_ATOMS_OUTPUT: &str = "atoms.json";
-
-/// Default output filename for verify command
-pub const DEFAULT_RESULTS_OUTPUT: &str = "proofs.json";
-
-/// Default output filename for specify command
-pub const DEFAULT_SPECS_OUTPUT: &str = "specs.json";
-
-/// Default output filename for stubify command
-pub const DEFAULT_STUBS_OUTPUT: &str = "stubs.json";
-
 /// Default output directory for run command
 pub const DEFAULT_OUTPUT_DIR: &str = "./output";
 

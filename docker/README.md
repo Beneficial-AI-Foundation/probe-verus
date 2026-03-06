@@ -39,10 +39,14 @@ docker run --rm --user root \
 - `--regenerate-scip` - Force regeneration of the SCIP index
 - `-v, --verbose` - Enable verbose output
 
-**Output files:**
-- `atoms.json` - Call graph from atomize
-- `proofs.json` - Verification results from verify
+**Output files (inside the project directory):**
+- `.verilib/probes/verus_<pkg>_<ver>.json` - Call graph atoms from atomize
+- `.verilib/probes/verus_<pkg>_<ver>_proofs.json` - Verification results from verify
+
+**Output files (in the output directory):**
 - `run_summary.json` - Overall run status
+
+All JSON outputs are wrapped in a [Schema 2.0 metadata envelope](https://github.com/Beneficial-AI-Foundation/probe/blob/main/docs/envelope-rationale.md). Use `jq '.data'` to access the payload.
 
 ## Examples
 
@@ -89,63 +93,83 @@ docker run --rm --user root \
 
 ## Output Files
 
-| File | Description |
-|------|-------------|
-| `atoms.json` | Call graph with dependencies and line ranges |
-| `proofs.json` | Verification results (verified/failed/unverified functions) |
-| `run_summary.json` | Overall run status and summary |
+All JSON outputs are wrapped in a [Schema 2.0 metadata envelope](https://github.com/Beneficial-AI-Foundation/probe/blob/main/docs/envelope-rationale.md). The actual payload is in the `data` field.
 
-### atoms.json format
+| File | Location | Description |
+|------|----------|-------------|
+| `verus_<pkg>_<ver>.json` | `<project>/.verilib/probes/` | Call graph atoms with dependencies and line ranges |
+| `verus_<pkg>_<ver>_proofs.json` | `<project>/.verilib/probes/` | Verification results (verified/failed/unverified functions) |
+| `run_summary.json` | `<output-dir>/` | Overall run status and summary |
+
+### Atoms format (`probe-verus/atoms`)
 
 ```json
 {
-  "probe:crate/1.0.0/module/function()": {
-    "display-name": "function",
-    "dependencies": ["probe:crate/1.0.0/module/helper()"],
-    "code-module": "module",
-    "code-path": "src/lib.rs",
-    "code-text": { "lines-start": 10, "lines-end": 25 }
+  "schema": "probe-verus/atoms",
+  "schema-version": "2.0",
+  "tool": { "name": "probe-verus", "version": "2.0.0", "command": "atomize" },
+  "source": { "repo": "...", "commit": "...", "language": "rust", "package": "...", "package-version": "..." },
+  "timestamp": "2026-03-06T12:00:00Z",
+  "data": {
+    "probe:crate/1.0.0/module/function()": {
+      "display-name": "function",
+      "dependencies": ["probe:crate/1.0.0/module/helper()"],
+      "code-module": "module",
+      "code-path": "src/lib.rs",
+      "code-text": { "lines-start": 10, "lines-end": 25 },
+      "kind": "exec",
+      "language": "rust"
+    }
   }
 }
 ```
 
-### proofs.json format
+### Proofs format (`probe-verus/proofs`)
 
 ```json
 {
-  "status": "verification_failed",
-  "summary": {
-    "total_functions": 100,
-    "failed_functions": 2,
-    "verified_functions": 80,
-    "unverified_functions": 18
-  },
-  "verification": {
-    "failed_functions": [...],
-    "verified_functions": [...],
-    "unverified_functions": [...]
+  "schema": "probe-verus/proofs",
+  "schema-version": "2.0",
+  "tool": { "name": "probe-verus", "version": "2.0.0", "command": "verify" },
+  "source": { "repo": "...", "commit": "...", "language": "rust", "package": "...", "package-version": "..." },
+  "timestamp": "2026-03-06T12:00:00Z",
+  "data": {
+    "probe:crate/1.0.0/module/function()": {
+      "display-name": "function",
+      "code-path": "src/lib.rs",
+      "code-text": { "lines-start": 10, "lines-end": 25 },
+      "verified": true,
+      "verification-status": "verified"
+    }
   }
 }
 ```
 
-### run_summary.json format
+### Run summary format (`probe-verus/run-summary`)
 
 ```json
 {
-  "status": "success",
-  "atomize": {
-    "success": true,
-    "output_file": "/workspace/output/atoms.json",
-    "total_functions": 42
-  },
-  "verify": {
-    "success": true,
-    "output_file": "/workspace/output/proofs.json",
-    "summary": {
-      "total_functions": 42,
-      "verified": 40,
-      "failed": 0,
-      "unverified": 2
+  "schema": "probe-verus/run-summary",
+  "schema-version": "2.0",
+  "tool": { "name": "probe-verus", "version": "2.0.0", "command": "run" },
+  "source": { "repo": "...", "commit": "...", "language": "rust", "package": "...", "package-version": "..." },
+  "timestamp": "2026-03-06T12:00:00Z",
+  "data": {
+    "status": "success",
+    "atomize": {
+      "success": true,
+      "output_file": "<project>/.verilib/probes/verus_<pkg>_<ver>.json",
+      "total_functions": 42
+    },
+    "verify": {
+      "success": true,
+      "output_file": "<project>/.verilib/probes/verus_<pkg>_<ver>_proofs.json",
+      "summary": {
+        "total_functions": 42,
+        "verified": 40,
+        "failed": 0,
+        "unverified": 2
+      }
     }
   }
 }

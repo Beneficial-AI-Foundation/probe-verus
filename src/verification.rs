@@ -1107,8 +1107,17 @@ pub fn enrich_with_code_names(
     let content = fs::read_to_string(atoms_path)
         .map_err(|e| format!("Failed to read {}: {}", atoms_path.display(), e))?;
 
-    let atoms: HashMap<String, AtomEntry> = serde_json::from_str(&content)
+    let json: serde_json::Value = serde_json::from_str(&content)
         .map_err(|e| format!("Failed to parse {}: {}", atoms_path.display(), e))?;
+    let data = crate::metadata::unwrap_envelope(json);
+
+    let atoms: HashMap<String, AtomEntry> = serde_json::from_value(data).map_err(|e| {
+        format!(
+            "Failed to deserialize atoms from {}: {}",
+            atoms_path.display(),
+            e
+        )
+    })?;
 
     let mut enriched_count = 0;
 
@@ -1147,8 +1156,17 @@ pub fn convert_to_proofs_output(
     let content = fs::read_to_string(atoms_path)
         .map_err(|e| format!("Failed to read {}: {}", atoms_path.display(), e))?;
 
-    let atoms: HashMap<String, AtomEntry> = serde_json::from_str(&content)
+    let json: serde_json::Value = serde_json::from_str(&content)
         .map_err(|e| format!("Failed to parse {}: {}", atoms_path.display(), e))?;
+    let data = crate::metadata::unwrap_envelope(json);
+
+    let atoms: HashMap<String, AtomEntry> = serde_json::from_value(data).map_err(|e| {
+        format!(
+            "Failed to deserialize atoms from {}: {}",
+            atoms_path.display(),
+            e
+        )
+    })?;
 
     let mut output = ProofsOutput::new();
 

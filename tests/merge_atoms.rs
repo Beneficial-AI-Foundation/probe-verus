@@ -5,6 +5,7 @@
 //! - atoms_b.json: crate-b with real function entries
 //! - atoms_combined.json: expected result after merging
 
+use probe_verus::metadata::unwrap_envelope;
 use probe_verus::AtomWithLines;
 use std::collections::BTreeMap;
 use std::process::Command;
@@ -15,8 +16,11 @@ const FIXTURES: &str = "tests/fixtures/merge_test";
 fn load_atoms(path: &str) -> BTreeMap<String, AtomWithLines> {
     let content =
         std::fs::read_to_string(path).unwrap_or_else(|e| panic!("Failed to read {}: {}", path, e));
-    let mut atoms: BTreeMap<String, AtomWithLines> = serde_json::from_str(&content)
+    let json: serde_json::Value = serde_json::from_str(&content)
         .unwrap_or_else(|e| panic!("Failed to parse {}: {}", path, e));
+    let data = unwrap_envelope(json);
+    let mut atoms: BTreeMap<String, AtomWithLines> = serde_json::from_value(data)
+        .unwrap_or_else(|e| panic!("Failed to deserialize atoms from {}: {}", path, e));
     for (key, atom) in atoms.iter_mut() {
         atom.code_name = key.clone();
     }
@@ -83,7 +87,12 @@ fn test_merge_fixtures_match_expected() {
         );
         assert_eq!(
             merged_atom.kind, expected_atom.kind,
-            "mode mismatch for {}",
+            "kind mismatch for {}",
+            key
+        );
+        assert_eq!(
+            merged_atom.language, expected_atom.language,
+            "language mismatch for {}",
             key
         );
         assert_eq!(

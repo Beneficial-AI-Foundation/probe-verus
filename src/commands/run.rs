@@ -2,6 +2,10 @@
 
 use super::atomize::atomize_internal;
 use super::verify::{verify_internal, VerifySummary};
+use probe_verus::metadata::{
+    gather_metadata, get_default_output_path, wrap_in_envelope, AtomizeInternalConfig,
+    VerifyInternalConfig,
+};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
@@ -82,14 +86,18 @@ pub fn cmd_run(
         std::process::exit(1);
     }
 
-    // Create output directory
+    // Gather metadata once so atomize and verify share the same timestamp
+    let metadata = gather_metadata(&project_path);
+
+    // Use .verilib/probes/ convention for output paths, consistent with all other commands
+    let atoms_path = get_default_output_path(&project_path, &metadata, "");
+    let results_path = get_default_output_path(&project_path, &metadata, "proofs");
+
+    // Create output directory for the summary file
     if let Err(e) = std::fs::create_dir_all(&output_dir) {
         eprintln!("Error: Failed to create output directory: {}", e);
         std::process::exit(1);
     }
-
-    let atoms_path = output_dir.join("atoms.json");
-    let results_path = output_dir.join("proofs.json");
 
     print_header(&project_path, &output_dir, &package);
 
@@ -101,36 +109,44 @@ pub fn cmd_run(
 
     // === Run atomize ===
     if !verify_only {
-        run_atomize_step(
-            &project_path,
-            &atoms_path,
+        let config = AtomizeInternalConfig {
+            project_path: &project_path,
+            output: &atoms_path,
             regenerate_scip,
             verbose,
             use_rust_analyzer,
             allow_duplicates,
             auto_install,
-            &mut run_result,
-        );
+            metadata: &metadata,
+        };
+        run_atomize_step(&config, &mut run_result);
     }
 
     // === Run verify ===
     if !atomize_only {
-        run_verify_step(
-            &project_path,
-            &results_path,
-            &atoms_path,
-            package.as_deref(),
+        let config = VerifyInternalConfig {
+            project_path: &project_path,
+            output: &results_path,
+            package: package.as_deref(),
+            atoms_path: if atoms_path.exists() {
+                Some(atoms_path.as_path())
+            } else {
+                None
+            },
             verbose,
-            &mut run_result,
-        );
+            verus_args: &[],
+            metadata: &metadata,
+        };
+        run_verify_step(&config, &mut run_result);
     }
 
     // === Summary ===
     print_summary(&run_result);
 
-    // Write summary JSON
+    // Write summary JSON wrapped in envelope
     let summary_path = output_dir.join("run_summary.json");
-    if let Ok(json) = serde_json::to_string_pretty(&run_result) {
+    let envelope = wrap_in_envelope("probe-verus/run-summary", "run", &run_result, &metadata);
+    if let Ok(json) = serde_json::to_string_pretty(&envelope) {
         if let Err(e) = std::fs::write(&summary_path, &json) {
             eprintln!("Warning: Could not write summary: {}", e);
         }
@@ -160,39 +176,21 @@ fn print_header(project_path: &Path, output_dir: &Path, package: &Option<String>
 }
 
 /// Run the atomize step.
-#[allow(clippy::too_many_arguments)]
-fn run_atomize_step(
-    project_path: &PathBuf,
-    atoms_path: &PathBuf,
-    regenerate_scip: bool,
-    verbose: bool,
-    use_rust_analyzer: bool,
-    allow_duplicates: bool,
-    auto_install: bool,
-    run_result: &mut RunResult,
-) {
+fn run_atomize_step(config: &AtomizeInternalConfig, run_result: &mut RunResult) {
     println!("───────────────────────────────────────────────────────────────");
     println!("  Step 1: Atomize (generate call graph)");
     println!("───────────────────────────────────────────────────────────────");
     println!();
 
-    let atomize_result = atomize_internal(
-        project_path,
-        atoms_path,
-        regenerate_scip,
-        verbose,
-        use_rust_analyzer,
-        allow_duplicates,
-        auto_install,
-    );
+    let atomize_result = atomize_internal(config);
 
     match &atomize_result {
         Ok(count) => {
             println!("  ✓ Atomize completed: {} functions", count);
-            println!("  → {}", atoms_path.display());
+            println!("  → {}", config.output.display());
             run_result.atomize = Some(AtomizeResult {
                 success: true,
-                output_file: atoms_path.display().to_string(),
+                output_file: config.output.display().to_string(),
                 total_functions: Some(*count),
                 error: None,
             });
@@ -202,7 +200,7 @@ fn run_atomize_step(
             run_result.status = "atomize_failed".to_string();
             run_result.atomize = Some(AtomizeResult {
                 success: false,
-                output_file: atoms_path.display().to_string(),
+                output_file: config.output.display().to_string(),
                 total_functions: None,
                 error: Some(e.clone()),
             });
@@ -212,30 +210,13 @@ fn run_atomize_step(
 }
 
 /// Run the verify step.
-fn run_verify_step(
-    project_path: &Path,
-    results_path: &Path,
-    atoms_path: &Path,
-    package: Option<&str>,
-    verbose: bool,
-    run_result: &mut RunResult,
-) {
+fn run_verify_step(config: &VerifyInternalConfig, run_result: &mut RunResult) {
     println!("───────────────────────────────────────────────────────────────");
     println!("  Step 2: Verify (run Verus verification)");
     println!("───────────────────────────────────────────────────────────────");
     println!();
 
-    let verify_result = verify_internal(
-        project_path,
-        results_path,
-        package,
-        if atoms_path.exists() {
-            Some(atoms_path)
-        } else {
-            None
-        },
-        verbose,
-    );
+    let verify_result = verify_internal(config);
 
     match &verify_result {
         Ok(summary) => {
@@ -244,11 +225,11 @@ fn run_verify_step(
             println!("    Verified:   {}", summary.verified);
             println!("    Failed:     {}", summary.failed);
             println!("    Unverified: {}", summary.unverified);
-            println!("  → {}", results_path.display());
+            println!("  → {}", config.output.display());
 
             run_result.verify = Some(VerifyResult {
                 success: true,
-                output_file: results_path.display().to_string(),
+                output_file: config.output.display().to_string(),
                 summary: Some(summary.clone().into()),
                 error: None,
             });
@@ -265,7 +246,7 @@ fn run_verify_step(
             }
             run_result.verify = Some(VerifyResult {
                 success: false,
-                output_file: results_path.display().to_string(),
+                output_file: config.output.display().to_string(),
                 summary: None,
                 error: Some(e.clone()),
             });

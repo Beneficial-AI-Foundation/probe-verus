@@ -10,7 +10,8 @@
       "lines-start": 5,
       "lines-end": 15
     },
-    "kind": "spec"
+    "kind": "spec",
+    "language": "rust"
   },
   "probe:crate-b/1.0/helpers/validate()": {
     "display-name": "validate",
@@ -21,7 +22,8 @@
       "lines-start": 17,
       "lines-end": 30
     },
-    "kind": "proof"
+    "kind": "proof",
+    "language": "rust"
   },
   "probe:crate-b/1.0/helpers/internal()": {
     "display-name": "internal",
@@ -32,6 +34,7 @@
       "lines-start": 32,
       "lines-end": 40
     },
-    "kind": "exec"
+    "kind": "exec",
+    "language": "rust"
   }
 }

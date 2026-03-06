@@ -1,12 +1,15 @@
 //! Specify command - Extract function specifications to JSON.
 
 use probe_verus::constants::LINE_TOLERANCE;
+use probe_verus::metadata::{
+    find_project_root, gather_metadata, get_default_output_path, unwrap_envelope, wrap_in_envelope,
+};
 use probe_verus::path_utils::{extract_src_suffix, paths_match_by_suffix};
 use probe_verus::taxonomy;
 use probe_verus::verus_parser::{self, FunctionInfo, ParsedOutput};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Atom entry from atoms.json for code-name lookup.
 #[derive(Deserialize)]
@@ -40,11 +43,12 @@ struct SpecifyEntry {
 /// keyed by code-name from atoms.json.
 pub fn cmd_specify(
     path: PathBuf,
-    output: PathBuf,
+    output: Option<PathBuf>,
     atoms_path: PathBuf,
     with_spec_text: bool,
     taxonomy_config_path: Option<PathBuf>,
     taxonomy_explain: bool,
+    project_path_override: Option<PathBuf>,
 ) {
     // Validate inputs
     if !path.exists() {
@@ -131,8 +135,20 @@ pub fn cmd_specify(
         })
         .collect();
 
-    // Write JSON output
-    let json = serde_json::to_string_pretty(&output_map).expect("Failed to serialize JSON");
+    // Resolve project root: explicit flag > auto-detect from input path
+    let project_root = project_path_override
+        .unwrap_or_else(|| find_project_root(&path).unwrap_or_else(|| path.clone()));
+    let metadata = gather_metadata(&project_root);
+    let output =
+        output.unwrap_or_else(|| get_default_output_path(&project_root, &metadata, "specs"));
+
+    if let Some(parent) = output.parent() {
+        std::fs::create_dir_all(parent).expect("Failed to create output directory");
+    }
+
+    // Wrap in envelope and write
+    let envelope = wrap_in_envelope("probe-verus/specs", "specify", &output_map, &metadata);
+    let json = serde_json::to_string_pretty(&envelope).expect("Failed to serialize JSON");
     std::fs::write(&output, &json).expect("Failed to write JSON output");
 
     // L3: Coverage summary
@@ -178,10 +194,13 @@ pub fn cmd_specify(
     }
 }
 
-/// Load atoms from a JSON file (BTreeMap for deterministic iteration order).
-fn load_atoms(atoms_path: &PathBuf) -> BTreeMap<String, AtomEntry> {
+/// Load atoms from a JSON file, supporting both bare-dict (Schema 1.x) and enveloped (Schema 2.0).
+fn load_atoms(atoms_path: &Path) -> BTreeMap<String, AtomEntry> {
     let atoms_content = std::fs::read_to_string(atoms_path).expect("Failed to read atoms.json");
-    serde_json::from_str(&atoms_content).expect("Failed to parse atoms.json")
+    let json: serde_json::Value =
+        serde_json::from_str(&atoms_content).expect("Failed to parse atoms.json");
+    let data = unwrap_envelope(json);
+    serde_json::from_value(data).expect("Failed to deserialize atoms data")
 }
 
 /// Match parsed functions to atoms by path and line number.

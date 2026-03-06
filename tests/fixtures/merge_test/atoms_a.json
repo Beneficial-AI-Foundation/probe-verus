@@ -11,7 +11,8 @@
       "lines-start": 1,
       "lines-end": 10
     },
-    "kind": "exec"
+    "kind": "exec",
+    "language": "rust"
   },
   "probe:crate-a/1.0/lib/process()": {
     "display-name": "process",
@@ -24,7 +25,8 @@
       "lines-start": 12,
       "lines-end": 25
     },
-    "kind": "exec"
+    "kind": "exec",
+    "language": "rust"
   },
   "probe:crate-b/1.0/helpers/compute()": {
     "display-name": "compute",
@@ -35,7 +37,8 @@
       "lines-start": 0,
       "lines-end": 0
     },
-    "kind": "exec"
+    "kind": "exec",
+    "language": "rust"
   },
   "probe:crate-b/1.0/helpers/validate()": {
     "display-name": "validate",
@@ -46,6 +49,7 @@
       "lines-start": 0,
       "lines-end": 0
     },
-    "kind": "exec"
+    "kind": "exec",
+    "language": "rust"
   }
 }

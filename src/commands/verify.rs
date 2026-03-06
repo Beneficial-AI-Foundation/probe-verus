@@ -1,6 +1,10 @@
 //! Verify command - Run Verus verification and analyze results.
 
 use probe_verus::constants::{DATA_DIR, VERIFICATION_CONFIG_FILE, VERIFICATION_OUTPUT_FILE};
+use probe_verus::metadata::{
+    find_default_atoms_path, gather_metadata, get_default_output_path, wrap_in_envelope,
+    VerifyInternalConfig,
+};
 use probe_verus::verification::{
     convert_to_proofs_output, enrich_with_code_names, AnalysisResult, AnalysisStatus,
     VerificationAnalyzer, VerusRunner,
@@ -40,10 +44,9 @@ pub fn cmd_verify(
     verify_function: Option<String>,
     output: Option<PathBuf>,
     no_cache: bool,
-    with_atoms: Option<Option<PathBuf>>,
+    with_atoms: Option<PathBuf>,
     verus_args: Vec<String>,
 ) {
-    // Determine the project path and verification output source
     let (project_path, verification_output, exit_code) = get_verification_data(
         project_path,
         from_file,
@@ -53,7 +56,6 @@ pub fn cmd_verify(
         &verus_args,
     );
 
-    // Analyze the output
     let analyzer = VerificationAnalyzer::new();
     let result = analyzer.analyze_output(
         &project_path,
@@ -63,16 +65,25 @@ pub fn cmd_verify(
         verify_function.as_deref(),
     );
 
-    // Write JSON output - use new format when --with-atoms is provided
-    let output_path = output.unwrap_or_else(|| PathBuf::from("proofs.json"));
+    let metadata = gather_metadata(&project_path);
 
-    if let Some(atoms_path_opt) = with_atoms {
-        // New format: dictionary keyed by code-name
-        let atoms_path = get_atoms_path(atoms_path_opt);
-        match convert_to_proofs_output(&result, &atoms_path) {
+    let output_path =
+        output.unwrap_or_else(|| get_default_output_path(&project_path, &metadata, "proofs"));
+
+    if let Some(parent) = output_path.parent() {
+        std::fs::create_dir_all(parent).expect("Failed to create output directory");
+    }
+
+    // Resolve atoms path: explicit flag value > auto-discover in .verilib/probes/
+    let atoms_path = with_atoms.or_else(|| find_default_atoms_path(&project_path, &metadata));
+
+    match atoms_path {
+        Some(atoms_path) => match convert_to_proofs_output(&result, &atoms_path) {
             Ok(proofs_output) => {
+                let envelope =
+                    wrap_in_envelope("probe-verus/proofs", "verify", &proofs_output, &metadata);
                 let json =
-                    serde_json::to_string_pretty(&proofs_output).expect("Failed to serialize JSON");
+                    serde_json::to_string_pretty(&envelope).expect("Failed to serialize JSON");
                 std::fs::write(&output_path, &json).expect("Failed to write JSON output");
                 println!(
                     "Wrote {} functions to {}",
@@ -84,18 +95,26 @@ pub fn cmd_verify(
                 eprintln!("Error converting to proofs output: {}", e);
                 std::process::exit(1);
             }
+        },
+        None => {
+            let envelope = wrap_in_envelope(
+                "probe-verus/verification-report",
+                "verify",
+                &result,
+                &metadata,
+            );
+            let json = serde_json::to_string_pretty(&envelope).expect("Failed to serialize JSON");
+            std::fs::write(&output_path, &json).expect("Failed to write JSON output");
+            println!("JSON output written to {}", output_path.display());
+            eprintln!(
+                "Note: no atoms.json found; output lacks code-name enrichment. \
+                 Run 'probe-verus atomize' first, or pass -a <path>."
+            );
         }
-    } else {
-        // Old format: full analysis result (for backwards compatibility)
-        let json = serde_json::to_string_pretty(&result).expect("Failed to serialize JSON");
-        std::fs::write(&output_path, &json).expect("Failed to write JSON output");
-        println!("JSON output written to {}", output_path.display());
     }
 
-    // Print summary
     print_summary(&result);
 
-    // Print failed functions if any
     if !result.verification.failed_functions.is_empty() {
         println!();
         println!("Failed functions:");
@@ -107,7 +126,6 @@ pub fn cmd_verify(
         }
     }
 
-    // Print compilation errors if any
     if !result.compilation.errors.is_empty() {
         println!();
         println!("Compilation errors:");
@@ -121,15 +139,9 @@ pub fn cmd_verify(
         }
     }
 
-    // Exit with appropriate code
     if result.status != AnalysisStatus::Success {
         std::process::exit(1);
     }
-}
-
-/// Get the atoms.json path, defaulting to "atoms.json" in current directory
-fn get_atoms_path(atoms_path_opt: Option<PathBuf>) -> PathBuf {
-    atoms_path_opt.unwrap_or_else(|| PathBuf::from("atoms.json"))
 }
 
 /// Get verification data from either running verification or using cached data.
@@ -179,7 +191,7 @@ fn get_verification_data_from_project(
 }
 
 /// Get verification output from an existing file.
-fn get_output_from_file(output_file: &PathBuf, exit_code_arg: Option<i32>) -> (String, i32) {
+fn get_output_from_file(output_file: &Path, exit_code_arg: Option<i32>) -> (String, i32) {
     if !output_file.exists() {
         eprintln!(
             "Error: Output file does not exist: {}",
@@ -354,64 +366,94 @@ fn print_summary(result: &AnalysisResult) {
     );
 }
 
-/// Internal verify implementation that returns Result for better error handling.
-/// Used by the `run` command.
-pub fn verify_internal(
-    project_path: &Path,
-    output: &Path,
-    package: Option<&str>,
-    atoms_path: Option<&Path>,
-    verbose: bool,
-) -> Result<VerifySummary, String> {
-    verify_internal_with_args(project_path, output, package, atoms_path, verbose, &[])
+/// Best-effort code-name enrichment for the verification-report fallback path.
+fn enrich_with_code_names_if_available(result: &mut AnalysisResult, atoms_path: Option<&Path>) {
+    if let Some(atoms) = atoms_path {
+        if atoms.exists() {
+            if let Err(e) = enrich_with_code_names(result, atoms) {
+                eprintln!("    Warning: Failed to enrich with code-names: {}", e);
+            }
+        }
+    }
 }
 
-/// Internal verify implementation with extra Verus args support.
-pub fn verify_internal_with_args(
-    project_path: &Path,
-    output: &Path,
-    package: Option<&str>,
-    atoms_path: Option<&Path>,
-    verbose: bool,
-    verus_args: &[String],
-) -> Result<VerifySummary, String> {
+/// Internal verify implementation that returns Result for better error handling.
+/// Used by the `run` command (which pre-gathers metadata to share a timestamp).
+pub fn verify_internal(config: &VerifyInternalConfig) -> Result<VerifySummary, String> {
     let runner = VerusRunner::new();
 
-    let extra = if verus_args.is_empty() {
+    let extra = if config.verus_args.is_empty() {
         None
     } else {
-        Some(verus_args)
+        Some(config.verus_args)
     };
     let (verification_output, exit_code) = runner
-        .run_verification(project_path, package, None, None, extra)
+        .run_verification(config.project_path, config.package, None, None, extra)
         .map_err(|e| format!("Failed to run verification: {}", e))?;
 
-    if verbose {
+    if config.verbose {
         println!("{}", verification_output);
     }
 
     let analyzer = VerificationAnalyzer::new();
     let mut result = analyzer.analyze_output(
-        project_path,
+        config.project_path,
         &verification_output,
         Some(exit_code),
         None,
         None,
     );
 
-    // Enrich with code-names if atoms.json exists
-    if let Some(atoms) = atoms_path {
-        if atoms.exists() {
-            if let Err(e) = enrich_with_code_names(&mut result, atoms) {
-                eprintln!("    Warning: Failed to enrich with code-names: {}", e);
-            }
-        }
+    if let Some(parent) = config.output.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create output directory: {}", e))?;
     }
 
-    // Write results
-    let json = serde_json::to_string_pretty(&result)
-        .map_err(|e| format!("Failed to serialize JSON: {}", e))?;
-    std::fs::write(output, &json).map_err(|e| format!("Failed to write output: {}", e))?;
+    // When atoms are available, produce probe-verus/proofs (dictionary keyed by
+    // code-name) -- matching cmd_verify behavior. Otherwise fall back to the
+    // full verification-report envelope.
+    let wrote_proofs = if let Some(atoms) = config.atoms_path {
+        if atoms.exists() {
+            match convert_to_proofs_output(&result, atoms) {
+                Ok(proofs_output) => {
+                    let envelope = wrap_in_envelope(
+                        "probe-verus/proofs",
+                        "verify",
+                        &proofs_output,
+                        config.metadata,
+                    );
+                    let json = serde_json::to_string_pretty(&envelope)
+                        .map_err(|e| format!("Failed to serialize JSON: {}", e))?;
+                    std::fs::write(config.output, &json)
+                        .map_err(|e| format!("Failed to write output: {}", e))?;
+                    true
+                }
+                Err(e) => {
+                    eprintln!("    Warning: Failed to convert to proofs output: {}", e);
+                    false
+                }
+            }
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    if !wrote_proofs {
+        enrich_with_code_names_if_available(&mut result, config.atoms_path);
+
+        let envelope = wrap_in_envelope(
+            "probe-verus/verification-report",
+            "verify",
+            &result,
+            config.metadata,
+        );
+        let json = serde_json::to_string_pretty(&envelope)
+            .map_err(|e| format!("Failed to serialize JSON: {}", e))?;
+        std::fs::write(config.output, &json)
+            .map_err(|e| format!("Failed to write output: {}", e))?;
+    }
 
     Ok(VerifySummary {
         total_functions: result.summary.total_functions,

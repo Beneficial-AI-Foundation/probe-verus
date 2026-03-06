@@ -4,6 +4,7 @@
 //! depth N and reports which crates the discovered callees belong to,
 //! grouped by crate name and version.
 
+use probe_verus::metadata::unwrap_envelope;
 use probe_verus::AtomWithLines;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
@@ -184,7 +185,7 @@ fn resolve_function(
     }
 }
 
-/// Load atoms from a file or stdin.
+/// Load atoms from a file or stdin, supporting both bare-dict and enveloped formats.
 fn load_atoms(atoms_file: Option<PathBuf>) -> Result<BTreeMap<String, AtomWithLines>, String> {
     let content = match atoms_file {
         Some(path) => std::fs::read_to_string(&path)
@@ -198,10 +199,11 @@ fn load_atoms(atoms_file: Option<PathBuf>) -> Result<BTreeMap<String, AtomWithLi
         }
     };
 
-    let atoms: BTreeMap<String, AtomWithLines> =
+    let json: serde_json::Value =
         serde_json::from_str(&content).map_err(|e| format!("Failed to parse atoms JSON: {}", e))?;
+    let data = unwrap_envelope(json);
 
-    Ok(atoms)
+    serde_json::from_value(data).map_err(|e| format!("Failed to deserialize atoms data: {}", e))
 }
 
 /// Execute the callee-crates command.
@@ -269,6 +271,7 @@ mod tests {
                 lines_end: 10,
             },
             kind,
+            language: "rust".to_string(),
         }
     }
 

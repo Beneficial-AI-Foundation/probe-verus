@@ -12,9 +12,7 @@
 //! - `run`: Run both atomize and verify (designed for Docker/CI usage)
 
 use clap::{Parser, Subcommand};
-use probe_verus::constants::{
-    DEFAULT_ATOMS_OUTPUT, DEFAULT_OUTPUT_DIR, DEFAULT_SPECS_OUTPUT, DEFAULT_STUBS_OUTPUT,
-};
+use probe_verus::constants::DEFAULT_OUTPUT_DIR;
 use std::path::PathBuf;
 
 // Import command implementations
@@ -39,9 +37,9 @@ enum Commands {
         /// Path to the Rust/Verus project
         project_path: PathBuf,
 
-        /// Output file path (default: atoms.json)
-        #[arg(short, long, default_value = DEFAULT_ATOMS_OUTPUT)]
-        output: PathBuf,
+        /// Output file path (default: .verilib/probes/verus_<pkg>_<ver>.json)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
 
         /// Force regeneration of the SCIP index
         #[arg(short, long)]
@@ -142,10 +140,9 @@ enum Commands {
         #[arg(long)]
         no_cache: bool,
 
-        /// Enrich results with code-names from atoms.json file
-        /// If no file specified, looks for atoms.json in current directory
+        /// Path to atoms.json for code-name enrichment (auto-discovers in .verilib/probes/ if omitted)
         #[arg(short = 'a', long)]
-        with_atoms: Option<Option<PathBuf>>,
+        with_atoms: Option<PathBuf>,
 
         /// Extra arguments passed to Verus after -- (e.g. --log smt --log-dir ./smt-logs -V spinoff-all)
         #[arg(long, num_args = 1.., allow_hyphen_values = true)]
@@ -157,9 +154,9 @@ enum Commands {
         /// Path to search (file or directory)
         path: PathBuf,
 
-        /// Output file path (default: specs.json)
-        #[arg(short, long, default_value = DEFAULT_SPECS_OUTPUT)]
-        output: PathBuf,
+        /// Output file path (default: .verilib/probes/verus_<pkg>_<ver>_specs.json)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
 
         /// Path to atoms.json file for code-name lookup (required for dictionary output)
         #[arg(short = 'a', long)]
@@ -176,6 +173,10 @@ enum Commands {
         /// Print detailed taxonomy classification explanations (requires --taxonomy-config)
         #[arg(long)]
         taxonomy_explain: bool,
+
+        /// Project root for metadata (default: auto-detect from path via Cargo.toml)
+        #[arg(long)]
+        project_path: Option<PathBuf>,
     },
 
     /// Generate specs_data.json for the specs browser
@@ -199,6 +200,10 @@ enum Commands {
         /// Path to libsignal entrypoints JSON (focus_dalek_entrypoints.json)
         #[arg(long)]
         libsignal_entrypoints: Option<PathBuf>,
+
+        /// Project root for metadata (default: auto-detect from src_path via Cargo.toml)
+        #[arg(long)]
+        project_path: Option<PathBuf>,
     },
 
     /// Generate tracked functions CSV for the dashboard
@@ -229,9 +234,13 @@ enum Commands {
         /// Path to directory containing .md files
         path: PathBuf,
 
-        /// Output file path (default: stubs.json)
-        #[arg(short, long, default_value = DEFAULT_STUBS_OUTPUT)]
-        output: PathBuf,
+        /// Output file path (default: .verilib/probes/verus_<pkg>_<ver>_stubs.json)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Project root for metadata (default: auto-detect from path via Cargo.toml)
+        #[arg(long)]
+        project_path: Option<PathBuf>,
     },
 
     /// Find which crates a function's callees belong to
@@ -400,6 +409,7 @@ fn main() {
             with_spec_text,
             taxonomy_config,
             taxonomy_explain,
+            project_path,
         } => {
             cmd_specify(
                 path,
@@ -408,6 +418,7 @@ fn main() {
                 with_spec_text,
                 taxonomy_config,
                 taxonomy_explain,
+                project_path,
             );
         }
         Commands::SpecsData {
@@ -415,8 +426,15 @@ fn main() {
             output,
             github_base_url,
             libsignal_entrypoints,
+            project_path,
         } => {
-            cmd_specs_data(src_path, output, github_base_url, libsignal_entrypoints);
+            cmd_specs_data(
+                src_path,
+                output,
+                github_base_url,
+                libsignal_entrypoints,
+                project_path,
+            );
         }
         Commands::TrackedCsv {
             src_path,
@@ -442,8 +460,12 @@ fn main() {
                 exclude_crates,
             );
         }
-        Commands::Stubify { path, output } => {
-            cmd_stubify(path, output);
+        Commands::Stubify {
+            path,
+            output,
+            project_path,
+        } => {
+            cmd_stubify(path, output, project_path);
         }
         Commands::Setup { status } => {
             cmd_setup(status);

@@ -43,6 +43,7 @@ cargo fmt && cargo clippy --all-targets && cargo test
 src/
 ├── main.rs           # CLI entry point with subcommand routing
 ├── lib.rs            # Core data structures and SCIP JSON parsing
+├── metadata.rs       # Schema 2.0 envelope construction, project metadata gathering
 ├── commands/         # Subcommand implementations (atomize, verify, setup, run, etc.)
 ├── scip_cache.rs     # SCIP index generation, caching, and tool resolution
 ├── taxonomy.rs       # Spec taxonomy classification from TOML rules
@@ -55,12 +56,12 @@ src/
 
 ### Main Pipelines
 
-1. **Atomize Pipeline** (`atomize` command): SCIP JSON → call graph parsing → spans via verus_syn → JSON output
+1. **Atomize Pipeline** (`atomize` command): SCIP JSON → call graph parsing → spans via verus_syn → Schema 2.0 envelope → `.verilib/probes/`
 2. **List Functions Pipeline** (`list-functions` command): Source files → AST visitor → function list
-3. **Verification Pipeline** (`verify` command): Cargo verus output → error parsing → function mapping → analysis
-4. **Specify Pipeline** (`specify` command): Source files + atoms.json → spec extraction → optional taxonomy classification via TOML rules → JSON output
+3. **Verification Pipeline** (`verify` command): Cargo verus output → error parsing → function mapping → Schema 2.0 envelope → `.verilib/probes/`
+4. **Specify Pipeline** (`specify` command): Source files + atoms.json → spec extraction → optional taxonomy classification via TOML rules → Schema 2.0 envelope → `.verilib/probes/`
 5. **Setup Pipeline** (`setup` command): Resolve versions → download from GitHub → decompress to `~/.probe-verus/tools/`
-6. **Run Pipeline** (`run` command): Atomize + verify in one step (CI/Docker entrypoint)
+6. **Run Pipeline** (`run` command): Atomize + verify in one step (CI/Docker entrypoint), shared metadata for consistent timestamps
 
 ### Key Architectural Patterns
 
@@ -76,6 +77,10 @@ src/
 
 **AST-based Spec Taxonomy**: The `specify` command can classify specs using taxonomy rules defined in TOML. Classification uses structured AST data (function mode, called function names extracted via `verus_syn` visitor) rather than regex on text. A `CallNameCollector` visitor walks `ExprCall`/`ExprMethodCall` nodes in ensures/requires clauses to extract called function names.
 
+**Schema 2.0 Metadata Envelope**: All JSON outputs are wrapped in a standardized envelope containing `schema`, `schema-version`, `tool`, `source`, `timestamp`, and `data` fields. The `metadata.rs` module handles envelope construction, project metadata gathering (git commit, repo URL, Cargo.toml parsing), and default output path resolution to `.verilib/probes/`.
+
+**Config Structs for Internal APIs**: `atomize_internal` and `verify_internal` use `AtomizeInternalConfig` and `VerifyInternalConfig` structs (defined in `metadata.rs`) instead of long parameter lists. The `run` command gathers metadata once and passes it via config structs so atomize and verify share a consistent timestamp.
+
 ### Key Types
 
 - `FunctionNode`: Call graph node with callees and type context
@@ -84,6 +89,9 @@ src/
 - `TaxonomyConfig`, `TaxonomyRule`, `MatchCriteria`: TOML-based spec classification rules
 - `FunctionInterval`: Interval tree entry for error→function mapping
 - `CompilationError`, `VerificationFailure`: Error types for verification analysis
+- `Envelope<T>`, `MergedEnvelope<T>`: Schema 2.0 metadata wrappers for JSON output
+- `ProjectMetadata`: Git commit, repo URL, timestamp, package name/version
+- `AtomizeInternalConfig`, `VerifyInternalConfig`: Config structs for internal command APIs
 
 ## External Tool Dependencies
 

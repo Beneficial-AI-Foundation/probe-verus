@@ -1,5 +1,8 @@
 //! Stubify command - Convert .md files with YAML frontmatter to JSON.
 
+use probe_verus::metadata::{
+    find_project_root, gather_metadata, get_default_output_path, wrap_in_envelope,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -21,7 +24,7 @@ pub struct StubFrontmatter {
 /// Walks through a directory hierarchy of .md files with YAML frontmatter
 /// and converts them to a JSON file where keys are file paths and values
 /// are the frontmatter fields.
-pub fn cmd_stubify(path: PathBuf, output: PathBuf) {
+pub fn cmd_stubify(path: PathBuf, output: Option<PathBuf>, project_path_override: Option<PathBuf>) {
     // Validate input path
     if !path.exists() {
         eprintln!("Error: Path does not exist: {}", path.display());
@@ -77,8 +80,20 @@ pub fn cmd_stubify(path: PathBuf, output: PathBuf) {
         std::process::exit(1);
     }
 
-    // Write JSON output
-    let json = serde_json::to_string_pretty(&stubs).expect("Failed to serialize JSON");
+    // Resolve project root: explicit flag > auto-detect from input path
+    let project_root = project_path_override
+        .unwrap_or_else(|| find_project_root(&path).unwrap_or_else(|| path.clone()));
+    let metadata = gather_metadata(&project_root);
+    let output =
+        output.unwrap_or_else(|| get_default_output_path(&project_root, &metadata, "stubs"));
+
+    if let Some(parent) = output.parent() {
+        std::fs::create_dir_all(parent).expect("Failed to create output directory");
+    }
+
+    // Wrap in envelope and write
+    let envelope = wrap_in_envelope("probe-verus/stubs", "stubify", &stubs, &metadata);
+    let json = serde_json::to_string_pretty(&envelope).expect("Failed to serialize JSON");
     std::fs::write(&output, &json).expect("Failed to write output file");
 
     println!(

@@ -2,13 +2,43 @@
 
 ## Overview
 
-`probe-verus atomize` generates a JSON dictionary of function metadata keyed by `code-name`
+`probe-verus atomize` generates a JSON file wrapped in a Schema 2.0 metadata envelope.
+The `data` payload is a dictionary of function metadata keyed by `code-name`
 (a probe-style URI). Each entry contains the function's display name, dependencies, source
-location, Verus mode, and optional per-call location data.
+location, declaration kind, language, and optional per-call location data.
 
-## JSON Structure
+## Envelope Structure
 
-The top-level output is an **object** (dictionary), not an array. Keys are `code-name` URIs.
+All JSON outputs follow the [Schema 2.0 envelope](https://github.com/Beneficial-AI-Foundation/probe/blob/main/docs/envelope-rationale.md) format:
+
+```json
+{
+  "schema": "probe-verus/atoms",
+  "schema-version": "2.0",
+  "tool": {
+    "name": "probe-verus",
+    "version": "2.0.0",
+    "command": "atomize"
+  },
+  "source": {
+    "repo": "https://github.com/org/project.git",
+    "commit": "abc123def456...",
+    "language": "rust",
+    "package": "my-crate",
+    "package-version": "1.0.0"
+  },
+  "timestamp": "2026-03-06T12:00:00Z",
+  "data": {
+    "...atoms dictionary..."
+  }
+}
+```
+
+To access the atoms data, unwrap the `data` field from the envelope.
+
+## Atoms Data Structure
+
+The `data` payload is an **object** (dictionary), not an array. Keys are `code-name` URIs.
 
 ```json
 {
@@ -23,7 +53,8 @@ The top-level output is an **object** (dictionary), not an array. Keys are `code
       "lines-start": 450,
       "lines-end": 475
     },
-    "mode": "exec"
+    "kind": "exec",
+    "language": "rust"
   }
 }
 ```
@@ -118,14 +149,22 @@ For external function stubs, both values are `0`.
 }
 ```
 
-### `mode` (string)
+### `kind` (string)
 
-Verus function mode. One of:
+Declaration kind. One of:
 - `"exec"` -- executable code (compiled and verified)
 - `"proof"` -- proof code (verified but erased at runtime)
 - `"spec"` -- specification code (defines logical properties, erased at runtime)
 
 For external function stubs, this defaults to `"exec"`.
+
+Previously named `mode` (renamed in v2.0.0).
+
+### `language` (string)
+
+Source language of the function. Currently always `"rust"` for probe-verus output.
+
+Added in v2.0.0.
 
 ## External Function Stubs
 
@@ -139,32 +178,51 @@ external crates), it creates lightweight stub entries. Stubs can be identified b
 
 ```json
 {
-  "probe:curve25519-dalek/4.1.3/scalar/Scalar#Add<&Scalar>#add()": {
-    "display-name": "Scalar::add",
-    "dependencies": [
-      "probe:curve25519-dalek/4.1.3/scalar/UnpackedScalar#add()"
-    ],
-    "code-module": "scalar",
-    "code-path": "src/scalar.rs",
-    "code-text": {
-      "lines-start": 450,
-      "lines-end": 475
-    },
-    "mode": "exec"
+  "schema": "probe-verus/atoms",
+  "schema-version": "2.0",
+  "tool": {
+    "name": "probe-verus",
+    "version": "2.0.0",
+    "command": "atomize"
   },
-  "probe:curve25519-dalek/4.1.3/scalar/Scalar#Mul<&Scalar>#mul()": {
-    "display-name": "Scalar::mul",
-    "dependencies": [
-      "probe:curve25519-dalek/4.1.3/scalar/UnpackedScalar#mul()",
-      "probe:curve25519-dalek/4.1.3/scalar/Scalar#unpack()"
-    ],
-    "code-module": "scalar",
-    "code-path": "src/scalar.rs",
-    "code-text": {
-      "lines-start": 500,
-      "lines-end": 525
+  "source": {
+    "repo": "https://github.com/org/curve25519-dalek.git",
+    "commit": "abc123def456789...",
+    "language": "rust",
+    "package": "curve25519-dalek",
+    "package-version": "4.1.3"
+  },
+  "timestamp": "2026-03-06T12:00:00Z",
+  "data": {
+    "probe:curve25519-dalek/4.1.3/scalar/Scalar#Add<&Scalar>#add()": {
+      "display-name": "Scalar::add",
+      "dependencies": [
+        "probe:curve25519-dalek/4.1.3/scalar/UnpackedScalar#add()"
+      ],
+      "code-module": "scalar",
+      "code-path": "src/scalar.rs",
+      "code-text": {
+        "lines-start": 450,
+        "lines-end": 475
+      },
+      "kind": "exec",
+      "language": "rust"
     },
-    "mode": "exec"
+    "probe:curve25519-dalek/4.1.3/scalar/Scalar#Mul<&Scalar>#mul()": {
+      "display-name": "Scalar::mul",
+      "dependencies": [
+        "probe:curve25519-dalek/4.1.3/scalar/UnpackedScalar#mul()",
+        "probe:curve25519-dalek/4.1.3/scalar/Scalar#unpack()"
+      ],
+      "code-module": "scalar",
+      "code-path": "src/scalar.rs",
+      "code-text": {
+        "lines-start": 500,
+        "lines-end": 525
+      },
+      "kind": "exec",
+      "language": "rust"
+    }
   }
 }
 ```
@@ -192,12 +250,15 @@ interface Atom {
   "code-module": string;
   "code-path": string;
   "code-text": CodeText;
-  mode: "exec" | "proof" | "spec";
+  kind: "exec" | "proof" | "spec";
+  language: string;
 }
 
 type AtomsDict = Record<string, Atom>;
 
-const atoms: AtomsDict = JSON.parse(fileContent);
+// Unwrap envelope to get the atoms data
+const envelope = JSON.parse(fileContent);
+const atoms: AtomsDict = envelope.data;
 ```
 
 ### Python
@@ -216,10 +277,13 @@ class Atom(TypedDict):
     code_module: str          # JSON key: "code-module"
     code_path: str            # JSON key: "code-path"
     code_text: CodeText       # JSON key: "code-text"
-    mode: str                 # "exec" | "proof" | "spec"
+    kind: str                 # "exec" | "proof" | "spec"
+    language: str
 
 with open("atoms.json") as f:
-    atoms: dict[str, Atom] = json.load(f)
+    envelope = json.load(f)
+
+atoms: dict[str, Atom] = envelope["data"]
 
 for code_name, atom in atoms.items():
     print(f"{atom['display-name']} at {atom['code-path']}:{atom['code-text']['lines-start']}")
@@ -242,7 +306,8 @@ struct Atom {
     code_path: String,
     #[serde(rename = "code-text")]
     code_text: CodeText,
-    mode: String,
+    kind: String,
+    language: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -253,10 +318,24 @@ struct CodeText {
     lines_end: usize,
 }
 
-let atoms: HashMap<String, Atom> = serde_json::from_str(&file_content)?;
+#[derive(Debug, Deserialize)]
+struct Envelope {
+    data: HashMap<String, Atom>,
+}
+
+let envelope: Envelope = serde_json::from_str(&file_content)?;
+let atoms = envelope.data;
 ```
 
 ## Version History
+
+### v2.0.0 (2026-03-06)
+
+- **Breaking**: All JSON outputs wrapped in Schema 2.0 metadata envelope
+- **Breaking**: `mode` field renamed to `kind` (declaration kind)
+- Added `language` field (always `"rust"` for probe-verus)
+- Default output path changed to `.verilib/probes/verus_<pkg>_<ver>.json`
+- Consumers must unwrap the `data` field from the envelope
 
 ### v1.2.0 (2026-02-28)
 

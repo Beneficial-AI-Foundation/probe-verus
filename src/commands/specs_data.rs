@@ -5,12 +5,13 @@
 //! categorizes them, computes cross-references, and outputs JSON matching the
 //! existing specs_data.json schema consumed by docs/specs.js.
 
+use probe_verus::metadata::{find_project_root, gather_metadata, wrap_in_envelope};
 use probe_verus::verus_parser::{compute_project_prefix, parse_all_functions_ext, FunctionInfo};
 use probe_verus::DeclKind;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Top-level output matching the existing specs_data.json schema.
 #[derive(Serialize)]
@@ -260,7 +261,7 @@ struct FocusFunction {
 /// parser produces paths relative to the src root (e.g., `edwards.rs`).
 /// We store both the original path and the src-relative suffix so matching
 /// works regardless of whether `compute_project_prefix` adds a prefix.
-fn load_libsignal_entrypoints(path: &PathBuf) -> HashSet<(String, String)> {
+fn load_libsignal_entrypoints(path: &Path) -> HashSet<(String, String)> {
     let data = std::fs::read_to_string(path).unwrap_or_else(|e| {
         panic!(
             "Failed to read libsignal entrypoints {}: {}",
@@ -315,6 +316,7 @@ pub fn cmd_specs_data(
     output: PathBuf,
     github_base_url: Option<String>,
     libsignal_entrypoints: Option<PathBuf>,
+    project_path: Option<PathBuf>,
 ) {
     let github_base = github_base_url.unwrap_or_default();
 
@@ -561,8 +563,17 @@ pub fn cmd_specs_data(
         verified_functions,
     };
 
-    let json = serde_json::to_string_pretty(&specs_data).expect("Failed to serialize JSON");
+    let project_root =
+        project_path.unwrap_or_else(|| find_project_root(&src_path).unwrap_or(src_path.clone()));
+    let metadata = gather_metadata(&project_root);
+    let envelope = wrap_in_envelope(
+        "probe-verus/specs-data",
+        "specs-data",
+        &specs_data,
+        &metadata,
+    );
 
+    let json = serde_json::to_string_pretty(&envelope).expect("Failed to serialize JSON");
     std::fs::write(&output, &json).expect("Failed to write output file");
 
     eprintln!(

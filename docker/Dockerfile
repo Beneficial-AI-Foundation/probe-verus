@@ -12,8 +12,9 @@
 #   docker run -v /path/to/project:/workspace/project -v /path/to/output:/workspace/output probe-verus project
 #
 # Output:
-#   - /workspace/output/atoms.json (from atomize)
-#   - /workspace/output/results.json (from verify)
+#   - <project>/.verilib/probes/verus_<pkg>_<ver>.json (atoms, from atomize)
+#   - <project>/.verilib/probes/verus_<pkg>_<ver>_proofs.json (verification, from verify)
+#   - /workspace/output/run_summary.json (run summary)
 
 FROM ubuntu:22.04
 

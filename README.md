@@ -75,7 +75,8 @@ Convert a directory hierarchy of `.md` files with YAML frontmatter to a JSON fil
 probe-verus stubify <PATH> [OPTIONS]
 
 Options:
-  -o, --output <FILE>    Output file path (default: stubs.json)
+  -o, --output <FILE>           Output file path (default: .verilib/probes/verus_<pkg>_<ver>_stubs.json)
+      --project-path <PATH>     Project root for metadata (default: auto-detect via Cargo.toml)
 ```
 
 **Examples:**
@@ -131,7 +132,7 @@ Generate call graph atoms with line numbers from SCIP indexes.
 probe-verus atomize <PROJECT_PATH> [OPTIONS]
 
 Options:
-  -o, --output <FILE>     Output file path (default: atoms.json)
+  -o, --output <FILE>     Output file path (default: .verilib/probes/verus_<pkg>_<ver>.json)
   -r, --regenerate-scip   Force regeneration of the SCIP index
       --with-locations    Include detailed per-call location info (precondition/postcondition/inner)
       --auto-install      Automatically download missing tools without prompting
@@ -148,19 +149,27 @@ probe-verus atomize ./my-rust-project --auto-install    # download tools if miss
 
 **Output format:**
 
-The output is a dictionary keyed by `probe-name` (a URI-style identifier):
+The output is wrapped in a Schema 2.0 metadata envelope. The `data` payload is a dictionary keyed by `probe-name` (a URI-style identifier):
 
 ```json
 {
-  "probe:curve25519-dalek/4.1.3/module/MyType#my_function()": {
-    "display-name": "my_function",
-    "dependencies": [
-      "probe:curve25519-dalek/4.1.3/other_module/helper()"
-    ],
-    "code-module": "module",
-    "code-path": "src/lib.rs",
-    "code-text": { "lines-start": 42, "lines-end": 100 },
-    "mode": "proof"
+  "schema": "probe-verus/atoms",
+  "schema-version": "2.0",
+  "tool": { "name": "probe-verus", "version": "2.0.0", "command": "atomize" },
+  "source": { "repo": "...", "commit": "...", "language": "rust", "package": "...", "package-version": "..." },
+  "timestamp": "2026-03-06T12:00:00Z",
+  "data": {
+    "probe:curve25519-dalek/4.1.3/module/MyType#my_function()": {
+      "display-name": "my_function",
+      "dependencies": [
+        "probe:curve25519-dalek/4.1.3/other_module/helper()"
+      ],
+      "code-module": "module",
+      "code-path": "src/lib.rs",
+      "code-text": { "lines-start": 42, "lines-end": 100 },
+      "kind": "proof",
+      "language": "rust"
+    }
   }
 }
 ```
@@ -172,7 +181,8 @@ The output is a dictionary keyed by `probe-name` (a URI-style identifier):
 - **`code-module`**: The module path (e.g., `"foo/bar"` for nested modules, empty for top-level)
 - **`code-path`**: Relative file path
 - **`code-text`**: Line range of the function body
-- **`mode`**: Verus function mode (`"exec"`, `"proof"`, or `"spec"`)
+- **`kind`**: Declaration kind (`"exec"`, `"proof"`, or `"spec"`)
+- **`language`**: Source language (always `"rust"` for probe-verus)
 
 **Extended output (`--with-locations`):**
 
@@ -198,7 +208,8 @@ When using `--with-locations`, an additional `dependencies-with-locations` field
     "code-module": "module",
     "code-path": "src/lib.rs",
     "code-text": { "lines-start": 42, "lines-end": 100 },
-    "mode": "exec"
+    "kind": "exec",
+    "language": "rust"
   }
 }
 ```
@@ -247,10 +258,11 @@ Extract function specifications (requires/ensures clauses) from source files, ke
 probe-verus specify <PATH> -a <ATOMS_FILE> [OPTIONS]
 
 Options:
-  -o, --output <FILE>              Output file path (default: specs.json)
+  -o, --output <FILE>              Output file path (default: .verilib/probes/verus_<pkg>_<ver>_specs.json)
   -a, --with-atoms <FILE>          Path to atoms.json for code-name lookup (required)
       --with-spec-text             Include raw specification text in output
       --taxonomy-config <FILE>     Path to TOML file defining spec classification rules
+      --project-path <PATH>        Project root for metadata (default: auto-detect via Cargo.toml)
 ```
 
 **Examples:**
@@ -278,7 +290,7 @@ probe-verus specify ./src -a atoms.json -o specs.json
       "lines-start": 42,
       "lines-end": 60
     },
-    "mode": "exec",
+    "kind": "exec",
     "specified": true,
     "has_requires": true,
     "has_ensures": true,
@@ -292,7 +304,7 @@ probe-verus specify ./src -a atoms.json -o specs.json
 - **Key**: The probe-name from atoms.json
 - **`code-path`**: Source file path
 - **`spec-text`**: Function span with `lines-start` and `lines-end`
-- **`mode`**: Verus function mode (`"exec"`, `"proof"`, or `"spec"`)
+- **`kind`**: Declaration kind (`"exec"`, `"proof"`, or `"spec"`)
 - **`specified`**: Whether the function has a specification (`has_requires` or `has_ensures` is true)
 - **`has_requires`**: Whether the function has a `requires` clause (precondition)
 - **`has_ensures`**: Whether the function has an `ensures` clause (postcondition)
@@ -312,7 +324,7 @@ When `--with-spec-text` is used, additional fields are included:
   "probe:crate/1.0.0/module/my_function()": {
     "code-path": "src/lib.rs",
     "spec-text": { "lines-start": 42, "lines-end": 60 },
-    "mode": "exec",
+    "kind": "exec",
     "specified": true,
     "has_requires": true,
     "has_ensures": true,
@@ -335,7 +347,7 @@ When a taxonomy config TOML file is provided, each function is classified with `
   "probe:crate/1.0.0/module/my_function()": {
     "code-path": "src/lib.rs",
     "spec-text": { "lines-start": 42, "lines-end": 60 },
-    "mode": "exec",
+    "kind": "exec",
     "specified": true,
     "has_ensures": true,
     "ensures-calls": ["is_canonical_scalar52", "scalar52_to_nat"],
@@ -416,9 +428,9 @@ Options:
   -p, --package <NAME>           Package to verify (for workspaces)
       --verify-only-module <MOD> Module to verify
       --verify-function <FUNC>   Function to verify
-  -o, --output <FILE>            Write JSON results to file (default: proofs.json)
+  -o, --output <FILE>            Write JSON results to file (default: .verilib/probes/verus_<pkg>_<ver>_proofs.json)
       --no-cache                 Don't cache the verification output
-  -a, --with-atoms [FILE]        Enrich results with code-names from atoms.json
+  -a, --with-atoms <FILE>        Path to atoms.json for code-name enrichment (auto-discovers in .verilib/probes/ if omitted)
 ```
 
 **Caching Workflow:**
@@ -443,14 +455,14 @@ probe-verus verify
 # Analyze existing output file (from CI, etc.)
 probe-verus verify ./my-project --from-file verification_output.txt
 
-# Enrich results with probe-names from atoms.json
-probe-verus verify -a
-probe-verus verify -a path/to/atoms.json
+# Enrich results with probe-names from atoms.json (auto-discovers in .verilib/probes/)
+probe-verus verify ./my-project
+probe-verus verify ./my-project -a path/to/atoms.json
 ```
 
-**Output format (with `-a/--with-atoms`):**
+**Output format:**
 
-When using `--with-atoms`, the output is a dictionary keyed by code-name:
+The output is wrapped in a Schema 2.0 envelope. The `data` payload is a dictionary keyed by code-name:
 
 ```json
 {
@@ -480,7 +492,7 @@ When using `--with-atoms`, the output is a dictionary keyed by code-name:
   - `sorries`: Contains `assume()` or `admit()`
   - `warning`: Passed with warnings
 
-**Note:** The `-a/--with-atoms` flag is required to generate this format. Without it, the legacy format is used for backwards compatibility.
+**Note:** If `-a` is not provided, probe-verus auto-discovers atoms in `.verilib/probes/`. If no atoms file is found, the output lacks code-name enrichment.
 
 ---
 
@@ -512,13 +524,13 @@ Tools are installed to `~/.probe-verus/tools/`. Existing tools on your `PATH` ar
 
 ### `run` - Atomize + Verify (CI/Docker)
 
-Run both `atomize` and `verify` in a single command. Designed for Docker containers and CI pipelines.
+Run both `atomize` and `verify` in a single command. Designed for Docker containers and CI pipelines. Outputs go to `.verilib/probes/` inside the project, plus a `run_summary.json` in the output directory.
 
 ```bash
 probe-verus run <PROJECT_PATH> [OPTIONS]
 
 Options:
-  -o, --output <DIR>       Output directory for results (default: ./output)
+  -o, --output <DIR>       Output directory for run_summary.json (default: ./output)
   -p, --package <NAME>     Package to verify (for workspaces)
       --auto-install       Automatically download missing tools without prompting
 ```

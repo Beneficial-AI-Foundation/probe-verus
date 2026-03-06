@@ -2,7 +2,9 @@
 
 use probe_verus::{
     add_external_stubs, build_call_graph, convert_to_atoms_with_parsed_spans,
-    find_duplicate_code_names, parse_scip_json,
+    find_duplicate_code_names,
+    metadata::{gather_metadata, get_default_output_path, wrap_in_envelope, AtomizeInternalConfig},
+    parse_scip_json,
     scip_cache::{Analyzer, ScipCache},
     AtomWithLines,
 };
@@ -14,7 +16,7 @@ use std::path::{Path, PathBuf};
 /// Generates call graph atoms with line numbers from SCIP indexes.
 pub fn cmd_atomize(
     project_path: PathBuf,
-    output: PathBuf,
+    output: Option<PathBuf>,
     regenerate_scip: bool,
     with_locations: bool,
     use_rust_analyzer: bool,
@@ -103,8 +105,17 @@ pub fn cmd_atomize(
         println!("  ✓ Added {} external function stub(s)", stub_count);
     }
 
-    // Write the output
-    let json = serde_json::to_string_pretty(&atoms_dict).expect("Failed to serialize JSON");
+    // Gather metadata and resolve output path
+    let metadata = gather_metadata(&project_path);
+    let output = output.unwrap_or_else(|| get_default_output_path(&project_path, &metadata, ""));
+
+    if let Some(parent) = output.parent() {
+        std::fs::create_dir_all(parent).expect("Failed to create output directory");
+    }
+
+    // Wrap in envelope and write
+    let envelope = wrap_in_envelope("probe-verus/atoms", "atomize", &atoms_dict, &metadata);
+    let json = serde_json::to_string_pretty(&envelope).expect("Failed to serialize JSON");
     std::fs::write(&output, &json).expect("Failed to write output file");
 
     // Print success summary
@@ -204,30 +215,20 @@ fn print_success_summary(output: &Path, atoms_dict: &BTreeMap<String, AtomWithLi
 }
 
 /// Internal atomize implementation that returns Result for better error handling.
-/// Used by the `run` command.
-pub fn atomize_internal(
-    project_path: &PathBuf,
-    output: &PathBuf,
-    regenerate_scip: bool,
-    verbose: bool,
-    use_rust_analyzer: bool,
-    allow_duplicates: bool,
-    auto_install: bool,
-) -> Result<usize, String> {
-    let analyzer = if use_rust_analyzer {
+/// Used by the `run` command (which pre-gathers metadata to share a timestamp).
+pub fn atomize_internal(config: &AtomizeInternalConfig) -> Result<usize, String> {
+    let analyzer = if config.use_rust_analyzer {
         Analyzer::RustAnalyzer
     } else {
         Analyzer::VerusAnalyzer
     };
-    let mut cache =
-        ScipCache::with_analyzer(project_path, analyzer).with_auto_install(auto_install);
+    let mut cache = ScipCache::with_analyzer(config.project_path, analyzer)
+        .with_auto_install(config.auto_install);
 
-    // Get or generate SCIP JSON
     let json_path = cache
-        .get_or_generate(regenerate_scip, verbose)
+        .get_or_generate(config.regenerate_scip, config.verbose)
         .map_err(|e| e.to_string())?;
 
-    // Parse and build call graph
     let scip_index = parse_scip_json(json_path.to_str().unwrap())
         .map_err(|e| format!("Failed to parse SCIP JSON: {}", e))?;
 
@@ -236,14 +237,13 @@ pub fn atomize_internal(
     let atoms = convert_to_atoms_with_parsed_spans(
         &call_graph,
         &symbol_to_display_name,
-        project_path,
+        config.project_path,
         false,
     );
 
-    // Check for duplicates
     let duplicates = find_duplicate_code_names(&atoms);
     if !duplicates.is_empty() {
-        if allow_duplicates {
+        if config.allow_duplicates {
             eprintln!(
                 "Warning: Found {} duplicate code_name(s) (continuing with --allow-duplicates)",
                 duplicates.len()
@@ -253,20 +253,25 @@ pub fn atomize_internal(
         }
     }
 
-    // Convert to dictionary (first occurrence wins)
     let mut atoms_dict: BTreeMap<String, AtomWithLines> = BTreeMap::new();
     for atom in atoms {
         atoms_dict.entry(atom.code_name.clone()).or_insert(atom);
     }
 
-    // Add stub atoms for external function dependencies
     add_external_stubs(&mut atoms_dict);
 
     let count = atoms_dict.len();
 
-    let json = serde_json::to_string_pretty(&atoms_dict)
+    let envelope = wrap_in_envelope("probe-verus/atoms", "atomize", &atoms_dict, config.metadata);
+
+    if let Some(parent) = config.output.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create output directory: {}", e))?;
+    }
+
+    let json = serde_json::to_string_pretty(&envelope)
         .map_err(|e| format!("Failed to serialize JSON: {}", e))?;
-    std::fs::write(output, &json).map_err(|e| format!("Failed to write output: {}", e))?;
+    std::fs::write(config.output, &json).map_err(|e| format!("Failed to write output: {}", e))?;
 
     Ok(count)
 }

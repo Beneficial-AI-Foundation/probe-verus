@@ -239,7 +239,8 @@ runs:
         echo ""
         echo "=== Generated atoms.json ==="
         ls -la "$ATOMS_FILE"
-        ATOM_COUNT=$(jq 'length' "$ATOMS_FILE")
+        # Schema 2.0: atoms are inside the .data envelope field
+        ATOM_COUNT=$(jq '.data | length' "$ATOMS_FILE")
         echo "Number of atoms: $ATOM_COUNT"
         
         echo "atoms_file=$(realpath "$ATOMS_FILE")" >> $GITHUB_OUTPUT
@@ -286,21 +287,23 @@ runs:
         echo "=== Verification Results ==="
         ls -la "$RESULTS_FILE"
         
-        # Extract summary - handle both formats:
-        # 1. New format (with -a atoms.json): dictionary keyed by function name with "verified" boolean
-        # 2. Old format: object with .summary.verified and .summary.total
-        if jq -e 'type == "object" and (keys | length) > 0 and (.[keys[0]] | has("verified"))' "$RESULTS_FILE" > /dev/null 2>&1; then
-          # New format: dictionary keyed by function name
-          TOTAL=$(jq 'keys | length' "$RESULTS_FILE")
-          VERIFIED=$(jq '[.[] | select(.verified == true)] | length' "$RESULTS_FILE")
-          echo "Parsed new format (dictionary with verified field)"
-        elif jq -e '.summary' "$RESULTS_FILE" > /dev/null 2>&1; then
-          # Old format with .summary
-          VERIFIED=$(jq -r '.summary.verified // .summary.verified_functions // 0' "$RESULTS_FILE")
-          TOTAL=$(jq -r '.summary.total // .summary.total_functions // 0' "$RESULTS_FILE")
-          echo "Parsed old format (with .summary)"
+        # Schema 2.0: unwrap the envelope to get the data payload.
+        # Use .data if present (envelope), otherwise treat as bare JSON (Schema 1.x compat).
+        DATA_EXPR='if .data then .data else . end'
+        
+        # Detect format of the data payload:
+        # 1. probe-verus/proofs: dictionary keyed by function name with "verified" boolean
+        # 2. probe-verus/verification-report: object with .summary
+        if jq -e "($DATA_EXPR) | type == \"object\" and (keys | length) > 0 and (.[keys[0]] | has(\"verified\"))" "$RESULTS_FILE" > /dev/null 2>&1; then
+          TOTAL=$(jq -r "($DATA_EXPR) | keys | length" "$RESULTS_FILE")
+          VERIFIED=$(jq -r "[($DATA_EXPR) | .[] | select(.verified == true)] | length" "$RESULTS_FILE")
+          echo "Parsed proofs format (dictionary with verified field)"
+        elif jq -e "($DATA_EXPR) | .summary" "$RESULTS_FILE" > /dev/null 2>&1; then
+          VERIFIED=$(jq -r "($DATA_EXPR) | .summary.verified // .summary.verified_functions // 0" "$RESULTS_FILE")
+          TOTAL=$(jq -r "($DATA_EXPR) | .summary.total // .summary.total_functions // 0" "$RESULTS_FILE")
+          echo "Parsed verification-report format (with .summary)"
         else
-          echo "WARNING: Could not parse results.json format, defaulting to 0"
+          echo "WARNING: Could not parse results format, defaulting to 0"
           VERIFIED=0
           TOTAL=0
         fi

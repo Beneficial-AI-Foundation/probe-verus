@@ -131,29 +131,34 @@ jobs:
 
 ## Output File Format
 
+All JSON outputs are wrapped in a [Schema 2.0 metadata envelope](https://github.com/Beneficial-AI-Foundation/probe/blob/main/docs/envelope-rationale.md). The actual payload is in the `data` field. Use `jq '.data'` to access it.
+
 ### results.json
+
+When atoms are available (the default), results use the `probe-verus/proofs` schema -- a dictionary keyed by code-name:
 
 ```json
 {
-  "summary": {
-    "verified": 42,
-    "failed": 2,
-    "total": 44
-  },
-  "functions": [
-    {
-      "name": "my_function",
-      "status": "verified",
-      "file": "src/lib.rs",
-      "line": 10
+  "schema": "probe-verus/proofs",
+  "schema-version": "2.0",
+  "tool": { "name": "probe-verus", "version": "2.0.0", "command": "verify" },
+  "source": { "repo": "...", "commit": "...", "language": "rust", "package": "...", "package-version": "..." },
+  "timestamp": "2026-03-06T12:00:00Z",
+  "data": {
+    "probe:my-crate/1.0.0/module/my_function()": {
+      "display-name": "my_function",
+      "code-path": "src/lib.rs",
+      "code-text": { "lines-start": 10, "lines-end": 25 },
+      "verified": true,
+      "verification-status": "verified"
     }
-  ]
+  }
 }
 ```
 
 ### atoms.json
 
-Contains call graph information mapping functions to their dependencies, used to enrich verification results with human-readable names.
+Contains call graph information wrapped in an envelope (`probe-verus/atoms` schema). The `data` payload maps code-names to function metadata including dependencies, source location, declaration kind, and language.
 
 ## Requirements
 

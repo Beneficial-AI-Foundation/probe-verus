@@ -8,11 +8,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 See the [Versioning Policy section in CLAUDE.md](CLAUDE.md#versioning-policy) for
 what constitutes a breaking change.
 
-## [2.0.0] - 2026-03-03
+## [2.0.0] - 2026-03-06
+
+### Breaking
+- Rename `FunctionMode` enum to `DeclKind` and JSON field `"mode"` to `"kind"` across all output formats. This unifies the declaration classification field name with `probe-lean`, enabling a single web viewer to handle both Verus and Lean atom graphs.
+- All JSON outputs now wrapped in Schema 2.0 metadata envelope (structured `tool`, `source`, `timestamp` fields). Consumers must use `data` key or the `unwrap_envelope` function to access the payload.
+- Default output paths changed from flat files (e.g. `atoms.json`) to `.verilib/probes/verus_<pkg>_<ver>[_suffix].json`. The `--output` flag still overrides this.
+- `run` command now writes atoms/proofs to `.verilib/probes/` instead of the `--output` directory (summary file still goes to `--output`).
+- `run_summary.json` now wrapped in Schema 2.0 envelope (`probe-verus/run-summary`).
+- Merged-atoms envelope `tool.name` is now `"probe"` (not `"probe-verus"`) per the canonical envelope spec.
+- `verify` command: enriched output (with atoms) uses `probe-verus/proofs` schema; unenriched output (without atoms) uses `probe-verus/verification-report` schema.
+- `verify -a` changed from `Option<Option<PathBuf>>` to `Option<PathBuf>` -- auto-discovers atoms in `.verilib/probes/` when omitted.
+
+### Added
+- Schema 2.0 metadata envelope for all JSON outputs (`src/metadata.rs`): includes `tool` (name, version, command), `source` (repo, commit, language, package, package-version), and `timestamp` fields
+- `language` field on `AtomWithLines` (defaults to `"rust"`) for cross-language merge compatibility
+- `--project-path` flag on `stubify`, `specify`, and `specs-data` subcommands for explicit project root when the input path is outside the project tree
+- `find_default_atoms_path` function for version-mismatch resilient atoms lookup, wired into `verify`'s auto-discovery
+- `AtomizeInternalConfig` and `VerifyInternalConfig` structs to replace long parameter lists and `#[allow(clippy::too_many_arguments)]`
+- `unwrap_envelope` accepts any envelope with a schema containing `/` and a `data` field, providing backward compatibility for bare JSON and cross-tool interop
+- `extract_envelope_inputs` (plural) propagates provenance from nested merged envelopes on recursive merge
+- `specs-data` command output now wrapped in Schema 2.0 envelope (`probe-verus/specs-data`)
+- `#[serde(rename_all = "kebab-case")]` on all envelope structs, future-proofing against snake_case serialization bugs
+- Unit tests for `extract_envelope_inputs`, `wrap_merged_envelope`, merged-envelope-through-unwrap roundtrip, and recursive merge provenance
 
 ### Changed
-- **BREAKING**: Rename `FunctionMode` enum to `DeclKind` and JSON field `"mode"` to `"kind"` across all output formats. This unifies the declaration classification field name with `probe-lean`, enabling a single web viewer to handle both Verus and Lean atom graphs.
 - Rename helper functions: `convert_mode` -> `convert_kind`, `mode_to_string` -> `kind_to_string`
+- Package version fallback uses 7-char git short hash instead of `"unknown"`, matching probe-lean and the envelope-rationale spec
+- `chrono` dependency simplified (removed unnecessary `serde` feature)
+- Eliminated `RunContext` struct; `run` command now passes shared metadata via config structs
+- Fixed `&PathBuf` anti-pattern in internal APIs (now uses `&Path`)
+
+### Fixed
+- `verify_internal` (used by `run` command) now produces `probe-verus/proofs` schema with `ProofsOutput` format when atoms are available, matching `cmd_verify` behavior (previously always used `verification-report` schema, creating a filename/schema mismatch)
+- GitHub Action (`action/action.yml`): `jq` commands now unwrap the Schema 2.0 envelope via `.data` so atom counts and verification result parsing work correctly
+- Merged-atoms envelope `tool.version` now uses plain semver (`"2.0.0"`) instead of compound `"probe-verus/2.0.0"`, matching the envelope-rationale spec
+- Updated `action/README.md` and `docker/README.md` output format docs for Schema 2.0 envelope and new file paths
+
+### Note
+- Schema values `probe-verus/specs-data` and `probe-verus/run-summary` need to be registered in the upstream [envelope-rationale.md](https://github.com/Beneficial-AI-Foundation/probe/blob/main/docs/envelope-rationale.md) known values list
 
 ## [1.5.0] - 2026-03-02
 

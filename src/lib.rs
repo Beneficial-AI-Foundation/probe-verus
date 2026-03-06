@@ -5,6 +5,7 @@ use std::path::Path;
 
 pub mod constants;
 pub mod error;
+pub mod metadata;
 pub mod path_utils;
 pub mod scip_cache;
 pub mod taxonomy;
@@ -75,13 +76,13 @@ pub struct ScipIndex {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Metadata {
-    pub tool_info: ToolInfo,
+    pub tool_info: ScipToolInfo,
     pub project_root: String,
     pub text_document_encoding: i32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct ToolInfo {
+pub struct ScipToolInfo {
     pub name: String,
     pub version: String,
 }
@@ -175,6 +176,10 @@ pub struct FunctionNode {
     pub definition_type_context: Vec<String>,
 }
 
+fn default_language() -> String {
+    "rust".to_string()
+}
+
 /// Output format: Atom with line numbers
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AtomWithLines {
@@ -199,6 +204,9 @@ pub struct AtomWithLines {
     pub code_text: CodeTextInfo,
     /// Declaration kind: exec, proof, or spec
     pub kind: DeclKind,
+    /// Source language of the atom (for cross-language merge compatibility)
+    #[serde(default = "default_language")]
+    pub language: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1453,6 +1461,7 @@ fn convert_to_atoms_with_lines_internal(
                     lines_end: data.lines_end,
                 },
                 kind: data.kind,
+                language: "rust".to_string(),
             }
         })
         .collect()
@@ -1566,6 +1575,7 @@ pub fn add_external_stubs(atoms_dict: &mut BTreeMap<String, AtomWithLines>) -> u
                     lines_end: 0,
                 },
                 kind: DeclKind::Exec,
+                language: "rust".to_string(),
             },
         );
     }
@@ -1817,6 +1827,7 @@ mod tests {
                     lines_end: 20,
                 },
                 kind: DeclKind::Exec,
+                language: "rust".to_string(),
             },
         );
 
@@ -1853,6 +1864,7 @@ mod tests {
                     lines_end: 20,
                 },
                 kind: DeclKind::Exec,
+                language: "rust".to_string(),
             },
         );
         atoms_dict.insert(
@@ -1869,11 +1881,115 @@ mod tests {
                     lines_end: 40,
                 },
                 kind: DeclKind::Exec,
+                language: "rust".to_string(),
             },
         );
 
         let count = add_external_stubs(&mut atoms_dict);
         assert_eq!(count, 0);
         assert_eq!(atoms_dict.len(), 2);
+    }
+
+    #[test]
+    fn test_language_field_defaults_to_rust_on_old_json() {
+        let old_json = serde_json::json!({
+            "display-name": "foo",
+            "dependencies": [],
+            "code-module": "",
+            "code-path": "src/lib.rs",
+            "code-text": { "lines-start": 1, "lines-end": 10 },
+            "kind": "exec"
+        });
+        let atom: AtomWithLines = serde_json::from_value(old_json).unwrap();
+        assert_eq!(atom.language, "rust");
+    }
+
+    #[test]
+    fn test_language_field_preserved_from_json() {
+        let lean_json = serde_json::json!({
+            "display-name": "Foo.bar",
+            "dependencies": [],
+            "code-module": "",
+            "code-path": "Foo.lean",
+            "code-text": { "lines-start": 1, "lines-end": 10 },
+            "kind": "exec",
+            "language": "lean"
+        });
+        let atom: AtomWithLines = serde_json::from_value(lean_json).unwrap();
+        assert_eq!(atom.language, "lean");
+    }
+
+    #[test]
+    fn test_language_field_serialized_in_output() {
+        let atom = AtomWithLines {
+            display_name: "foo".to_string(),
+            code_name: "probe:crate/1.0/foo()".to_string(),
+            dependencies: BTreeSet::new(),
+            dependencies_with_locations: Vec::new(),
+            code_module: String::new(),
+            code_path: "src/lib.rs".to_string(),
+            code_text: CodeTextInfo {
+                lines_start: 1,
+                lines_end: 10,
+            },
+            kind: DeclKind::Exec,
+            language: "rust".to_string(),
+        };
+        let json = serde_json::to_value(&atom).unwrap();
+        assert_eq!(json["language"], "rust");
+    }
+
+    #[test]
+    fn test_envelope_aware_atom_loading() {
+        use crate::metadata::unwrap_envelope;
+
+        let enveloped = serde_json::json!({
+            "schema": "probe-verus/atoms",
+            "schema-version": "2.0",
+            "tool": { "name": "probe-verus", "version": "2.0.0", "command": "atomize" },
+            "source": {
+                "repo": "", "commit": "", "language": "rust",
+                "package": "test", "package-version": "1.0.0"
+            },
+            "timestamp": "2026-03-06T12:00:00Z",
+            "data": {
+                "probe:test/1.0.0/foo()": {
+                    "display-name": "foo",
+                    "dependencies": [],
+                    "code-module": "",
+                    "code-path": "src/lib.rs",
+                    "code-text": { "lines-start": 1, "lines-end": 10 },
+                    "kind": "exec",
+                    "language": "rust"
+                }
+            }
+        });
+
+        let data = unwrap_envelope(enveloped);
+        let atoms: BTreeMap<String, AtomWithLines> = serde_json::from_value(data).unwrap();
+        assert_eq!(atoms.len(), 1);
+        assert!(atoms.contains_key("probe:test/1.0.0/foo()"));
+        assert_eq!(atoms["probe:test/1.0.0/foo()"].language, "rust");
+    }
+
+    #[test]
+    fn test_bare_dict_atom_loading() {
+        use crate::metadata::unwrap_envelope;
+
+        let bare = serde_json::json!({
+            "probe:test/1.0.0/foo()": {
+                "display-name": "foo",
+                "dependencies": [],
+                "code-module": "",
+                "code-path": "src/lib.rs",
+                "code-text": { "lines-start": 1, "lines-end": 10 },
+                "kind": "exec"
+            }
+        });
+
+        let data = unwrap_envelope(bare);
+        let atoms: BTreeMap<String, AtomWithLines> = serde_json::from_value(data).unwrap();
+        assert_eq!(atoms.len(), 1);
+        assert_eq!(atoms["probe:test/1.0.0/foo()"].language, "rust");
     }
 }

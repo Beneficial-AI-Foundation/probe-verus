@@ -829,10 +829,25 @@ impl FunctionInfoVisitor {
             return None;
         }
 
-        // Phase 1: skip doc comments and attributes to find the fn declaration line.
+        // Phase 1: skip doc comments, attributes, and block comments to find the fn line.
         let mut sig_start = start_idx;
+        let mut in_block_comment = false;
         for line in &lines[start_idx..end_idx] {
             let trimmed = line.trim();
+            if in_block_comment {
+                sig_start += 1;
+                if trimmed.contains("*/") {
+                    in_block_comment = false;
+                }
+                continue;
+            }
+            if trimmed.starts_with("/*") {
+                sig_start += 1;
+                if !trimmed.contains("*/") {
+                    in_block_comment = true;
+                }
+                continue;
+            }
             if trimmed.starts_with("///") || trimmed.starts_with("#[") {
                 sig_start += 1;
             } else {
@@ -840,18 +855,32 @@ impl FunctionInfoVisitor {
             }
         }
 
-        // Phase 2: collect from the fn declaration until the body-opening `{`.
+        // Phase 2: collect from the fn declaration until the body-opening `{`,
+        // preserving indentation relative to the fn line.
+        let base_indent = lines
+            .get(sig_start)
+            .map_or(0, |l| l.len() - l.trim_start().len());
         let mut sig_lines = Vec::new();
         for line in &lines[sig_start..end_idx] {
             if let Some(brace_pos) = line.find('{') {
-                // Include text before the brace on this line
                 let before = line[..brace_pos].trim_end();
                 if !before.is_empty() {
-                    sig_lines.push(before);
+                    let stripped =
+                        if before.len() > base_indent && before[..base_indent].trim().is_empty() {
+                            &before[base_indent..]
+                        } else {
+                            before.trim_start()
+                        };
+                    sig_lines.push(stripped);
                 }
                 break;
             }
-            sig_lines.push(line.trim());
+            let stripped = if line.len() > base_indent && line[..base_indent].trim().is_empty() {
+                line[base_indent..].trim_end()
+            } else {
+                line.trim()
+            };
+            sig_lines.push(stripped);
         }
 
         if sig_lines.is_empty() {

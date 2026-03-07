@@ -162,7 +162,7 @@ fn extract_math_interpretation(doc_comment: &str) -> String {
 }
 
 /// Compute cross-references: which spec function names appear in a function's
-/// ensures/requires calls.
+/// ensures/requires calls (AST-extracted, not text-based).
 fn compute_referenced_specs(func: &FunctionInfo, spec_names: &HashSet<String>) -> Vec<String> {
     let mut refs: HashSet<String> = HashSet::new();
     for call in func.ensures_calls.iter().chain(func.requires_calls.iter()) {
@@ -170,23 +170,6 @@ fn compute_referenced_specs(func: &FunctionInfo, spec_names: &HashSet<String>) -
             refs.insert(call.clone());
         }
     }
-
-    // Also scan the contract text for spec function references (the Python script does this)
-    if let Some(ref req_text) = func.requires_text {
-        for name in spec_names {
-            if req_text.contains(name.as_str()) {
-                refs.insert(name.clone());
-            }
-        }
-    }
-    if let Some(ref ens_text) = func.ensures_text {
-        for name in spec_names {
-            if ens_text.as_str().contains(name.as_str()) {
-                refs.insert(name.clone());
-            }
-        }
-    }
-
     let mut sorted: Vec<String> = refs.into_iter().collect();
     sorted.sort();
     sorted
@@ -468,26 +451,36 @@ pub fn cmd_specs_data(
                 // specs browser to stay consistent with the homepage dashboard.
             }
             DeclKind::Exec => {
-                // Only exec-mode functions with real specs, excluding external_body.
-                // This matches the tracked-csv selection so the specs browser
-                // count is consistent with the homepage dashboard.
-                if !func.specified || func.is_external_body {
+                if !func.specified {
                     continue;
                 }
+
+                let category = if func.is_external_body {
+                    "external"
+                } else {
+                    "tracked"
+                };
 
                 let impl_type = func.impl_type.as_deref().unwrap_or("");
                 let fn_id = make_id(module_path, &func.name, display_name, line);
 
-                // Build contract text from signature + requires + ensures
-                let mut contract_parts: Vec<String> = Vec::new();
-                if let Some(ref sig) = func.signature_text {
-                    contract_parts.push(sig.clone());
-                }
+                // Build contract from signature (truncated before requires/ensures)
+                // plus AST-extracted requires/ensures text for accuracy.
+                let sig = func.signature_text.as_deref().unwrap_or("");
+                let sig_only = if let Some(pos) = Regex::new(r"(?m)^\s*(requires|ensures)\b")
+                    .ok()
+                    .and_then(|re| re.find(sig))
+                {
+                    sig[..pos.start()].trim_end()
+                } else {
+                    sig.trim_end()
+                };
+                let mut contract_parts: Vec<&str> = vec![sig_only];
                 if let Some(ref req) = func.requires_text {
-                    contract_parts.push(req.clone());
+                    contract_parts.push(req);
                 }
                 if let Some(ref ens) = func.ensures_text {
-                    contract_parts.push(ens.clone());
+                    contract_parts.push(ens);
                 }
                 let contract = contract_parts.join("\n");
 
@@ -519,7 +512,7 @@ pub fn cmd_specs_data(
                     math_interpretation: math_interp,
                     informal_interpretation: String::new(),
                     github_link,
-                    category: "tracked".to_string(),
+                    category: category.to_string(),
                     is_public,
                     is_libsignal,
                     has_spec,

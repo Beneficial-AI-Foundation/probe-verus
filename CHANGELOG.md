@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 See the [Versioning Policy section in CLAUDE.md](CLAUDE.md#versioning-policy) for
 what constitutes a breaking change.
 
+## [2.1.0] - 2026-03-09
+
+### Added
+- `specs-data`: include `external_body` functions in output with `category: "external"` (previously silently skipped)
+
+### Fixed
+- `specs-data`: remove duplicate cross-references caused by redundant text-based scanning on top of AST-extracted calls
+- `specs-data`: fix contract text duplication where `requires`/`ensures` clauses appeared twice (once from signature, once from dedicated fields)
+- `verus_parser`: skip block comments (`/* ... */`) when extracting function signature text
+- `verus_parser`: preserve relative indentation in multi-line signature text instead of fully trimming each line
+
 ## [2.0.0] - 2026-03-06
 
 ### Breaking
@@ -164,7 +175,8 @@ what constitutes a breaking change.
 
 Initial release. SCIP-based call graph generation for Rust/Verus projects.
 
-[Unreleased]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v1.5.0...v2.0.0
 [1.5.0]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v1.3.0...v1.4.0

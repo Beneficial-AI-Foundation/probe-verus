@@ -139,6 +139,17 @@ pub struct VerifyInternalConfig<'a> {
     pub metadata: &'a ProjectMetadata,
 }
 
+/// Configuration for `specify_internal`, replacing a long parameter list.
+pub struct SpecifyInternalConfig<'a> {
+    pub path: &'a Path,
+    pub output: &'a Path,
+    pub atoms_path: &'a Path,
+    pub with_spec_text: bool,
+    pub taxonomy_config_path: Option<&'a Path>,
+    pub taxonomy_explain: bool,
+    pub metadata: &'a ProjectMetadata,
+}
+
 // =============================================================================
 // Envelope wrapping / unwrapping
 // =============================================================================
@@ -259,7 +270,7 @@ pub fn unwrap_envelope(json: serde_json::Value) -> serde_json::Value {
 
 /// Compute the default output path: `.verilib/probes/verus_<pkg>_<ver>[_<suffix>].json`
 ///
-/// `suffix` is empty for atoms, or `"specs"`, `"proofs"`, `"stubs"`, etc.
+/// `suffix` is empty for the unified verify output, or `"atoms"`, `"specs"`, `"proofs"`, etc.
 pub fn get_default_output_path(
     project_root: &Path,
     metadata: &ProjectMetadata,
@@ -287,11 +298,11 @@ pub fn get_default_output_path(
 
 /// Find the default atoms file under `.verilib/probes/`, tolerating version mismatches.
 ///
-/// 1. Try exact path: `verus_<pkg>_<ver>.json`
-/// 2. If not found, scan for `verus_<pkg>_*.json` and pick the most recently modified
+/// 1. Try exact path: `verus_<pkg>_<ver>_atoms.json`
+/// 2. If not found, scan for `verus_<pkg>_*_atoms.json` and pick the most recently modified
 /// 3. Warn on fallback
 pub fn find_default_atoms_path(project_root: &Path, metadata: &ProjectMetadata) -> Option<PathBuf> {
-    let exact = get_default_output_path(project_root, metadata, "");
+    let exact = get_default_output_path(project_root, metadata, "atoms");
     if exact.exists() {
         return Some(exact);
     }
@@ -307,18 +318,14 @@ pub fn find_default_atoms_path(project_root: &Path, metadata: &ProjectMetadata) 
         &metadata.pkg_name
     };
     let prefix = format!("verus_{}_", pkg);
+    let atoms_suffix = "_atoms.json";
 
-    let suffixes = ["_specs", "_proofs", "_stubs", "_specs-data", "_run-summary"];
     let mut best: Option<(PathBuf, std::time::SystemTime)> = None;
     if let Ok(entries) = std::fs::read_dir(&probes_dir) {
         for entry in entries.flatten() {
             let name = entry.file_name();
             let name_str = name.to_string_lossy();
-            if name_str.starts_with(&prefix) && name_str.ends_with(".json") {
-                let after_prefix = &name_str[prefix.len()..name_str.len() - ".json".len()];
-                if suffixes.iter().any(|s| after_prefix.ends_with(s)) {
-                    continue;
-                }
+            if name_str.starts_with(&prefix) && name_str.ends_with(atoms_suffix) {
                 let modified = entry
                     .metadata()
                     .ok()
@@ -533,6 +540,22 @@ mod tests {
             pkg_name: "curve25519-dalek".to_string(),
             pkg_version: "4.1.3".to_string(),
         };
+        let path = get_default_output_path(Path::new("/project"), &meta, "atoms");
+        assert_eq!(
+            path,
+            PathBuf::from("/project/.verilib/probes/verus_curve25519-dalek_4.1.3_atoms.json")
+        );
+    }
+
+    #[test]
+    fn test_get_default_output_path_unified_verify() {
+        let meta = ProjectMetadata {
+            commit: "abc".to_string(),
+            repo: "".to_string(),
+            timestamp: "".to_string(),
+            pkg_name: "curve25519-dalek".to_string(),
+            pkg_version: "4.1.3".to_string(),
+        };
         let path = get_default_output_path(Path::new("/project"), &meta, "");
         assert_eq!(
             path,
@@ -740,15 +763,16 @@ mod tests {
     }
 
     #[test]
-    fn test_find_default_atoms_path_excludes_suffixed_files_not_package_names() {
+    fn test_find_default_atoms_path_finds_atoms_suffix() {
         let tmp = tempfile::tempdir().unwrap();
         let probes = tmp.path().join(".verilib").join("probes");
         std::fs::create_dir_all(&probes).unwrap();
 
-        // Package whose name contains "_specs" -- atoms file should NOT be excluded
-        std::fs::write(probes.join("verus_my_specs_tool_1.0.0.json"), "{}").unwrap();
-        // A real specs file that SHOULD be excluded
+        // Atoms file with _atoms suffix
+        std::fs::write(probes.join("verus_my_specs_tool_1.0.0_atoms.json"), "{}").unwrap();
+        // Non-atoms files that should not be found
         std::fs::write(probes.join("verus_my_specs_tool_1.0.0_specs.json"), "{}").unwrap();
+        std::fs::write(probes.join("verus_my_specs_tool_1.0.0.json"), "{}").unwrap();
 
         let meta = ProjectMetadata {
             commit: "abc1234".to_string(),
@@ -766,7 +790,7 @@ mod tests {
             .unwrap()
             .to_string_lossy()
             .to_string();
-        assert_eq!(found_name, "verus_my_specs_tool_1.0.0.json");
+        assert_eq!(found_name, "verus_my_specs_tool_1.0.0_atoms.json");
     }
 
     #[test]

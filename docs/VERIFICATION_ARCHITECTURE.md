@@ -35,7 +35,7 @@ The `probe-verus` tool has **two completely independent pipelines**:
 │        │                      │        │                                │
 │        ▼                      │        ▼                                │
 │   .verilib/probes/            │   .verilib/probes/                     │
-│     verus_<pkg>_<ver>.json    │     verus_<pkg>_<ver>_proofs.json      │
+│  verus_<pkg>_<ver>_atoms.json  │     verus_<pkg>_<ver>_proofs.json      │
 │   (call graph)                │   (verified/failed functions)           │
 └───────────────────────────────┴─────────────────────────────────────────┘
 ```

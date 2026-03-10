@@ -4,12 +4,12 @@
 //! - `atomize`: Generate call graph atoms with line numbers from SCIP indexes
 //! - `callee-crates`: Find which crates a function's callees belong to at a given depth
 //! - `list-functions`: List all functions in a Rust/Verus project
-//! - `verify`: Run Verus verification and analyze results (or analyze existing output)
+//! - `run-verus`: Run Verus verification and analyze results (or analyze existing output)
 //! - `specify`: Extract function specifications (requires/ensures) to JSON
 //! - `merge-atoms`: Combine independently-indexed atoms.json files
 //! - `stubify`: Convert .md files with YAML frontmatter to JSON
 //! - `setup`: Install or check status of external tools (verus-analyzer, scip)
-//! - `run`: Run both atomize and verify (designed for Docker/CI usage)
+//! - `verify`: Unified pipeline - atomize + specify + run-verus
 
 use clap::{Parser, Subcommand};
 use probe_verus::constants::DEFAULT_OUTPUT_DIR;
@@ -18,7 +18,7 @@ use std::path::PathBuf;
 // Import command implementations
 mod commands;
 use commands::{
-    cmd_atomize, cmd_callee_crates, cmd_functions, cmd_merge_atoms, cmd_run, cmd_setup,
+    cmd_atomize, cmd_callee_crates, cmd_functions, cmd_merge_atoms, cmd_run_verus, cmd_setup,
     cmd_specify, cmd_specs_data, cmd_stubify, cmd_tracked_csv, cmd_verify, OutputFormat,
 };
 
@@ -37,7 +37,7 @@ enum Commands {
         /// Path to the Rust/Verus project
         project_path: PathBuf,
 
-        /// Output file path (default: .verilib/probes/verus_<pkg>_<ver>.json)
+        /// Output file path (default: .verilib/probes/verus_<pkg>_<ver>_atoms.json)
         #[arg(short, long)]
         output: Option<PathBuf>,
 
@@ -107,8 +107,8 @@ enum Commands {
     /// Run Verus verification and analyze results, or analyze existing output
     ///
     /// If no project_path is given, uses cached verification output from data/verification_output.txt
-    #[command(name = "verify")]
-    Verify {
+    #[command(name = "run-verus")]
+    RunVerus {
         /// Path to the Rust/Verus project (optional if using cached output)
         project_path: Option<PathBuf>,
 
@@ -286,27 +286,33 @@ enum Commands {
         status: bool,
     },
 
-    /// Run both atomize and verify commands (designed for Docker/CI usage)
+    /// Unified pipeline: atomize + specify + run-verus
     ///
     /// This is the recommended entrypoint for Docker containers and CI pipelines.
-    /// It runs atomize followed by verify, with proper error handling and JSON output.
-    Run {
+    /// Runs atomize, specify, and run-verus in sequence, with proper error handling
+    /// and JSON output. Individual steps can be skipped with --skip-* flags.
+    #[command(name = "verify")]
+    Verify {
         /// Path to the Rust/Verus project
         project_path: PathBuf,
 
-        /// Output directory for results (default: ./output)
+        /// Output directory for the verify_summary.json (default: ./output)
         #[arg(short, long, default_value = DEFAULT_OUTPUT_DIR)]
         output: PathBuf,
 
-        /// Run only the atomize command
+        /// Skip the atomize step
         #[arg(long)]
-        atomize_only: bool,
+        skip_atomize: bool,
 
-        /// Run only the verify command
+        /// Skip the specify step
         #[arg(long)]
-        verify_only: bool,
+        skip_specify: bool,
 
-        /// Package name for workspace projects (passed to verify)
+        /// Skip the run-verus step (cargo verus verification)
+        #[arg(long)]
+        skip_verify: bool,
+
+        /// Package name for workspace projects (passed to run-verus)
         #[arg(short, long)]
         package: Option<String>,
 
@@ -329,6 +335,26 @@ enum Commands {
         /// Automatically download missing external tools without prompting
         #[arg(long)]
         auto_install: bool,
+
+        /// Path to existing atoms.json (for use with --skip-atomize)
+        #[arg(short = 'a', long)]
+        with_atoms: Option<PathBuf>,
+
+        /// Include raw specification text (requires/ensures) in specs output
+        #[arg(long)]
+        with_spec_text: bool,
+
+        /// Path to taxonomy TOML config for spec classification labels
+        #[arg(long)]
+        taxonomy_config: Option<PathBuf>,
+
+        /// Extra arguments passed to Verus (e.g. --log smt --log-dir ./smt-logs)
+        #[arg(long, num_args = 1.., allow_hyphen_values = true)]
+        verus_args: Vec<String>,
+
+        /// Also write separate atoms, specs, and proofs files (in addition to unified output)
+        #[arg(long)]
+        separate_outputs: bool,
     },
 }
 
@@ -377,7 +403,7 @@ fn main() {
                 output,
             );
         }
-        Commands::Verify {
+        Commands::RunVerus {
             project_path,
             from_file,
             exit_code,
@@ -389,7 +415,7 @@ fn main() {
             with_atoms,
             verus_args,
         } => {
-            cmd_verify(
+            cmd_run_verus(
                 project_path,
                 from_file,
                 exit_code,
@@ -470,29 +496,41 @@ fn main() {
         Commands::Setup { status } => {
             cmd_setup(status);
         }
-        Commands::Run {
+        Commands::Verify {
             project_path,
             output,
-            atomize_only,
-            verify_only,
+            skip_atomize,
+            skip_specify,
+            skip_verify,
             package,
             regenerate_scip,
             verbose,
             rust_analyzer,
             allow_duplicates,
             auto_install,
+            with_atoms,
+            with_spec_text,
+            taxonomy_config,
+            verus_args,
+            separate_outputs,
         } => {
-            cmd_run(
+            cmd_verify(
                 project_path,
                 output,
-                atomize_only,
-                verify_only,
+                skip_atomize,
+                skip_specify,
+                skip_verify,
                 package,
                 regenerate_scip,
                 verbose,
                 rust_analyzer,
                 allow_duplicates,
                 auto_install,
+                with_atoms,
+                with_spec_text,
+                taxonomy_config,
+                verus_args,
+                separate_outputs,
             );
         }
     }

@@ -8,6 +8,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 See the [Versioning Policy section in CLAUDE.md](CLAUDE.md#versioning-policy) for
 what constitutes a breaking change.
 
+## [3.0.0] - 2026-03-10
+
+### Breaking
+- **Command rename**: `verify` -> `run-verus` (standalone Verus verification runner)
+- **Command rename**: `run` -> `verify` (unified pipeline: atomize + specify + run-verus)
+- **Command removed**: `run` no longer exists as a standalone command
+- `verify` now runs a 3-step pipeline (atomize, specify, run-verus) instead of just cargo verus
+- Old `--atomize-only`/`--verify-only` flags replaced by `--skip-atomize`/`--skip-specify`/`--skip-verify`
+- Proofs envelope `tool.command` changed from `"verify"` to `"run-verus"`
+- Verification-report envelope `tool.command` changed from `"verify"` to `"run-verus"`
+- Summary file renamed from `run_summary.json` to `verify_summary.json`
+- Summary envelope schema changed from `probe-verus/run-summary` to `probe-verus/verify-summary`
+- Docker entrypoint changed from `probe-verus run` to `probe-verus verify`
+- Atomize default output filename changed from `verus_<pkg>_<ver>.json` to `verus_<pkg>_<ver>_atoms.json`
+- Unified verify output uses the unsuffixed name `verus_<pkg>_<ver>.json` (previously used by atomize)
+
+### Added
+- New unified `verify` command combining atomize + specify + run-verus in a single pipeline
+- `verify` produces a single unified JSON (schema `probe-verus/verify`) where each atom entry includes optional `verification-status` and `specified` fields, matching `probe-lean/verify` output structure
+- `--separate-outputs` flag on `verify` to also write individual atoms, specs, and proofs files
+- `--skip-atomize`, `--skip-specify`, `--skip-verify` flags on `verify` to selectively skip steps
+- `--with-atoms`, `--with-spec-text`, `--taxonomy-config` flags on `verify` for specify step configuration
+- `--verus-args` flag on `verify` to pass extra arguments to cargo verus
+- `UnifiedAtom` type composing `AtomWithLines` with optional `verification-status` and `specified`
+- `specify_internal` function and `SpecifyInternalConfig` struct for pipeline integration
+
+### Changed
+- `verify_internal` renamed to `run_verus_internal` (internal API, not user-facing)
+- `VerifyInternalConfig` remains unchanged (used by `run_verus_internal`)
+
 ## [2.1.0] - 2026-03-09
 
 ### Added

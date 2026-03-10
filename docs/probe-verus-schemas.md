@@ -1,7 +1,7 @@
 # probe-verus Data Schemas
 
-Version: 2.0
-Date: 2026-03-06
+Version: 3.0
+Date: 2026-03-10
 
 This document specifies the concrete JSON `data` payloads produced by each
 probe-verus subcommand.  It complements the language-agnostic
@@ -129,8 +129,9 @@ entries with `code-path: ""` and `code-text: {"lines-start": 0, "lines-end": 0}`
 
 ## 2. `probe-verus/proofs` — Verification Results (Per-Function)
 
-**Produced by:** `verify --with-atoms` (or when atoms are auto-discovered)
+**Produced by:** `run-verus --with-atoms` (or when atoms are auto-discovered), or by the `verify` unified pipeline
 **Envelope schema:** `"probe-verus/proofs"`
+**Envelope `tool.command`:** `"run-verus"`
 
 ### Data Shape
 
@@ -176,8 +177,9 @@ entries with `code-path: ""` and `code-text: {"lines-start": 0, "lines-end": 0}`
 
 ## 3. `probe-verus/verification-report` — Verification Results (Aggregate)
 
-**Produced by:** `verify` when no atoms file is available
+**Produced by:** `run-verus` when no atoms file is available
 **Envelope schema:** `"probe-verus/verification-report"`
+**Envelope `tool.command`:** `"run-verus"`
 
 ### Data Shape
 
@@ -350,7 +352,83 @@ is **not** serialized (the code-name key serves as the identifier).
 
 ---
 
-## 5. `probe-verus/stubs` — Stub Frontmatter
+## 5. `probe-verus/verify` — Unified Verify Output
+
+**Produced by:** `verify` (unified pipeline)
+**Envelope schema:** `"probe-verus/verify"`
+**Envelope `tool.command`:** `"verify"`
+
+### Overview
+
+The primary output of the `verify` command.  Each entry is an atom enriched
+with optional `verification-status` and `specified` fields, matching the
+`probe-lean/verify` output structure.
+
+By default, only this file is produced.  Pass `--separate-outputs` to also
+write the individual atoms, specs, and proofs files.
+
+### Data Shape
+
+`data` is an object keyed by code-name.  Each value is a `UnifiedAtom`
+(an `AtomWithLines` with two optional fields):
+
+```json
+{
+  "probe:my-crate/1.0.0/module/MyType#method()": {
+    "display-name": "MyType::method",
+    "dependencies": [
+      "probe:my-crate/1.0.0/module/helper()"
+    ],
+    "code-module": "module",
+    "code-path": "src/module.rs",
+    "code-text": { "lines-start": 42, "lines-end": 67 },
+    "kind": "exec",
+    "language": "rust",
+    "verification-status": "verified",
+    "specified": true
+  },
+  "probe:external/1.0.0/other/func()": {
+    "display-name": "func",
+    "dependencies": [],
+    "code-module": "other",
+    "code-path": "",
+    "code-text": { "lines-start": 0, "lines-end": 0 },
+    "kind": "exec",
+    "language": "rust"
+  }
+}
+```
+
+### Field Reference
+
+All fields from `AtomWithLines` (section 1) are present.  Two optional fields
+are added:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `verification-status` | string | no | `"verified"`, `"failed"`, or `"unverified"` (absent when `--skip-verify`) |
+| `specified` | boolean | no | Whether the function has any spec (absent when `--skip-specify`) |
+
+### Verification Status Mapping
+
+| Verus status | Unified value | Meaning |
+|-------------|---------------|---------|
+| `success` | `"verified"` | Passed verification |
+| `failure` | `"failed"` | Verification errors |
+| `sorries` | `"unverified"` | Contains `assume()`/`admit()` |
+| `warning` | `"verified"` | Passed with warnings |
+
+### Notes
+
+- External stubs (functions defined outside the workspace) will not have
+  `verification-status` or `specified` fields since they are not parsed by
+  specify or verified by run-verus.
+- When a pipeline step is skipped (`--skip-specify` or `--skip-verify`),
+  the corresponding field is absent from **all** entries.
+
+---
+
+## 6. `probe-verus/stubs` — Stub Frontmatter
 
 **Produced by:** `stubify`
 **Envelope schema:** `"probe-verus/stubs"`
@@ -384,7 +462,7 @@ All fields are optional.
 
 ---
 
-## 6. `probe/merged-atoms` — Merged Call Graph
+## 7. `probe/merged-atoms` — Merged Call Graph
 
 **Produced by:** `merge-atoms`
 **Envelope schema:** `"probe/merged-atoms"`
@@ -422,7 +500,7 @@ is an `AtomWithLines`.
 
 The following commands produce raw JSON without a Schema 2.0 envelope.
 
-### 7. `list-functions` — Function Listing
+### 8. `list-functions` — Function Listing
 
 **Envelope:** None
 
@@ -446,7 +524,7 @@ Each `FunctionInfo` in the array has the same shape as the specs entry (section
 4), except the `name` field is **not** serialized and there is no `spec-labels`
 field.
 
-### 8. `callee-crates` — Crate Dependencies at Call Depth
+### 9. `callee-crates` — Crate Dependencies at Call Depth
 
 **Envelope:** None
 

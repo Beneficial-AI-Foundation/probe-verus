@@ -3,6 +3,7 @@
 use probe_verus::constants::LINE_TOLERANCE;
 use probe_verus::metadata::{
     find_project_root, gather_metadata, get_default_output_path, unwrap_envelope, wrap_in_envelope,
+    SpecifyInternalConfig,
 };
 use probe_verus::path_utils::{extract_src_suffix, paths_match_by_suffix};
 use probe_verus::taxonomy;
@@ -37,10 +38,10 @@ struct SpecifyEntry {
     spec_labels: Vec<String>,
 }
 
-/// Execute the specify command.
+/// Execute the specify command (CLI entry point).
 ///
-/// Extracts function specifications (requires/ensures) to JSON,
-/// keyed by code-name from atoms.json.
+/// Thin wrapper around `specify_internal` that resolves metadata and output paths,
+/// then exits on error.
 pub fn cmd_specify(
     path: PathBuf,
     output: Option<PathBuf>,
@@ -50,7 +51,6 @@ pub fn cmd_specify(
     taxonomy_explain: bool,
     project_path_override: Option<PathBuf>,
 ) {
-    // Validate inputs
     if !path.exists() {
         eprintln!("Error: Path does not exist: {}", path.display());
         std::process::exit(1);
@@ -61,45 +61,72 @@ pub fn cmd_specify(
         std::process::exit(1);
     }
 
-    // Load taxonomy config if provided
-    let taxonomy_config = taxonomy_config_path.map(|tc_path| {
-        if !tc_path.exists() {
-            eprintln!("Error: taxonomy config not found at {}", tc_path.display());
+    let project_root = project_path_override
+        .unwrap_or_else(|| find_project_root(&path).unwrap_or_else(|| path.clone()));
+    let metadata = gather_metadata(&project_root);
+    let output =
+        output.unwrap_or_else(|| get_default_output_path(&project_root, &metadata, "specs"));
+
+    let config = SpecifyInternalConfig {
+        path: &path,
+        output: &output,
+        atoms_path: &atoms_path,
+        with_spec_text,
+        taxonomy_config_path: taxonomy_config_path.as_deref(),
+        taxonomy_explain,
+        metadata: &metadata,
+    };
+
+    match specify_internal(&config) {
+        Ok(_) => {}
+        Err(e) => {
+            eprintln!("Error: {e}");
             std::process::exit(1);
         }
-        match taxonomy::load_taxonomy_config(&tc_path) {
-            Ok(config) => config,
-            Err(e) => {
-                eprintln!("Error: {e}");
-                std::process::exit(1);
+    }
+}
+
+/// Core specify logic callable from both the CLI and the unified verify pipeline.
+///
+/// Returns `Ok(matched_count)` on success.
+pub fn specify_internal(config: &SpecifyInternalConfig) -> Result<usize, String> {
+    let taxonomy_config = config
+        .taxonomy_config_path
+        .map(|tc_path| {
+            if !tc_path.exists() {
+                return Err(format!(
+                    "taxonomy config not found at {}",
+                    tc_path.display()
+                ));
             }
-        }
-    });
+            taxonomy::load_taxonomy_config(tc_path)
+        })
+        .transpose()?;
 
-    // Load atoms.json to get code-name mappings
-    let atoms = load_atoms(&atoms_path);
+    let atoms = load_atoms(config.atoms_path).map_err(|e| {
+        format!(
+            "Failed to load atoms from {}: {e}",
+            config.atoms_path.display()
+        )
+    })?;
 
-    // Parse all functions with spec info (requires/ensures)
     let parsed: ParsedOutput = verus_parser::parse_all_functions(
-        &path,
-        true,           // include_verus_constructs
-        true,           // include_methods
-        false,          // show_visibility
-        false,          // show_kind
-        with_spec_text, // include_spec_text
+        config.path,
+        true,
+        true,
+        false,
+        false,
+        config.with_spec_text,
     );
 
-    // Match functions to code-names and build output dictionary
     let (matched_map, matched_count, unmatched_count) = match_functions_to_atoms(parsed, &atoms);
 
-    // Classify with taxonomy and build final output
     let output_map: BTreeMap<String, SpecifyEntry> = matched_map
         .into_iter()
         .map(|(code_name, func)| {
-            // Print explain output if requested
-            if taxonomy_explain {
-                if let Some(config) = taxonomy_config.as_ref() {
-                    let explanations = taxonomy::explain_function(&func, config);
+            if config.taxonomy_explain {
+                if let Some(tc) = taxonomy_config.as_ref() {
+                    let explanations = taxonomy::explain_function(&func, tc);
                     let matched: Vec<_> = explanations.iter().filter(|e| e.matched).collect();
                     let missed: Vec<_> = explanations.iter().filter(|e| !e.matched).collect();
 
@@ -123,7 +150,7 @@ pub fn cmd_specify(
 
             let spec_labels = taxonomy_config
                 .as_ref()
-                .map(|config| taxonomy::classify_function(&func, config))
+                .map(|tc| taxonomy::classify_function(&func, tc))
                 .unwrap_or_default();
             (
                 code_name,
@@ -135,23 +162,17 @@ pub fn cmd_specify(
         })
         .collect();
 
-    // Resolve project root: explicit flag > auto-detect from input path
-    let project_root = project_path_override
-        .unwrap_or_else(|| find_project_root(&path).unwrap_or_else(|| path.clone()));
-    let metadata = gather_metadata(&project_root);
-    let output =
-        output.unwrap_or_else(|| get_default_output_path(&project_root, &metadata, "specs"));
-
-    if let Some(parent) = output.parent() {
-        std::fs::create_dir_all(parent).expect("Failed to create output directory");
+    if let Some(parent) = config.output.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create output directory: {e}"))?;
     }
 
-    // Wrap in envelope and write
-    let envelope = wrap_in_envelope("probe-verus/specs", "specify", &output_map, &metadata);
-    let json = serde_json::to_string_pretty(&envelope).expect("Failed to serialize JSON");
-    std::fs::write(&output, &json).expect("Failed to write JSON output");
+    let envelope = wrap_in_envelope("probe-verus/specs", "specify", &output_map, config.metadata);
+    let json = serde_json::to_string_pretty(&envelope)
+        .map_err(|e| format!("Failed to serialize JSON: {e}"))?;
+    std::fs::write(config.output, &json)
+        .map_err(|e| format!("Failed to write JSON output: {e}"))?;
 
-    // L3: Coverage summary
     if taxonomy_config.is_some() {
         let specified_total = output_map.values().filter(|e| e.info.specified).count();
         let specified_labeled = output_map
@@ -166,7 +187,7 @@ pub fn cmd_specify(
         println!(
             "Wrote {} functions to {} ({} unmatched)",
             matched_count,
-            output.display(),
+            config.output.display(),
             unmatched_count
         );
         if specified_total > 0 {
@@ -188,19 +209,22 @@ pub fn cmd_specify(
         println!(
             "Wrote {} functions to {} ({} unmatched)",
             matched_count,
-            output.display(),
+            config.output.display(),
             unmatched_count
         );
     }
+
+    Ok(matched_count)
 }
 
 /// Load atoms from a JSON file, supporting both bare-dict (Schema 1.x) and enveloped (Schema 2.0).
-fn load_atoms(atoms_path: &Path) -> BTreeMap<String, AtomEntry> {
-    let atoms_content = std::fs::read_to_string(atoms_path).expect("Failed to read atoms.json");
+fn load_atoms(atoms_path: &Path) -> Result<BTreeMap<String, AtomEntry>, String> {
+    let atoms_content =
+        std::fs::read_to_string(atoms_path).map_err(|e| format!("Failed to read file: {e}"))?;
     let json: serde_json::Value =
-        serde_json::from_str(&atoms_content).expect("Failed to parse atoms.json");
+        serde_json::from_str(&atoms_content).map_err(|e| format!("Failed to parse JSON: {e}"))?;
     let data = unwrap_envelope(json);
-    serde_json::from_value(data).expect("Failed to deserialize atoms data")
+    serde_json::from_value(data).map_err(|e| format!("Failed to deserialize atoms data: {e}"))
 }
 
 /// Match parsed functions to atoms by path and line number.

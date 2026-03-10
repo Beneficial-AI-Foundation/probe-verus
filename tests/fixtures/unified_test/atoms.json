@@ -1,0 +1,51 @@
+{
+  "schema": "probe-verus/atoms",
+  "schema-version": "2.0",
+  "tool": { "name": "probe-verus", "version": "3.0.0", "command": "atomize" },
+  "source": {
+    "repo": "",
+    "commit": "",
+    "language": "rust",
+    "package": "test-crate",
+    "package-version": "0.1.0"
+  },
+  "timestamp": "2026-03-10T00:00:00Z",
+  "data": {
+    "probe:test-crate/0.1.0/module/foo()": {
+      "display-name": "foo",
+      "dependencies": ["probe:test-crate/0.1.0/module/bar()", "probe:external/1.0.0/lib/ext()"],
+      "code-module": "module",
+      "code-path": "src/module.rs",
+      "code-text": { "lines-start": 10, "lines-end": 25 },
+      "kind": "exec",
+      "language": "rust"
+    },
+    "probe:test-crate/0.1.0/module/bar()": {
+      "display-name": "bar",
+      "dependencies": [],
+      "code-module": "module",
+      "code-path": "src/module.rs",
+      "code-text": { "lines-start": 30, "lines-end": 45 },
+      "kind": "proof",
+      "language": "rust"
+    },
+    "probe:test-crate/0.1.0/module/baz()": {
+      "display-name": "baz",
+      "dependencies": ["probe:test-crate/0.1.0/module/foo()"],
+      "code-module": "module",
+      "code-path": "src/module.rs",
+      "code-text": { "lines-start": 50, "lines-end": 60 },
+      "kind": "spec",
+      "language": "rust"
+    },
+    "probe:external/1.0.0/lib/ext()": {
+      "display-name": "ext",
+      "dependencies": [],
+      "code-module": "lib",
+      "code-path": "",
+      "code-text": { "lines-start": 0, "lines-end": 0 },
+      "kind": "exec",
+      "language": "rust"
+    }
+  }
+}

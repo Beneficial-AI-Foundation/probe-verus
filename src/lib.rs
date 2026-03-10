@@ -209,6 +209,23 @@ pub struct AtomWithLines {
     pub language: String,
 }
 
+/// Unified atom: all `AtomWithLines` fields plus optional verification and specification status.
+///
+/// Produced by the `verify` pipeline to match the `probe-lean/verify` output structure.
+/// When a step is skipped, the corresponding field is absent (serialized as missing key).
+#[derive(Debug, Serialize, Deserialize)]
+pub struct UnifiedAtom {
+    #[serde(flatten)]
+    pub atom: AtomWithLines,
+    #[serde(
+        rename = "verification-status",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub verification_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub specified: Option<bool>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CodeTextInfo {
     #[serde(rename = "lines-start")]

@@ -1,5 +1,5 @@
 # Dockerfile for probe-verus
-# Runs `probe-verus atomize` and `probe-verus verify` on a project
+# Runs `probe-verus verify` (unified pipeline: atomize + specify + run-verus) on a project
 #
 # Build:
 #   docker build -t probe-verus -f docker/Dockerfile .
@@ -12,9 +12,12 @@
 #   docker run -v /path/to/project:/workspace/project -v /path/to/output:/workspace/output probe-verus project
 #
 # Output:
-#   - <project>/.verilib/probes/verus_<pkg>_<ver>.json (atoms, from atomize)
-#   - <project>/.verilib/probes/verus_<pkg>_<ver>_proofs.json (verification, from verify)
-#   - /workspace/output/run_summary.json (run summary)
+#   - <project>/.verilib/probes/verus_<pkg>_<ver>.json (unified verify output)
+#   - /workspace/output/verify_summary.json (pipeline summary)
+# With --separate-outputs, also writes:
+#   - <project>/.verilib/probes/verus_<pkg>_<ver>_atoms.json (atoms, from atomize)
+#   - <project>/.verilib/probes/verus_<pkg>_<ver>_specs.json (specs, from specify)
+#   - <project>/.verilib/probes/verus_<pkg>_<ver>_proofs.json (proofs, from run-verus)
 
 FROM ubuntu:22.04
 
@@ -184,8 +187,8 @@ WORKDIR /workspace
 # Override with --user root if needed for cargo operations
 USER verus
 
-# Default entrypoint: probe-verus run command (no shell script needed)
-ENTRYPOINT ["probe-verus", "run"]
+# Default entrypoint: probe-verus verify command (unified pipeline)
+ENTRYPOINT ["probe-verus", "verify"]
 
 # Default command shows help
 CMD ["--help"]

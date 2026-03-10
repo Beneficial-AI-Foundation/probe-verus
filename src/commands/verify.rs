@@ -1,473 +1,808 @@
-//! Verify command - Run Verus verification and analyze results.
+//! Verify command - Unified pipeline: atomize + specify + run-verus.
 
-use probe_verus::constants::{DATA_DIR, VERIFICATION_CONFIG_FILE, VERIFICATION_OUTPUT_FILE};
+use super::atomize::atomize_internal;
+use super::run_verus::{run_verus_internal, VerifySummary};
+use super::specify::specify_internal;
 use probe_verus::metadata::{
-    find_default_atoms_path, gather_metadata, get_default_output_path, wrap_in_envelope,
+    find_default_atoms_path, gather_metadata, get_default_output_path, unwrap_envelope,
+    wrap_in_envelope, AtomizeInternalConfig, ProjectMetadata, SpecifyInternalConfig,
     VerifyInternalConfig,
 };
-use probe_verus::verification::{
-    convert_to_proofs_output, enrich_with_code_names, AnalysisResult, AnalysisStatus,
-    VerificationAnalyzer, VerusRunner,
-};
+use probe_verus::{AtomWithLines, UnifiedAtom};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-/// Cached verification configuration.
-#[derive(Serialize, Deserialize)]
-pub struct VerificationConfig {
-    pub project_path: String,
-    pub package: Option<String>,
-    pub exit_code: i32,
+#[derive(Serialize)]
+struct VerifyPipelineResult {
+    status: String,
+    atomize: Option<StepResult>,
+    specify: Option<StepResult>,
+    verify: Option<VerifyStepResult>,
 }
 
-/// Get the path to the cached verification output file.
-fn cache_output_file() -> String {
-    format!("{}/{}", DATA_DIR, VERIFICATION_OUTPUT_FILE)
+#[derive(Serialize)]
+struct StepResult {
+    success: bool,
+    output_file: String,
+    total_functions: Option<usize>,
+    error: Option<String>,
 }
 
-/// Get the path to the cached verification config file.
-fn cache_config_file() -> String {
-    format!("{}/{}", DATA_DIR, VERIFICATION_CONFIG_FILE)
+#[derive(Serialize)]
+struct VerifyStepResult {
+    success: bool,
+    output_file: String,
+    summary: Option<VerifySummaryOutput>,
+    error: Option<String>,
 }
 
-/// Execute the verify command.
+#[derive(Serialize, Clone)]
+struct VerifySummaryOutput {
+    total_functions: usize,
+    verified: usize,
+    failed: usize,
+    unverified: usize,
+}
+
+impl From<VerifySummary> for VerifySummaryOutput {
+    fn from(s: VerifySummary) -> Self {
+        Self {
+            total_functions: s.total_functions,
+            verified: s.verified,
+            failed: s.failed,
+            unverified: s.unverified,
+        }
+    }
+}
+
+/// Execute the unified verify command.
 ///
-/// Runs Verus verification on a project and analyzes results.
-/// Supports caching for quick re-analysis.
+/// Runs atomize, specify, and run-verus as a 3-step pipeline, then merges the
+/// outputs into a single unified JSON file (schema `probe-verus/verify`).
 #[allow(clippy::too_many_arguments)]
 pub fn cmd_verify(
-    project_path: Option<PathBuf>,
-    from_file: Option<PathBuf>,
-    exit_code_arg: Option<i32>,
+    project_path: PathBuf,
+    output_dir: PathBuf,
+    skip_atomize: bool,
+    skip_specify: bool,
+    skip_verify: bool,
     package: Option<String>,
-    verify_only_module: Option<String>,
-    verify_function: Option<String>,
-    output: Option<PathBuf>,
-    no_cache: bool,
+    regenerate_scip: bool,
+    verbose: bool,
+    use_rust_analyzer: bool,
+    allow_duplicates: bool,
+    auto_install: bool,
     with_atoms: Option<PathBuf>,
+    with_spec_text: bool,
+    taxonomy_config: Option<PathBuf>,
     verus_args: Vec<String>,
+    separate_outputs: bool,
 ) {
-    let (project_path, verification_output, exit_code) = get_verification_data(
-        project_path,
-        from_file,
-        exit_code_arg,
-        package.clone(),
-        no_cache,
-        &verus_args,
-    );
+    if !project_path.exists() {
+        eprintln!(
+            "Error: Project path does not exist: {}",
+            project_path.display()
+        );
+        std::process::exit(1);
+    }
 
-    let analyzer = VerificationAnalyzer::new();
-    let result = analyzer.analyze_output(
-        &project_path,
-        &verification_output,
-        Some(exit_code),
-        verify_only_module.as_deref(),
-        verify_function.as_deref(),
-    );
+    let cargo_toml = project_path.join("Cargo.toml");
+    if !cargo_toml.exists() {
+        eprintln!(
+            "Error: Not a valid Rust project (Cargo.toml not found): {}",
+            project_path.display()
+        );
+        std::process::exit(1);
+    }
 
     let metadata = gather_metadata(&project_path);
 
-    let output_path =
-        output.unwrap_or_else(|| get_default_output_path(&project_path, &metadata, "proofs"));
+    let atoms_path = get_default_output_path(&project_path, &metadata, "atoms");
+    let specs_path = get_default_output_path(&project_path, &metadata, "specs");
+    let results_path = get_default_output_path(&project_path, &metadata, "proofs");
 
-    if let Some(parent) = output_path.parent() {
-        std::fs::create_dir_all(parent).expect("Failed to create output directory");
+    if let Err(e) = std::fs::create_dir_all(&output_dir) {
+        eprintln!("Error: Failed to create output directory: {}", e);
+        std::process::exit(1);
     }
 
-    // Resolve atoms path: explicit flag value > auto-discover in .verilib/probes/
-    let atoms_path = with_atoms.or_else(|| find_default_atoms_path(&project_path, &metadata));
+    print_header(&project_path, &output_dir, &package);
 
-    match atoms_path {
-        Some(atoms_path) => match convert_to_proofs_output(&result, &atoms_path) {
-            Ok(proofs_output) => {
-                let envelope =
-                    wrap_in_envelope("probe-verus/proofs", "verify", &proofs_output, &metadata);
-                let json =
-                    serde_json::to_string_pretty(&envelope).expect("Failed to serialize JSON");
-                std::fs::write(&output_path, &json).expect("Failed to write JSON output");
-                println!(
-                    "Wrote {} functions to {}",
-                    proofs_output.len(),
-                    output_path.display()
-                );
+    let mut result = VerifyPipelineResult {
+        status: "success".to_string(),
+        atomize: None,
+        specify: None,
+        verify: None,
+    };
+
+    // === Step 1: Atomize ===
+    if !skip_atomize {
+        let config = AtomizeInternalConfig {
+            project_path: &project_path,
+            output: &atoms_path,
+            regenerate_scip,
+            verbose,
+            use_rust_analyzer,
+            allow_duplicates,
+            auto_install,
+            metadata: &metadata,
+        };
+        run_atomize_step(&config, &mut result);
+    }
+
+    // Resolve the atoms path for subsequent steps: explicit --with-atoms > default from atomize > auto-discover
+    let resolved_atoms = with_atoms
+        .as_deref()
+        .map(Path::to_path_buf)
+        .or_else(|| {
+            if atoms_path.exists() {
+                Some(atoms_path.clone())
+            } else {
+                None
             }
-            Err(e) => {
-                eprintln!("Error converting to proofs output: {}", e);
-                std::process::exit(1);
+        })
+        .or_else(|| find_default_atoms_path(&project_path, &metadata));
+
+    // === Step 2: Specify ===
+    if !skip_specify {
+        match &resolved_atoms {
+            Some(ap) if ap.exists() => {
+                let config = SpecifyInternalConfig {
+                    path: &project_path,
+                    output: &specs_path,
+                    atoms_path: ap,
+                    with_spec_text,
+                    taxonomy_config_path: taxonomy_config.as_deref(),
+                    taxonomy_explain: false,
+                    metadata: &metadata,
+                };
+                run_specify_step(&config, &mut result);
             }
-        },
-        None => {
-            let envelope = wrap_in_envelope(
-                "probe-verus/verification-report",
-                "verify",
-                &result,
-                &metadata,
-            );
-            let json = serde_json::to_string_pretty(&envelope).expect("Failed to serialize JSON");
-            std::fs::write(&output_path, &json).expect("Failed to write JSON output");
-            println!("JSON output written to {}", output_path.display());
-            eprintln!(
-                "Note: no atoms.json found; output lacks code-name enrichment. \
-                 Run 'probe-verus atomize' first, or pass -a <path>."
-            );
-        }
-    }
-
-    print_summary(&result);
-
-    if !result.verification.failed_functions.is_empty() {
-        println!();
-        println!("Failed functions:");
-        for func in &result.verification.failed_functions {
-            println!(
-                "  - {} @ {}:{}",
-                func.display_name, func.code_path, func.code_text.lines_start
-            );
-        }
-    }
-
-    if !result.compilation.errors.is_empty() {
-        println!();
-        println!("Compilation errors:");
-        for err in &result.compilation.errors {
-            println!("  - {}", err.message);
-            if let Some(ref file) = err.file {
-                if let Some(line) = err.line {
-                    println!("    at {}:{}", file, line);
+            _ => {
+                if skip_atomize {
+                    eprintln!(
+                        "Error: specify requires atoms.json; provide --with-atoms or remove --skip-atomize"
+                    );
+                    result.status = "specify_failed".to_string();
+                    result.specify = Some(StepResult {
+                        success: false,
+                        output_file: specs_path.display().to_string(),
+                        total_functions: None,
+                        error: Some("No atoms.json available; specify requires atoms".to_string()),
+                    });
+                } else {
+                    eprintln!("  Warning: skipping specify (atomize did not produce atoms)");
                 }
             }
         }
     }
 
-    if result.status != AnalysisStatus::Success {
-        std::process::exit(1);
-    }
-}
-
-/// Get verification data from either running verification or using cached data.
-fn get_verification_data(
-    project_path: Option<PathBuf>,
-    from_file: Option<PathBuf>,
-    exit_code_arg: Option<i32>,
-    package: Option<String>,
-    no_cache: bool,
-    verus_args: &[String],
-) -> (PathBuf, String, i32) {
-    if let Some(ref path) = project_path {
-        get_verification_data_from_project(
-            path,
-            from_file,
-            exit_code_arg,
-            package,
-            no_cache,
-            verus_args,
-        )
-    } else {
-        get_verification_data_from_cache()
-    }
-}
-
-/// Get verification data from a project (running verification or using a file).
-fn get_verification_data_from_project(
-    path: &Path,
-    from_file: Option<PathBuf>,
-    exit_code_arg: Option<i32>,
-    package: Option<String>,
-    no_cache: bool,
-    verus_args: &[String],
-) -> (PathBuf, String, i32) {
-    if !path.exists() {
-        eprintln!("Error: Project path does not exist: {}", path.display());
-        std::process::exit(1);
+    // === Step 3: Run-Verus (cargo verus) ===
+    if !skip_verify {
+        let config = VerifyInternalConfig {
+            project_path: &project_path,
+            output: &results_path,
+            package: package.as_deref(),
+            atoms_path: resolved_atoms.as_deref(),
+            verbose,
+            verus_args: &verus_args,
+            metadata: &metadata,
+        };
+        run_verify_step(&config, &mut result);
     }
 
-    let (output, code) = if let Some(ref output_file) = from_file {
-        get_output_from_file(output_file, exit_code_arg)
-    } else {
-        run_verification(path, package.as_deref(), no_cache, &package, verus_args)
-    };
-
-    (path.to_path_buf(), output, code)
-}
-
-/// Get verification output from an existing file.
-fn get_output_from_file(output_file: &Path, exit_code_arg: Option<i32>) -> (String, i32) {
-    if !output_file.exists() {
-        eprintln!(
-            "Error: Output file does not exist: {}",
-            output_file.display()
-        );
-        std::process::exit(1);
-    }
-
-    let content = match std::fs::read_to_string(output_file) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("Error reading output file: {}", e);
-            std::process::exit(1);
-        }
-    };
-
-    println!(
-        "Analyzing verification output from: {}",
-        output_file.display()
-    );
-    (content, exit_code_arg.unwrap_or(0))
-}
-
-/// Run Verus verification on the project.
-fn run_verification(
-    path: &Path,
-    package: Option<&str>,
-    no_cache: bool,
-    package_for_cache: &Option<String>,
-    verus_args: &[String],
-) -> (String, i32) {
-    println!("════════════════════════════════════════════════════════════");
-    println!("  Running Verus verification...");
-    if !verus_args.is_empty() {
-        println!("  Extra Verus args: {:?}", verus_args);
-    }
-    println!("════════════════════════════════════════════════════════════");
-
-    let runner = VerusRunner::new();
-    let extra = if verus_args.is_empty() {
+    // === Step 4: Merge into unified output ===
+    // Only pass paths for steps that actually ran (skip_* means no new output for that step).
+    let merge_specs = if skip_specify {
         None
     } else {
-        Some(verus_args)
+        Some(specs_path.as_path())
     };
-    match runner.run_verification(path, package, None, None, extra) {
-        Ok((output, code)) => {
-            println!();
-            println!("════════════════════════════════════════════════════════════");
-            println!("  Verification completed with exit code: {}", code);
-            println!("════════════════════════════════════════════════════════════");
-            println!();
+    let merge_proofs = if skip_verify {
+        None
+    } else {
+        Some(results_path.as_path())
+    };
+    let unified_path = run_unified_merge(
+        &atoms_path,
+        merge_specs,
+        merge_proofs,
+        &project_path,
+        &metadata,
+        separate_outputs,
+        &result,
+    );
 
-            // Quick status check
-            if output.contains("verification results::") {
-                if output.contains(", 0 errors") {
-                    println!("✓ Verification succeeded!");
-                } else {
-                    println!("✗ Verification failed with errors");
-                }
-            } else if code != 0 {
-                println!("✗ Compilation or verification failed");
-            }
+    // === Summary ===
+    print_summary(&result);
+    if let Some(ref up) = unified_path {
+        println!("  Primary output: {}", up.display());
+        println!();
+    }
 
-            // Cache the output unless --no-cache is specified
-            if !no_cache {
-                cache_verification_output(path, package_for_cache, code, &output);
-            }
-
-            (output, code)
-        }
-        Err(e) => {
-            eprintln!("✗ Failed to run verification: {}", e);
-            std::process::exit(1);
+    let summary_path = output_dir.join("verify_summary.json");
+    let envelope = wrap_in_envelope("probe-verus/verify-summary", "verify", &result, &metadata);
+    if let Ok(json) = serde_json::to_string_pretty(&envelope) {
+        if let Err(e) = std::fs::write(&summary_path, &json) {
+            eprintln!("Warning: Could not write summary: {}", e);
         }
     }
+
+    let exit_code = match result.status.as_str() {
+        "success" => 0,
+        "verification_failed" => 0,
+        _ => 1,
+    };
+    std::process::exit(exit_code);
 }
 
-/// Cache verification output to the data directory.
-fn cache_verification_output(path: &Path, package: &Option<String>, code: i32, output: &str) {
-    if let Err(e) = std::fs::create_dir_all(DATA_DIR) {
-        eprintln!("Warning: Could not create data directory: {}", e);
-        return;
-    }
-
-    // Save verification output
-    if let Err(e) = std::fs::write(cache_output_file(), output) {
-        eprintln!("Warning: Could not cache verification output: {}", e);
-        return;
-    }
-
-    // Save config (project path, package, exit code)
-    let config = VerificationConfig {
-        project_path: path.to_string_lossy().to_string(),
-        package: package.clone(),
-        exit_code: code,
-    };
-
-    if let Ok(config_json) = serde_json::to_string_pretty(&config) {
-        if let Err(e) = std::fs::write(cache_config_file(), config_json) {
-            eprintln!("Warning: Could not save verification config: {}", e);
-        } else {
-            println!("Cached verification output to {}", cache_output_file());
-        }
-    }
-}
-
-/// Get verification data from cache.
-fn get_verification_data_from_cache() -> (PathBuf, String, i32) {
-    println!("════════════════════════════════════════════════════════════");
-    println!("  Using cached verification output");
-    println!("════════════════════════════════════════════════════════════");
-
-    // Load config
-    let config: VerificationConfig = match std::fs::read_to_string(cache_config_file()) {
-        Ok(content) => match serde_json::from_str(&content) {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("Error: Could not parse {}: {}", cache_config_file(), e);
-                eprintln!("Run with a project path first to cache verification output.");
-                std::process::exit(1);
-            }
-        },
-        Err(_) => {
-            eprintln!("Error: No cached verification found.");
-            eprintln!("Run with a project path first: probe-verus verify <project-path>");
-            std::process::exit(1);
-        }
-    };
-
-    // Load cached output
-    let output = match std::fs::read_to_string(cache_output_file()) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("Error: Could not read cached output: {}", e);
-            std::process::exit(1);
-        }
-    };
-
-    let path = PathBuf::from(&config.project_path);
-    if !path.exists() {
-        eprintln!(
-            "Warning: Cached project path no longer exists: {}",
-            path.display()
-        );
-    }
-
-    println!("  Project: {}", config.project_path);
-    if let Some(ref pkg) = config.package {
+fn print_header(project_path: &Path, output_dir: &Path, package: &Option<String>) {
+    println!("═══════════════════════════════════════════════════════════════");
+    println!("  probe-verus verify");
+    println!("═══════════════════════════════════════════════════════════════");
+    println!();
+    println!("  Project: {}", project_path.display());
+    println!("  Output:  {}", output_dir.display());
+    if let Some(ref pkg) = package {
         println!("  Package: {}", pkg);
     }
-    println!("  Exit code: {}", config.exit_code);
-    println!("════════════════════════════════════════════════════════════");
     println!();
-
-    (path, output, config.exit_code)
 }
 
-/// Print the verification summary.
-fn print_summary(result: &AnalysisResult) {
+fn run_atomize_step(config: &AtomizeInternalConfig, result: &mut VerifyPipelineResult) {
+    println!("───────────────────────────────────────────────────────────────");
+    println!("  Step 1/3: Atomize (generate call graph)");
+    println!("───────────────────────────────────────────────────────────────");
     println!();
-    println!("Summary:");
-    println!("  Status: {:?}", result.status);
-    println!(
-        "  Total verifiable functions: {}",
-        result.summary.total_functions
-    );
-    println!("  Verified: {}", result.summary.verified_functions);
-    println!("  Failed: {}", result.summary.failed_functions);
-    println!(
-        "  Unverified (assume/admit): {}",
-        result.summary.unverified_functions
-    );
-}
 
-/// Best-effort code-name enrichment for the verification-report fallback path.
-fn enrich_with_code_names_if_available(result: &mut AnalysisResult, atoms_path: Option<&Path>) {
-    if let Some(atoms) = atoms_path {
-        if atoms.exists() {
-            if let Err(e) = enrich_with_code_names(result, atoms) {
-                eprintln!("    Warning: Failed to enrich with code-names: {}", e);
-            }
+    match atomize_internal(config) {
+        Ok(count) => {
+            println!("  ✓ Atomize completed: {} functions", count);
+            println!("  → {}", config.output.display());
+            result.atomize = Some(StepResult {
+                success: true,
+                output_file: config.output.display().to_string(),
+                total_functions: Some(count),
+                error: None,
+            });
+        }
+        Err(e) => {
+            eprintln!("  ✗ Atomize failed: {}", e);
+            result.status = "atomize_failed".to_string();
+            result.atomize = Some(StepResult {
+                success: false,
+                output_file: config.output.display().to_string(),
+                total_functions: None,
+                error: Some(e),
+            });
         }
     }
+    println!();
 }
 
-/// Internal verify implementation that returns Result for better error handling.
-/// Used by the `run` command (which pre-gathers metadata to share a timestamp).
-pub fn verify_internal(config: &VerifyInternalConfig) -> Result<VerifySummary, String> {
-    let runner = VerusRunner::new();
+fn run_specify_step(config: &SpecifyInternalConfig, result: &mut VerifyPipelineResult) {
+    println!("───────────────────────────────────────────────────────────────");
+    println!("  Step 2/3: Specify (extract specifications)");
+    println!("───────────────────────────────────────────────────────────────");
+    println!();
 
-    let extra = if config.verus_args.is_empty() {
-        None
-    } else {
-        Some(config.verus_args)
-    };
-    let (verification_output, exit_code) = runner
-        .run_verification(config.project_path, config.package, None, None, extra)
-        .map_err(|e| format!("Failed to run verification: {}", e))?;
-
-    if config.verbose {
-        println!("{}", verification_output);
-    }
-
-    let analyzer = VerificationAnalyzer::new();
-    let mut result = analyzer.analyze_output(
-        config.project_path,
-        &verification_output,
-        Some(exit_code),
-        None,
-        None,
-    );
-
-    if let Some(parent) = config.output.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create output directory: {}", e))?;
-    }
-
-    // When atoms are available, produce probe-verus/proofs (dictionary keyed by
-    // code-name) -- matching cmd_verify behavior. Otherwise fall back to the
-    // full verification-report envelope.
-    let wrote_proofs = if let Some(atoms) = config.atoms_path {
-        if atoms.exists() {
-            match convert_to_proofs_output(&result, atoms) {
-                Ok(proofs_output) => {
-                    let envelope = wrap_in_envelope(
-                        "probe-verus/proofs",
-                        "verify",
-                        &proofs_output,
-                        config.metadata,
-                    );
-                    let json = serde_json::to_string_pretty(&envelope)
-                        .map_err(|e| format!("Failed to serialize JSON: {}", e))?;
-                    std::fs::write(config.output, &json)
-                        .map_err(|e| format!("Failed to write output: {}", e))?;
-                    true
-                }
-                Err(e) => {
-                    eprintln!("    Warning: Failed to convert to proofs output: {}", e);
-                    false
-                }
+    match specify_internal(config) {
+        Ok(count) => {
+            println!("  ✓ Specify completed: {} functions", count);
+            println!("  → {}", config.output.display());
+            result.specify = Some(StepResult {
+                success: true,
+                output_file: config.output.display().to_string(),
+                total_functions: Some(count),
+                error: None,
+            });
+        }
+        Err(e) => {
+            eprintln!("  ✗ Specify failed: {}", e);
+            if result.status == "success" {
+                result.status = "specify_failed".to_string();
             }
+            result.specify = Some(StepResult {
+                success: false,
+                output_file: config.output.display().to_string(),
+                total_functions: None,
+                error: Some(e),
+            });
+        }
+    }
+    println!();
+}
+
+fn run_verify_step(config: &VerifyInternalConfig, result: &mut VerifyPipelineResult) {
+    println!("───────────────────────────────────────────────────────────────");
+    println!("  Step 3/3: Run-Verus (cargo verus verification)");
+    println!("───────────────────────────────────────────────────────────────");
+    println!();
+
+    match run_verus_internal(config) {
+        Ok(summary) => {
+            println!("  ✓ Verify completed");
+            println!("    Total:      {}", summary.total_functions);
+            println!("    Verified:   {}", summary.verified);
+            println!("    Failed:     {}", summary.failed);
+            println!("    Unverified: {}", summary.unverified);
+            println!("  → {}", config.output.display());
+
+            if summary.failed > 0 && result.status == "success" {
+                result.status = "verification_failed".to_string();
+            }
+
+            result.verify = Some(VerifyStepResult {
+                success: true,
+                output_file: config.output.display().to_string(),
+                summary: Some(summary.into()),
+                error: None,
+            });
+        }
+        Err(e) => {
+            eprintln!("  ✗ Verify failed: {}", e);
+            if result.status == "success" {
+                result.status = "verify_failed".to_string();
+            }
+            result.verify = Some(VerifyStepResult {
+                success: false,
+                output_file: config.output.display().to_string(),
+                summary: None,
+                error: Some(e),
+            });
+        }
+    }
+    println!();
+}
+
+fn print_summary(result: &VerifyPipelineResult) {
+    println!("═══════════════════════════════════════════════════════════════");
+    println!("  Summary");
+    println!("═══════════════════════════════════════════════════════════════");
+    println!();
+
+    if let Some(ref a) = result.atomize {
+        if a.success {
+            println!("  atomize:  ✓ Success → {}", a.output_file);
         } else {
-            false
+            println!("  atomize:  ✗ Failed");
         }
-    } else {
-        false
-    };
-
-    if !wrote_proofs {
-        enrich_with_code_names_if_available(&mut result, config.atoms_path);
-
-        let envelope = wrap_in_envelope(
-            "probe-verus/verification-report",
-            "verify",
-            &result,
-            config.metadata,
-        );
-        let json = serde_json::to_string_pretty(&envelope)
-            .map_err(|e| format!("Failed to serialize JSON: {}", e))?;
-        std::fs::write(config.output, &json)
-            .map_err(|e| format!("Failed to write output: {}", e))?;
     }
 
-    Ok(VerifySummary {
-        total_functions: result.summary.total_functions,
-        verified: result.summary.verified_functions,
-        failed: result.summary.failed_functions,
-        unverified: result.summary.unverified_functions,
+    if let Some(ref s) = result.specify {
+        if s.success {
+            println!("  specify:  ✓ Success → {}", s.output_file);
+        } else {
+            println!("  specify:  ✗ Failed");
+        }
+    }
+
+    if let Some(ref v) = result.verify {
+        if v.success {
+            println!("  verify:   ✓ Success → {}", v.output_file);
+        } else {
+            println!("  verify:   ✗ Failed");
+        }
+    }
+
+    println!();
+    println!("  Status: {}", result.status);
+    println!();
+}
+
+// =============================================================================
+// Unified output merge
+// =============================================================================
+
+/// Minimal deserialization target for specs entries (only the `specified` field).
+#[derive(Deserialize)]
+struct SpecsEntryMinimal {
+    specified: bool,
+}
+
+/// Minimal deserialization target for proofs entries (only the `status` field).
+#[derive(Deserialize)]
+struct ProofsEntryMinimal {
+    status: String,
+}
+
+/// Map a Verus `VerificationStatus` string to the 3-value web status matching probe-lean.
+fn map_verification_status(status: &str) -> &'static str {
+    match status {
+        "success" => "verified",
+        "failure" => "failed",
+        "sorries" => "unverified",
+        "warning" => "verified",
+        _ => "failed",
+    }
+}
+
+/// Merge atoms, specs, and proofs into a unified `BTreeMap<String, UnifiedAtom>`.
+///
+/// This is `pub` so integration tests can call it directly.
+pub fn merge_into_unified(
+    atoms_path: &Path,
+    specs_path: Option<&Path>,
+    proofs_path: Option<&Path>,
+) -> Result<BTreeMap<String, UnifiedAtom>, String> {
+    let atoms = load_enveloped_data::<AtomWithLines>(atoms_path, "atoms")?;
+
+    let specs: Option<BTreeMap<String, SpecsEntryMinimal>> = specs_path
+        .filter(|p| p.exists())
+        .map(|p| load_enveloped_data(p, "specs"))
+        .transpose()?;
+
+    let proofs: Option<BTreeMap<String, ProofsEntryMinimal>> = proofs_path
+        .filter(|p| p.exists())
+        .map(|p| load_enveloped_data(p, "proofs"))
+        .transpose()?;
+
+    let mut unified: BTreeMap<String, UnifiedAtom> = BTreeMap::new();
+
+    for (code_name, atom) in atoms {
+        let specified = specs
+            .as_ref()
+            .and_then(|s| s.get(&code_name))
+            .map(|e| e.specified);
+
+        let verification_status = proofs
+            .as_ref()
+            .and_then(|p| p.get(&code_name))
+            .map(|e| map_verification_status(&e.status).to_string());
+
+        unified.insert(
+            code_name,
+            UnifiedAtom {
+                atom,
+                verification_status,
+                specified,
+            },
+        );
+    }
+
+    Ok(unified)
+}
+
+/// Load an enveloped (or bare-dict) JSON file and deserialize its data section.
+fn load_enveloped_data<T: serde::de::DeserializeOwned>(
+    path: &Path,
+    label: &str,
+) -> Result<BTreeMap<String, T>, String> {
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read {} file {}: {}", label, path.display(), e))?;
+    let json: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse {} JSON {}: {}", label, path.display(), e))?;
+    let data = unwrap_envelope(json);
+    serde_json::from_value(data).map_err(|e| {
+        format!(
+            "Failed to deserialize {} data from {}: {}",
+            label,
+            path.display(),
+            e
+        )
     })
 }
 
-/// Summary of verification results.
-#[derive(Clone)]
-pub struct VerifySummary {
-    pub total_functions: usize,
-    pub verified: usize,
-    pub failed: usize,
-    pub unverified: usize,
+/// Run the merge step: produce unified output, optionally clean up individual files.
+fn run_unified_merge(
+    atoms_path: &Path,
+    specs_path: Option<&Path>,
+    proofs_path: Option<&Path>,
+    project_path: &Path,
+    metadata: &ProjectMetadata,
+    separate_outputs: bool,
+    result: &VerifyPipelineResult,
+) -> Option<PathBuf> {
+    if !atoms_path.exists() {
+        eprintln!("  Warning: skipping unified output (no atoms file)");
+        return None;
+    }
+
+    let specs_opt = specs_path.filter(|p| p.exists());
+    let proofs_opt = proofs_path.filter(|p| p.exists());
+
+    match merge_into_unified(atoms_path, specs_opt, proofs_opt) {
+        Ok(unified) => {
+            let unified_path = get_default_output_path(project_path, metadata, "");
+            if let Some(parent) = unified_path.parent() {
+                if let Err(e) = std::fs::create_dir_all(parent) {
+                    eprintln!("  Warning: Could not create output directory: {}", e);
+                    return None;
+                }
+            }
+
+            let envelope = wrap_in_envelope("probe-verus/verify", "verify", &unified, metadata);
+            match serde_json::to_string_pretty(&envelope) {
+                Ok(json) => {
+                    if let Err(e) = std::fs::write(&unified_path, &json) {
+                        eprintln!("  Warning: Could not write unified output: {}", e);
+                        return None;
+                    }
+                    println!(
+                        "  unified: ✓ {} functions → {}",
+                        unified.len(),
+                        unified_path.display()
+                    );
+
+                    if !separate_outputs {
+                        cleanup_individual_files(atoms_path, specs_opt, proofs_opt, result);
+                    }
+
+                    Some(unified_path)
+                }
+                Err(e) => {
+                    eprintln!("  Warning: Could not serialize unified output: {}", e);
+                    None
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("  Warning: Could not merge outputs: {}", e);
+            None
+        }
+    }
+}
+
+/// Remove individual output files that were produced during the pipeline.
+/// Only removes files for steps that actually succeeded (have a StepResult with success).
+fn cleanup_individual_files(
+    atoms_path: &Path,
+    specs_path: Option<&Path>,
+    proofs_path: Option<&Path>,
+    result: &VerifyPipelineResult,
+) {
+    if result.atomize.as_ref().is_some_and(|a| a.success) && atoms_path.exists() {
+        let _ = std::fs::remove_file(atoms_path);
+    }
+    if let Some(sp) = specs_path {
+        if result.specify.as_ref().is_some_and(|s| s.success) && sp.exists() {
+            let _ = std::fs::remove_file(sp);
+        }
+    }
+    if let Some(pp) = proofs_path {
+        if result.verify.as_ref().is_some_and(|v| v.success) && pp.exists() {
+            let _ = std::fs::remove_file(pp);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn atoms_json() -> serde_json::Value {
+        serde_json::json!({
+            "schema": "probe-verus/atoms",
+            "schema-version": "2.0",
+            "tool": {"name": "probe-verus", "version": "3.0.0", "command": "atomize"},
+            "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
+            "timestamp": "2026-03-10T00:00:00Z",
+            "data": {
+                "probe:test/0.1.0/module/foo()": {
+                    "display-name": "foo",
+                    "dependencies": ["probe:test/0.1.0/module/bar()"],
+                    "code-module": "module",
+                    "code-path": "src/module.rs",
+                    "code-text": {"lines-start": 10, "lines-end": 20},
+                    "kind": "exec",
+                    "language": "rust"
+                },
+                "probe:test/0.1.0/module/bar()": {
+                    "display-name": "bar",
+                    "dependencies": [],
+                    "code-module": "module",
+                    "code-path": "src/module.rs",
+                    "code-text": {"lines-start": 30, "lines-end": 40},
+                    "kind": "proof",
+                    "language": "rust"
+                },
+                "probe:external/1.0.0/lib/ext()": {
+                    "display-name": "ext",
+                    "dependencies": [],
+                    "code-module": "lib",
+                    "code-path": "",
+                    "code-text": {"lines-start": 0, "lines-end": 0},
+                    "kind": "exec",
+                    "language": "rust"
+                }
+            }
+        })
+    }
+
+    fn specs_json() -> serde_json::Value {
+        serde_json::json!({
+            "schema": "probe-verus/specs",
+            "schema-version": "2.0",
+            "tool": {"name": "probe-verus", "version": "3.0.0", "command": "specify"},
+            "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
+            "timestamp": "2026-03-10T00:00:00Z",
+            "data": {
+                "probe:test/0.1.0/module/foo()": {
+                    "spec-text": {"lines-start": 10, "lines-end": 20},
+                    "kind": "exec",
+                    "specified": true,
+                    "has_requires": true,
+                    "has_ensures": true,
+                    "has_decreases": false,
+                    "has_trusted_assumption": false,
+                    "is_external_body": false,
+                    "has_no_decreases_attr": false
+                },
+                "probe:test/0.1.0/module/bar()": {
+                    "spec-text": {"lines-start": 30, "lines-end": 40},
+                    "kind": "proof",
+                    "specified": false,
+                    "has_requires": false,
+                    "has_ensures": false,
+                    "has_decreases": false,
+                    "has_trusted_assumption": false,
+                    "is_external_body": false,
+                    "has_no_decreases_attr": false
+                }
+            }
+        })
+    }
+
+    fn proofs_json() -> serde_json::Value {
+        serde_json::json!({
+            "schema": "probe-verus/proofs",
+            "schema-version": "2.0",
+            "tool": {"name": "probe-verus", "version": "3.0.0", "command": "run-verus"},
+            "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
+            "timestamp": "2026-03-10T00:00:00Z",
+            "data": {
+                "probe:test/0.1.0/module/foo()": {
+                    "code-path": "src/module.rs",
+                    "code-line": 10,
+                    "verified": true,
+                    "status": "success"
+                },
+                "probe:test/0.1.0/module/bar()": {
+                    "code-path": "src/module.rs",
+                    "code-line": 30,
+                    "verified": false,
+                    "status": "failure"
+                }
+            }
+        })
+    }
+
+    fn write_json(dir: &TempDir, name: &str, value: &serde_json::Value) -> PathBuf {
+        let path = dir.path().join(name);
+        std::fs::write(&path, serde_json::to_string_pretty(value).unwrap()).unwrap();
+        path
+    }
+
+    #[test]
+    fn test_merge_atoms_only() {
+        let dir = TempDir::new().unwrap();
+        let atoms_path = write_json(&dir, "atoms.json", &atoms_json());
+
+        let result = merge_into_unified(&atoms_path, None, None).unwrap();
+
+        assert_eq!(result.len(), 3);
+        for entry in result.values() {
+            assert!(entry.verification_status.is_none());
+            assert!(entry.specified.is_none());
+        }
+        assert_eq!(
+            result["probe:test/0.1.0/module/foo()"].atom.display_name,
+            "foo"
+        );
+    }
+
+    #[test]
+    fn test_merge_atoms_plus_specs() {
+        let dir = TempDir::new().unwrap();
+        let atoms_path = write_json(&dir, "atoms.json", &atoms_json());
+        let specs_path = write_json(&dir, "specs.json", &specs_json());
+
+        let result = merge_into_unified(&atoms_path, Some(&specs_path), None).unwrap();
+
+        assert_eq!(result.len(), 3);
+        assert_eq!(
+            result["probe:test/0.1.0/module/foo()"].specified,
+            Some(true)
+        );
+        assert_eq!(
+            result["probe:test/0.1.0/module/bar()"].specified,
+            Some(false)
+        );
+        // External stub has no spec match
+        assert!(result["probe:external/1.0.0/lib/ext()"].specified.is_none());
+        // No proofs -> no verification-status
+        for entry in result.values() {
+            assert!(entry.verification_status.is_none());
+        }
+    }
+
+    #[test]
+    fn test_merge_atoms_plus_proofs() {
+        let dir = TempDir::new().unwrap();
+        let atoms_path = write_json(&dir, "atoms.json", &atoms_json());
+        let proofs_path = write_json(&dir, "proofs.json", &proofs_json());
+
+        let result = merge_into_unified(&atoms_path, None, Some(&proofs_path)).unwrap();
+
+        assert_eq!(result.len(), 3);
+        assert_eq!(
+            result["probe:test/0.1.0/module/foo()"]
+                .verification_status
+                .as_deref(),
+            Some("verified")
+        );
+        assert_eq!(
+            result["probe:test/0.1.0/module/bar()"]
+                .verification_status
+                .as_deref(),
+            Some("failed")
+        );
+        // External stub has no proof
+        assert!(result["probe:external/1.0.0/lib/ext()"]
+            .verification_status
+            .is_none());
+        // No specs -> no specified
+        for entry in result.values() {
+            assert!(entry.specified.is_none());
+        }
+    }
+
+    #[test]
+    fn test_merge_all_three() {
+        let dir = TempDir::new().unwrap();
+        let atoms_path = write_json(&dir, "atoms.json", &atoms_json());
+        let specs_path = write_json(&dir, "specs.json", &specs_json());
+        let proofs_path = write_json(&dir, "proofs.json", &proofs_json());
+
+        let result =
+            merge_into_unified(&atoms_path, Some(&specs_path), Some(&proofs_path)).unwrap();
+
+        assert_eq!(result.len(), 3);
+
+        let foo = &result["probe:test/0.1.0/module/foo()"];
+        assert_eq!(foo.specified, Some(true));
+        assert_eq!(foo.verification_status.as_deref(), Some("verified"));
+        assert_eq!(foo.atom.display_name, "foo");
+
+        let bar = &result["probe:test/0.1.0/module/bar()"];
+        assert_eq!(bar.specified, Some(false));
+        assert_eq!(bar.verification_status.as_deref(), Some("failed"));
+
+        let ext = &result["probe:external/1.0.0/lib/ext()"];
+        assert!(ext.specified.is_none());
+        assert!(ext.verification_status.is_none());
+    }
+
+    #[test]
+    fn test_status_mapping_all_values() {
+        assert_eq!(map_verification_status("success"), "verified");
+        assert_eq!(map_verification_status("failure"), "failed");
+        assert_eq!(map_verification_status("sorries"), "unverified");
+        assert_eq!(map_verification_status("warning"), "verified");
+        assert_eq!(map_verification_status("unknown"), "failed");
+    }
+
+    #[test]
+    fn test_unified_atom_serialization() {
+        let dir = TempDir::new().unwrap();
+        let atoms_path = write_json(&dir, "atoms.json", &atoms_json());
+        let specs_path = write_json(&dir, "specs.json", &specs_json());
+        let proofs_path = write_json(&dir, "proofs.json", &proofs_json());
+
+        let result =
+            merge_into_unified(&atoms_path, Some(&specs_path), Some(&proofs_path)).unwrap();
+        let json = serde_json::to_value(&result).unwrap();
+
+        let foo_json = &json["probe:test/0.1.0/module/foo()"];
+        assert_eq!(foo_json["display-name"], "foo");
+        assert_eq!(foo_json["verification-status"], "verified");
+        assert_eq!(foo_json["specified"], true);
+        assert_eq!(foo_json["kind"], "exec");
+
+        let ext_json = &json["probe:external/1.0.0/lib/ext()"];
+        assert!(ext_json.get("verification-status").is_none());
+        assert!(ext_json.get("specified").is_none());
+    }
 }

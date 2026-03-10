@@ -1,0 +1,48 @@
+{
+  "schema": "probe-verus/specs",
+  "schema-version": "2.0",
+  "tool": { "name": "probe-verus", "version": "3.0.0", "command": "specify" },
+  "source": {
+    "repo": "",
+    "commit": "",
+    "language": "rust",
+    "package": "test-crate",
+    "package-version": "0.1.0"
+  },
+  "timestamp": "2026-03-10T00:00:00Z",
+  "data": {
+    "probe:test-crate/0.1.0/module/foo()": {
+      "spec-text": { "lines-start": 10, "lines-end": 25 },
+      "kind": "exec",
+      "specified": true,
+      "has_requires": true,
+      "has_ensures": true,
+      "has_decreases": false,
+      "has_trusted_assumption": false,
+      "is_external_body": false,
+      "has_no_decreases_attr": false
+    },
+    "probe:test-crate/0.1.0/module/bar()": {
+      "spec-text": { "lines-start": 30, "lines-end": 45 },
+      "kind": "proof",
+      "specified": false,
+      "has_requires": false,
+      "has_ensures": false,
+      "has_decreases": false,
+      "has_trusted_assumption": false,
+      "is_external_body": false,
+      "has_no_decreases_attr": false
+    },
+    "probe:test-crate/0.1.0/module/baz()": {
+      "spec-text": { "lines-start": 50, "lines-end": 60 },
+      "kind": "spec",
+      "specified": true,
+      "has_requires": false,
+      "has_ensures": true,
+      "has_decreases": false,
+      "has_trusted_assumption": false,
+      "is_external_body": false,
+      "has_no_decreases_attr": false
+    }
+  }
+}

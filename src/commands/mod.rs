@@ -3,19 +3,19 @@
 //! This module contains the implementation of each CLI subcommand:
 //! - `atomize`: Generate call graph atoms from SCIP indexes
 //! - `callee-crates`: Find which crates a function's callees belong to
-//! - `verify`: Run Verus verification and analyze results
+//! - `run-verus`: Run Verus verification and analyze results
 //! - `functions`: List all functions in a project
 //! - `specify`: Extract function specifications to JSON
 //! - `specs-data`: Generate specs_data.json for the specs browser
 //! - `tracked-csv`: Generate curve25519_functions.csv for the dashboard
 //! - `stubify`: Convert .md files with YAML frontmatter to JSON
-//! - `run`: Run both atomize and verify (for CI/Docker)
+//! - `verify`: Unified pipeline - atomize + specify + run-verus
 
 mod atomize;
 mod callee_crates;
 mod functions;
 mod merge_atoms;
-mod run;
+mod run_verus;
 mod setup;
 mod specify;
 mod specs_data;
@@ -27,7 +27,7 @@ pub use atomize::cmd_atomize;
 pub use callee_crates::cmd_callee_crates;
 pub use functions::cmd_functions;
 pub use merge_atoms::cmd_merge_atoms;
-pub use run::cmd_run;
+pub use run_verus::cmd_run_verus;
 pub use setup::cmd_setup;
 pub use specify::cmd_specify;
 pub use specs_data::cmd_specs_data;

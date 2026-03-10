@@ -5,15 +5,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project Overview
 
 probe-verus is a Rust CLI tool that generates compact function call graph data from SCIP (Source Code Index Protocol) indexes and analyzes Verus verification results. Subcommands:
+- **verify**: Unified pipeline - atomize + specify + run-verus (designed for Docker/CI usage)
 - **atomize**: Generate call graph atoms with accurate line numbers
 - **callee-crates**: Find which crates a function's callees belong to at a given depth
 - **list-functions**: List all functions in a Rust/Verus project (no external tools needed)
 - **merge-atoms**: Combine independently-indexed atoms.json files
+- **run-verus**: Run Verus verification and analyze results (standalone)
 - **setup**: Install or check status of external tools (verus-analyzer, scip) via auto-download
 - **specify**: Extract function specifications from atoms.json, with optional taxonomy classification
 - **stubify**: Convert .md files with YAML frontmatter to JSON
-- **verify**: Run Verus verification and analyze results
-- **run**: Run both atomize and verify (designed for Docker/CI usage)
 
 ## Build and Test Commands
 
@@ -44,7 +44,7 @@ src/
 ├── main.rs           # CLI entry point with subcommand routing
 ├── lib.rs            # Core data structures and SCIP JSON parsing
 ├── metadata.rs       # Schema 2.0 envelope construction, project metadata gathering
-├── commands/         # Subcommand implementations (atomize, verify, setup, run, etc.)
+├── commands/         # Subcommand implementations (verify, atomize, run_verus, specify, setup, etc.)
 ├── scip_cache.rs     # SCIP index generation, caching, and tool resolution
 ├── taxonomy.rs       # Spec taxonomy classification from TOML rules
 ├── tool_manager.rs   # Auto-download manager for external tools (verus-analyzer, scip)
@@ -56,12 +56,12 @@ src/
 
 ### Main Pipelines
 
-1. **Atomize Pipeline** (`atomize` command): SCIP JSON → call graph parsing → spans via verus_syn → Schema 2.0 envelope → `.verilib/probes/`
-2. **List Functions Pipeline** (`list-functions` command): Source files → AST visitor → function list
-3. **Verification Pipeline** (`verify` command): Cargo verus output → error parsing → function mapping → Schema 2.0 envelope → `.verilib/probes/`
-4. **Specify Pipeline** (`specify` command): Source files + atoms.json → spec extraction → optional taxonomy classification via TOML rules → Schema 2.0 envelope → `.verilib/probes/`
-5. **Setup Pipeline** (`setup` command): Resolve versions → download from GitHub → decompress to `~/.probe-verus/tools/`
-6. **Run Pipeline** (`run` command): Atomize + verify in one step (CI/Docker entrypoint), shared metadata for consistent timestamps
+1. **Verify Pipeline** (`verify` command): Unified 3-step pipeline (atomize + specify + run-verus) producing a single unified JSON output (`probe-verus/verify` schema) where each atom includes optional `verification-status` and `specified` fields. Uses `--separate-outputs` to also write individual files. Recommended CI/Docker entrypoint.
+2. **Atomize Pipeline** (`atomize` command): SCIP JSON → call graph parsing → spans via verus_syn → Schema 2.0 envelope → `.verilib/probes/`
+3. **List Functions Pipeline** (`list-functions` command): Source files → AST visitor → function list
+4. **Run-Verus Pipeline** (`run-verus` command): Cargo verus output → error parsing → function mapping → Schema 2.0 envelope → `.verilib/probes/`
+5. **Specify Pipeline** (`specify` command): Source files + atoms.json → spec extraction → optional taxonomy classification via TOML rules → Schema 2.0 envelope → `.verilib/probes/`
+6. **Setup Pipeline** (`setup` command): Resolve versions → download from GitHub → decompress to `~/.probe-verus/tools/`
 
 ### Key Architectural Patterns
 
@@ -79,28 +79,29 @@ src/
 
 **Schema 2.0 Metadata Envelope**: All JSON outputs are wrapped in a standardized envelope containing `schema`, `schema-version`, `tool`, `source`, `timestamp`, and `data` fields. The `metadata.rs` module handles envelope construction, project metadata gathering (git commit, repo URL, Cargo.toml parsing), and default output path resolution to `.verilib/probes/`.
 
-**Config Structs for Internal APIs**: `atomize_internal` and `verify_internal` use `AtomizeInternalConfig` and `VerifyInternalConfig` structs (defined in `metadata.rs`) instead of long parameter lists. The `run` command gathers metadata once and passes it via config structs so atomize and verify share a consistent timestamp.
+**Config Structs for Internal APIs**: `atomize_internal`, `specify_internal`, and `run_verus_internal` use `AtomizeInternalConfig`, `SpecifyInternalConfig`, and `VerifyInternalConfig` structs (defined in `metadata.rs`) instead of long parameter lists. The `verify` command gathers metadata once and passes it via config structs so all steps share a consistent timestamp.
 
 ### Key Types
 
 - `FunctionNode`: Call graph node with callees and type context
 - `AtomWithLines`: Output format with line ranges
+- `UnifiedAtom`: `AtomWithLines` + optional `verification-status` and `specified` (verify pipeline output)
 - `FunctionInfo`: Function metadata with mode, specs, ensures/requires calls
 - `TaxonomyConfig`, `TaxonomyRule`, `MatchCriteria`: TOML-based spec classification rules
 - `FunctionInterval`: Interval tree entry for error→function mapping
 - `CompilationError`, `VerificationFailure`: Error types for verification analysis
 - `Envelope<T>`, `MergedEnvelope<T>`: Schema 2.0 metadata wrappers for JSON output
 - `ProjectMetadata`: Git commit, repo URL, timestamp, package name/version
-- `AtomizeInternalConfig`, `VerifyInternalConfig`: Config structs for internal command APIs
+- `AtomizeInternalConfig`, `SpecifyInternalConfig`, `VerifyInternalConfig`: Config structs for internal command APIs
 
 ## External Tool Dependencies
 
+- **verify command**: Same as atomize + specify + run-verus (unified pipeline)
 - **atomize command**: Requires `verus-analyzer` and `scip` CLI (auto-downloadable via `setup` or `--auto-install`)
 - **list-functions command**: None (uses verus_syn only)
-- **verify command**: Requires `cargo verus`
+- **run-verus command**: Requires `cargo verus`
 - **specify command**: None (uses verus_syn only; optional TOML config for taxonomy)
 - **setup command**: None (downloads tools itself)
-- **run command**: Same as atomize + verify
 
 ## Before Committing
 
@@ -129,7 +130,7 @@ All notable changes must be recorded in `CHANGELOG.md` using [Keep a Changelog](
 
 Any non-backward-compatible change to the **public contract**:
 
-- Renamed or removed subcommands (`atomize`, `verify`, `specify`, `list-functions`, `stubify`, `run`, `specs-data`, `tracked-csv`)
+- Renamed or removed subcommands (`verify`, `atomize`, `run-verus`, `specify`, `list-functions`, `stubify`, `specs-data`, `tracked-csv`)
 - Renamed or removed CLI flags (e.g., `--with-atoms`, `--output`, `--with-locations`)
 - Changed semantics of existing flags
 - Changed JSON output field names or structure (e.g., renaming `display-name`, changing dict output to array)

@@ -107,7 +107,8 @@ pub fn cmd_atomize(
 
     // Gather metadata and resolve output path
     let metadata = gather_metadata(&project_path);
-    let output = output.unwrap_or_else(|| get_default_output_path(&project_path, &metadata, ""));
+    let output =
+        output.unwrap_or_else(|| get_default_output_path(&project_path, &metadata, "atoms"));
 
     if let Some(parent) = output.parent() {
         std::fs::create_dir_all(parent).expect("Failed to create output directory");

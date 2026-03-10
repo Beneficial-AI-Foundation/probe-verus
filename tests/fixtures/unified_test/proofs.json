@@ -1,0 +1,27 @@
+{
+  "schema": "probe-verus/proofs",
+  "schema-version": "2.0",
+  "tool": { "name": "probe-verus", "version": "3.0.0", "command": "run-verus" },
+  "source": {
+    "repo": "",
+    "commit": "",
+    "language": "rust",
+    "package": "test-crate",
+    "package-version": "0.1.0"
+  },
+  "timestamp": "2026-03-10T00:00:00Z",
+  "data": {
+    "probe:test-crate/0.1.0/module/foo()": {
+      "code-path": "src/module.rs",
+      "code-line": 10,
+      "verified": true,
+      "status": "success"
+    },
+    "probe:test-crate/0.1.0/module/bar()": {
+      "code-path": "src/module.rs",
+      "code-line": 30,
+      "verified": false,
+      "status": "failure"
+    }
+  }
+}

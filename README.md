@@ -44,9 +44,10 @@ For manual installation options, see [tools/INSTALL.md](tools/INSTALL.md).
 |---------|----------------|
 | `atomize` | verus-analyzer, scip |
 | `list-functions` | None |
-| `verify` | cargo verus |
+| `run-verus` | cargo verus |
 | `specify` | None |
 | `setup` | None |
+| `verify` | verus-analyzer, scip, cargo verus |
 
 ## Commands
 
@@ -58,11 +59,11 @@ Commands:
   callee-crates   Find which crates a function's callees belong to
   list-functions  List all functions in a Rust/Verus project
   merge-atoms     Combine independently-indexed atoms.json files
+  run-verus       Run Verus verification and analyze results
   setup           Install or check status of external tools
   specify         Extract function specifications from atoms.json
   stubify         Convert .md files with YAML frontmatter to JSON
-  verify          Run Verus verification and analyze results
-  run             Run both atomize and verify (designed for Docker/CI)
+  verify          Run unified pipeline: atomize + specify + run-verus (designed for Docker/CI)
 ```
 
 ---
@@ -132,7 +133,7 @@ Generate call graph atoms with line numbers from SCIP indexes.
 probe-verus atomize <PROJECT_PATH> [OPTIONS]
 
 Options:
-  -o, --output <FILE>     Output file path (default: .verilib/probes/verus_<pkg>_<ver>.json)
+  -o, --output <FILE>     Output file path (default: .verilib/probes/verus_<pkg>_<ver>_atoms.json)
   -r, --regenerate-scip   Force regeneration of the SCIP index
       --with-locations    Include detailed per-call location info (precondition/postcondition/inner)
       --auto-install      Automatically download missing tools without prompting
@@ -415,12 +416,12 @@ ensures_calls_contain = ["spec_", "_to_nat"]
 
 ---
 
-### `verify` - Run Verus Verification
+### `run-verus` - Run Verus Verification
 
 Run Verus verification on a project and analyze results. Supports caching for quick re-analysis.
 
 ```bash
-probe-verus verify [PROJECT_PATH] [OPTIONS]
+probe-verus run-verus [PROJECT_PATH] [OPTIONS]
 
 Options:
       --from-file <FILE>         Analyze existing output file instead of running verification
@@ -431,33 +432,34 @@ Options:
   -o, --output <FILE>            Write JSON results to file (default: .verilib/probes/verus_<pkg>_<ver>_proofs.json)
       --no-cache                 Don't cache the verification output
   -a, --with-atoms <FILE>        Path to atoms.json for code-name enrichment (auto-discovers in .verilib/probes/ if omitted)
+      --verus-args <ARGS>...     Extra arguments passed to cargo verus
 ```
 
 **Caching Workflow:**
 
 ```bash
 # First run: runs verification and caches output to data/
-probe-verus verify ./my-verus-project -p my-crate
+probe-verus run-verus ./my-verus-project -p my-crate
 
 # Subsequent runs: uses cached output (no need to re-run verification)
-probe-verus verify
+probe-verus run-verus
 ```
 
 **Examples:**
 ```bash
 # Run verification (caches output automatically)
-probe-verus verify ./my-verus-project
-probe-verus verify ./my-workspace -p my-crate
+probe-verus run-verus ./my-verus-project
+probe-verus run-verus ./my-workspace -p my-crate
 
 # Use cached output (no project path needed)
-probe-verus verify
+probe-verus run-verus
 
 # Analyze existing output file (from CI, etc.)
-probe-verus verify ./my-project --from-file verification_output.txt
+probe-verus run-verus ./my-project --from-file verification_output.txt
 
 # Enrich results with probe-names from atoms.json (auto-discovers in .verilib/probes/)
-probe-verus verify ./my-project
-probe-verus verify ./my-project -a path/to/atoms.json
+probe-verus run-verus ./my-project
+probe-verus run-verus ./my-project -a path/to/atoms.json
 ```
 
 **Output format:**
@@ -522,24 +524,40 @@ Tools are installed to `~/.probe-verus/tools/`. Existing tools on your `PATH` ar
 
 ---
 
-### `run` - Atomize + Verify (CI/Docker)
+### `verify` - Unified Pipeline (CI/Docker)
 
-Run both `atomize` and `verify` in a single command. Designed for Docker containers and CI pipelines. Outputs go to `.verilib/probes/` inside the project, plus a `run_summary.json` in the output directory.
+Run the unified 3-step pipeline: `atomize` + `specify` + `run-verus`. Produces a single unified JSON file (`probe-verus/verify` schema) where each atom entry includes optional `verification-status` and `specified` fields, matching the `probe-lean verify` output structure. A pipeline summary (`verify_summary.json`) is also written to the output directory.
 
 ```bash
-probe-verus run <PROJECT_PATH> [OPTIONS]
+probe-verus verify <PROJECT_PATH> [OPTIONS]
 
 Options:
-  -o, --output <DIR>       Output directory for run_summary.json (default: ./output)
-  -p, --package <NAME>     Package to verify (for workspaces)
-      --auto-install       Automatically download missing tools without prompting
+  -o, --output <DIR>           Output directory for verify_summary.json (default: ./output)
+  -p, --package <NAME>         Package to verify (for workspaces)
+      --skip-atomize           Skip the atomize step
+      --skip-specify           Skip the specify step
+      --skip-verify            Skip the run-verus step
+      --separate-outputs       Also write individual atoms, specs, and proofs files
+      --regenerate-scip        Force regeneration of the SCIP index
+  -v, --verbose                Verbose output
+      --rust-analyzer          Use rust-analyzer instead of verus-analyzer for SCIP
+      --allow-duplicates       Allow duplicate probe-names (normally fatal)
+      --auto-install           Automatically download missing tools without prompting
+  -a, --with-atoms <PATH>      Path to atoms.json (for use with --skip-atomize)
+      --with-spec-text         Include raw specification text in specify output
+      --taxonomy-config <PATH> Path to TOML file for spec classification
+      --verus-args <ARGS>...   Extra arguments passed to cargo verus
 ```
 
 **Examples:**
 ```bash
-probe-verus run ./my-verus-project -p my-crate
-probe-verus run ./my-verus-project --auto-install   # CI-friendly
+probe-verus verify ./my-verus-project -p my-crate
+probe-verus verify ./my-verus-project --auto-install   # CI-friendly
+probe-verus verify ./my-verus-project --separate-outputs  # Also write atoms/specs/proofs files
+probe-verus verify ./my-verus-project --skip-atomize -a path/to/atoms.json
 ```
+
+**Docker entrypoint:** `probe-verus verify`
 
 ---
 

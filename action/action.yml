@@ -84,12 +84,13 @@ runs:
         fi
         
         # Extract [package.metadata.verus] section
-        METADATA=$(awk '/^\[package.metadata.verus\]/{flag=1;next}/^\[.*\]/{flag=0}flag' "$CARGO_TOML")
+        METADATA=$(awk '/^\[package\.metadata\.verus\]/{flag=1;next}/^\[/{flag=0}flag' "$CARGO_TOML")
+        echo "::debug::METADATA section: $METADATA"
         
         # Get Verus version (from input or Cargo.toml)
         VERUS_VERSION="${{ inputs.verus-version }}"
         if [ -z "$VERUS_VERSION" ]; then
-          VERUS_VERSION=$(echo "$METADATA" | grep -E '^\s*release\s*=' | sed 's/.*= *"\([^"]*\)".*/\1/' | head -1)
+          VERUS_VERSION=$(echo "$METADATA" | grep -E '^\s*release\s*=' | sed 's/.*= *"\([^"]*\)".*/\1/' | head -1) || true
           if [ -z "$VERUS_VERSION" ]; then
             echo "::error::No Verus version found. Provide verus-version input or add [package.metadata.verus] release to Cargo.toml"
             exit 1
@@ -100,7 +101,7 @@ runs:
         # Get Rust version (from input or Cargo.toml)
         RUST_VERSION="${{ inputs.rust-version }}"
         if [ -z "$RUST_VERSION" ]; then
-          RUST_VERSION=$(echo "$METADATA" | grep -E '^\s*rust-version\s*=' | sed 's/.*= *"\([^"]*\)".*/\1/' | head -1)
+          RUST_VERSION=$(echo "$METADATA" | grep -E '^\s*rust-version\s*=' | sed 's/.*= *"\([^"]*\)".*/\1/' | head -1) || true
           if [ -z "$RUST_VERSION" ]; then
             # Default to stable if not specified
             RUST_VERSION="stable"

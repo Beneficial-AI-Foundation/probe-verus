@@ -2,7 +2,7 @@
 # Runs Verus formal verification and produces verification results JSON
 #
 # Usage:
-#   - uses: beneficial-ai-foundation/probe-verus/action@v1
+#   - uses: beneficial-ai-foundation/probe-verus/action@v3
 #     with:
 #       project-path: ./my-verus-crate
 #     # outputs: results-file, atoms-file, verified-count, total-functions
@@ -245,8 +245,11 @@ runs:
         
         echo "atoms_file=$(realpath "$ATOMS_FILE")" >> $GITHUB_OUTPUT
 
-    # Step 9: Run probe-verus verify
-    - name: Run probe-verus verify
+    # Step 9: Run probe-verus run-verus (standalone verification)
+    # Note: "verify" was renamed to "run-verus" in v3.0.0.
+    # The new "verify" is a unified pipeline (atomize+specify+run-verus)
+    # but the action already runs atomize separately in step 8.
+    - name: Run probe-verus run-verus
       id: verify
       shell: bash
       run: |
@@ -256,13 +259,13 @@ runs:
         ATOMS_FILE="$OUTPUT_DIR/atoms.json"
         PACKAGE="${{ inputs.package }}"
         
-        echo "=== Running probe-verus verify ==="
+        echo "=== Running probe-verus run-verus ==="
         echo "Project: $PROJECT_PATH"
         
         VERUS_ARGS="${{ inputs.verus-args }}"
         
-        # Build command
-        CMD="probe-verus verify $PROJECT_PATH -o $RESULTS_FILE -a $ATOMS_FILE"
+        # Build command (run-verus: standalone verification, -o is a file path)
+        CMD="probe-verus run-verus $PROJECT_PATH -o $RESULTS_FILE -a $ATOMS_FILE"
         if [ -n "$PACKAGE" ]; then
           CMD="$CMD -p $PACKAGE"
         fi

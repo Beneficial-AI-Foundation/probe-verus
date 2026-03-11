@@ -211,7 +211,7 @@ pub struct AtomWithLines {
 
 /// Unified atom: all `AtomWithLines` fields plus optional verification and specification status.
 ///
-/// Produced by the `verify` pipeline to match the `probe-lean/verify` output structure.
+/// Produced by the `extract` pipeline to match the `probe-lean/verify` output structure.
 /// When a step is skipped, the corresponding field is absent (serialized as missing key).
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UnifiedAtom {

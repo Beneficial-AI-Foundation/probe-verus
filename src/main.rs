@@ -9,7 +9,7 @@
 //! - `merge-atoms`: Combine independently-indexed atoms.json files
 //! - `stubify`: Convert .md files with YAML frontmatter to JSON
 //! - `setup`: Install or check status of external tools (verus-analyzer, scip)
-//! - `verify`: Unified pipeline - atomize + specify + run-verus
+//! - `extract`: Unified pipeline - atomize + specify + run-verus
 
 use clap::{Parser, Subcommand};
 use probe_verus::constants::DEFAULT_OUTPUT_DIR;
@@ -18,8 +18,8 @@ use std::path::PathBuf;
 // Import command implementations
 mod commands;
 use commands::{
-    cmd_atomize, cmd_callee_crates, cmd_functions, cmd_merge_atoms, cmd_run_verus, cmd_setup,
-    cmd_specify, cmd_specs_data, cmd_stubify, cmd_tracked_csv, cmd_verify, OutputFormat,
+    cmd_atomize, cmd_callee_crates, cmd_extract, cmd_functions, cmd_merge_atoms, cmd_run_verus,
+    cmd_setup, cmd_specify, cmd_specs_data, cmd_stubify, cmd_tracked_csv, OutputFormat,
 };
 
 #[derive(Parser)]
@@ -291,12 +291,12 @@ enum Commands {
     /// This is the recommended entrypoint for Docker containers and CI pipelines.
     /// Runs atomize, specify, and run-verus in sequence, with proper error handling
     /// and JSON output. Individual steps can be skipped with --skip-* flags.
-    #[command(name = "verify")]
-    Verify {
+    #[command(name = "extract")]
+    Extract {
         /// Path to the Rust/Verus project
         project_path: PathBuf,
 
-        /// Output directory for the verify_summary.json (default: ./output)
+        /// Output directory for the extract_summary.json (default: ./output)
         #[arg(short, long, default_value = DEFAULT_OUTPUT_DIR)]
         output: PathBuf,
 
@@ -496,7 +496,7 @@ fn main() {
         Commands::Setup { status } => {
             cmd_setup(status);
         }
-        Commands::Verify {
+        Commands::Extract {
             project_path,
             output,
             skip_atomize,
@@ -514,7 +514,7 @@ fn main() {
             verus_args,
             separate_outputs,
         } => {
-            cmd_verify(
+            cmd_extract(
                 project_path,
                 output,
                 skip_atomize,

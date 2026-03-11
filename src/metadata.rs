@@ -128,8 +128,8 @@ pub struct AtomizeInternalConfig<'a> {
     pub metadata: &'a ProjectMetadata,
 }
 
-/// Configuration for `verify_internal`, replacing a long parameter list.
-pub struct VerifyInternalConfig<'a> {
+/// Configuration for the extract pipeline's run-verus step, replacing a long parameter list.
+pub struct ExtractInternalConfig<'a> {
     pub project_path: &'a Path,
     pub output: &'a Path,
     pub package: Option<&'a str>,
@@ -548,7 +548,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_default_output_path_unified_verify() {
+    fn test_get_default_output_path_extract() {
         let meta = ProjectMetadata {
             commit: "abc".to_string(),
             repo: "".to_string(),

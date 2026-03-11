@@ -1,12 +1,12 @@
-//! Verify command - Unified pipeline: atomize + specify + run-verus.
+//! Extract command - Unified pipeline: atomize + specify + run-verus.
 
 use super::atomize::atomize_internal;
 use super::run_verus::{run_verus_internal, VerifySummary};
 use super::specify::specify_internal;
 use probe_verus::metadata::{
     find_default_atoms_path, gather_metadata, get_default_output_path, unwrap_envelope,
-    wrap_in_envelope, AtomizeInternalConfig, ProjectMetadata, SpecifyInternalConfig,
-    VerifyInternalConfig,
+    wrap_in_envelope, AtomizeInternalConfig, ExtractInternalConfig, ProjectMetadata,
+    SpecifyInternalConfig,
 };
 use probe_verus::{AtomWithLines, UnifiedAtom};
 use serde::{Deserialize, Serialize};
@@ -14,11 +14,11 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 #[derive(Serialize)]
-struct VerifyPipelineResult {
+struct ExtractPipelineResult {
     status: String,
     atomize: Option<StepResult>,
     specify: Option<StepResult>,
-    verify: Option<VerifyStepResult>,
+    verify: Option<ExtractStepResult>,
 }
 
 #[derive(Serialize)]
@@ -30,22 +30,22 @@ struct StepResult {
 }
 
 #[derive(Serialize)]
-struct VerifyStepResult {
+struct ExtractStepResult {
     success: bool,
     output_file: String,
-    summary: Option<VerifySummaryOutput>,
+    summary: Option<ExtractSummaryOutput>,
     error: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
-struct VerifySummaryOutput {
+struct ExtractSummaryOutput {
     total_functions: usize,
     verified: usize,
     failed: usize,
     unverified: usize,
 }
 
-impl From<VerifySummary> for VerifySummaryOutput {
+impl From<VerifySummary> for ExtractSummaryOutput {
     fn from(s: VerifySummary) -> Self {
         Self {
             total_functions: s.total_functions,
@@ -56,12 +56,12 @@ impl From<VerifySummary> for VerifySummaryOutput {
     }
 }
 
-/// Execute the unified verify command.
+/// Execute the unified extract command.
 ///
 /// Runs atomize, specify, and run-verus as a 3-step pipeline, then merges the
-/// outputs into a single unified JSON file (schema `probe-verus/verify`).
+/// outputs into a single unified JSON file (schema `probe-verus/extract`).
 #[allow(clippy::too_many_arguments)]
-pub fn cmd_verify(
+pub fn cmd_extract(
     project_path: PathBuf,
     output_dir: PathBuf,
     skip_atomize: bool,
@@ -109,7 +109,7 @@ pub fn cmd_verify(
 
     print_header(&project_path, &output_dir, &package);
 
-    let mut result = VerifyPipelineResult {
+    let mut result = ExtractPipelineResult {
         status: "success".to_string(),
         atomize: None,
         specify: None,
@@ -180,7 +180,7 @@ pub fn cmd_verify(
 
     // === Step 3: Run-Verus (cargo verus) ===
     if !skip_verify {
-        let config = VerifyInternalConfig {
+        let config = ExtractInternalConfig {
             project_path: &project_path,
             output: &results_path,
             package: package.as_deref(),
@@ -221,8 +221,8 @@ pub fn cmd_verify(
         println!();
     }
 
-    let summary_path = output_dir.join("verify_summary.json");
-    let envelope = wrap_in_envelope("probe-verus/verify-summary", "verify", &result, &metadata);
+    let summary_path = output_dir.join("extract_summary.json");
+    let envelope = wrap_in_envelope("probe-verus/extract-summary", "extract", &result, &metadata);
     if let Ok(json) = serde_json::to_string_pretty(&envelope) {
         if let Err(e) = std::fs::write(&summary_path, &json) {
             eprintln!("Warning: Could not write summary: {}", e);
@@ -239,7 +239,7 @@ pub fn cmd_verify(
 
 fn print_header(project_path: &Path, output_dir: &Path, package: &Option<String>) {
     println!("═══════════════════════════════════════════════════════════════");
-    println!("  probe-verus verify");
+    println!("  probe-verus extract");
     println!("═══════════════════════════════════════════════════════════════");
     println!();
     println!("  Project: {}", project_path.display());
@@ -250,7 +250,7 @@ fn print_header(project_path: &Path, output_dir: &Path, package: &Option<String>
     println!();
 }
 
-fn run_atomize_step(config: &AtomizeInternalConfig, result: &mut VerifyPipelineResult) {
+fn run_atomize_step(config: &AtomizeInternalConfig, result: &mut ExtractPipelineResult) {
     println!("───────────────────────────────────────────────────────────────");
     println!("  Step 1/3: Atomize (generate call graph)");
     println!("───────────────────────────────────────────────────────────────");
@@ -281,7 +281,7 @@ fn run_atomize_step(config: &AtomizeInternalConfig, result: &mut VerifyPipelineR
     println!();
 }
 
-fn run_specify_step(config: &SpecifyInternalConfig, result: &mut VerifyPipelineResult) {
+fn run_specify_step(config: &SpecifyInternalConfig, result: &mut ExtractPipelineResult) {
     println!("───────────────────────────────────────────────────────────────");
     println!("  Step 2/3: Specify (extract specifications)");
     println!("───────────────────────────────────────────────────────────────");
@@ -314,7 +314,7 @@ fn run_specify_step(config: &SpecifyInternalConfig, result: &mut VerifyPipelineR
     println!();
 }
 
-fn run_verify_step(config: &VerifyInternalConfig, result: &mut VerifyPipelineResult) {
+fn run_verify_step(config: &ExtractInternalConfig, result: &mut ExtractPipelineResult) {
     println!("───────────────────────────────────────────────────────────────");
     println!("  Step 3/3: Run-Verus (cargo verus verification)");
     println!("───────────────────────────────────────────────────────────────");
@@ -333,7 +333,7 @@ fn run_verify_step(config: &VerifyInternalConfig, result: &mut VerifyPipelineRes
                 result.status = "verification_failed".to_string();
             }
 
-            result.verify = Some(VerifyStepResult {
+            result.verify = Some(ExtractStepResult {
                 success: true,
                 output_file: config.output.display().to_string(),
                 summary: Some(summary.into()),
@@ -345,7 +345,7 @@ fn run_verify_step(config: &VerifyInternalConfig, result: &mut VerifyPipelineRes
             if result.status == "success" {
                 result.status = "verify_failed".to_string();
             }
-            result.verify = Some(VerifyStepResult {
+            result.verify = Some(ExtractStepResult {
                 success: false,
                 output_file: config.output.display().to_string(),
                 summary: None,
@@ -356,7 +356,7 @@ fn run_verify_step(config: &VerifyInternalConfig, result: &mut VerifyPipelineRes
     println!();
 }
 
-fn print_summary(result: &VerifyPipelineResult) {
+fn print_summary(result: &ExtractPipelineResult) {
     println!("═══════════════════════════════════════════════════════════════");
     println!("  Summary");
     println!("═══════════════════════════════════════════════════════════════");
@@ -492,7 +492,7 @@ fn run_unified_merge(
     project_path: &Path,
     metadata: &ProjectMetadata,
     separate_outputs: bool,
-    result: &VerifyPipelineResult,
+    result: &ExtractPipelineResult,
 ) -> Option<PathBuf> {
     if !atoms_path.exists() {
         eprintln!("  Warning: skipping unified output (no atoms file)");
@@ -512,7 +512,7 @@ fn run_unified_merge(
                 }
             }
 
-            let envelope = wrap_in_envelope("probe-verus/verify", "verify", &unified, metadata);
+            let envelope = wrap_in_envelope("probe-verus/extract", "extract", &unified, metadata);
             match serde_json::to_string_pretty(&envelope) {
                 Ok(json) => {
                     if let Err(e) = std::fs::write(&unified_path, &json) {
@@ -550,7 +550,7 @@ fn cleanup_individual_files(
     atoms_path: &Path,
     specs_path: Option<&Path>,
     proofs_path: Option<&Path>,
-    result: &VerifyPipelineResult,
+    result: &ExtractPipelineResult,
 ) {
     if result.atomize.as_ref().is_some_and(|a| a.success) && atoms_path.exists() {
         let _ = std::fs::remove_file(atoms_path);

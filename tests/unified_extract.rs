@@ -1,4 +1,4 @@
-//! Integration tests for the unified verify output.
+//! Integration tests for the unified extract output.
 //!
 //! Verifies that merging atoms + specs + proofs into a UnifiedAtom dict
 //! produces consistent results, using pre-built fixture files.
@@ -41,7 +41,7 @@ fn load_enveloped<T: serde::de::DeserializeOwned>(path: &Path) -> BTreeMap<Strin
         .unwrap_or_else(|e| panic!("Failed to deserialize {}: {}", path.display(), e))
 }
 
-/// Merge atoms + specs + proofs into unified output (mirrors the logic in verify.rs).
+/// Merge atoms + specs + proofs into unified output (mirrors the logic in extract.rs).
 fn merge_fixture_files(
     atoms_path: &Path,
     specs_path: Option<&Path>,

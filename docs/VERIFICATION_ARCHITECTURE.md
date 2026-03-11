@@ -1,6 +1,6 @@
 # Verification Analysis Architecture
 
-This document describes the architecture of the `probe-verus verify` command, which analyzes Verus verification output to identify verified and failed functions.
+This document describes the architecture of the `probe-verus extract` command, which analyzes Verus verification output to identify verified and failed functions.
 
 ---
 
@@ -11,7 +11,7 @@ The `probe-verus` tool has **two completely independent pipelines**:
 | Command | Tool Used | Purpose |
 |---------|-----------|---------|
 | `probe-verus atomize` | **verus-analyzer** → SCIP index | Generate call graph (who calls whom) |
-| `probe-verus verify` | **cargo verus** + **verus_syn** | Analyze verification (what passed/failed) |
+| `probe-verus extract` | **cargo verus** + **verus_syn** | Analyze verification (what passed/failed) |
 
 **verus-analyzer is NOT used in verification analysis.** The verification analysis only:
 1. Runs `cargo verus verify` to get verification output
@@ -21,7 +21,7 @@ The `probe-verus` tool has **two completely independent pipelines**:
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                        probe-verus tool                                  │
 ├───────────────────────────────┬─────────────────────────────────────────┤
-│   atomize command             │   verify command                        │
+│   atomize command             │   extract command                       │
 │   ─────────────               │   ──────────────                        │
 │                               │                                         │
 │   verus-analyzer              │   cargo verus verify                    │
@@ -80,7 +80,7 @@ Functions with specifications that have verifiable bodies:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                          probe-verus verify                              │
+│                          probe-verus extract                             │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                          │
 │   ┌─────────────┐     ┌──────────────────────────────────────────────┐  │

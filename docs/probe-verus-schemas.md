@@ -129,7 +129,7 @@ entries with `code-path: ""` and `code-text: {"lines-start": 0, "lines-end": 0}`
 
 ## 2. `probe-verus/proofs` — Verification Results (Per-Function)
 
-**Produced by:** `run-verus --with-atoms` (or when atoms are auto-discovered), or by the `verify` unified pipeline
+**Produced by:** `run-verus --with-atoms` (or when atoms are auto-discovered), or by the `extract` unified pipeline
 **Envelope schema:** `"probe-verus/proofs"`
 **Envelope `tool.command`:** `"run-verus"`
 
@@ -352,15 +352,15 @@ is **not** serialized (the code-name key serves as the identifier).
 
 ---
 
-## 5. `probe-verus/verify` — Unified Verify Output
+## 5. `probe-verus/extract` — Unified Extract Output
 
-**Produced by:** `verify` (unified pipeline)
-**Envelope schema:** `"probe-verus/verify"`
-**Envelope `tool.command`:** `"verify"`
+**Produced by:** `extract` (unified pipeline)
+**Envelope schema:** `"probe-verus/extract"`
+**Envelope `tool.command`:** `"extract"`
 
 ### Overview
 
-The primary output of the `verify` command.  Each entry is an atom enriched
+The primary output of the `extract` command.  Each entry is an atom enriched
 with optional `verification-status` and `specified` fields, matching the
 `probe-lean/verify` output structure.
 

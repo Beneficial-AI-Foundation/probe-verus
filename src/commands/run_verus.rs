@@ -3,7 +3,7 @@
 use probe_verus::constants::{DATA_DIR, VERIFICATION_CONFIG_FILE, VERIFICATION_OUTPUT_FILE};
 use probe_verus::metadata::{
     find_default_atoms_path, gather_metadata, get_default_output_path, wrap_in_envelope,
-    VerifyInternalConfig,
+    ExtractInternalConfig,
 };
 use probe_verus::verification::{
     convert_to_proofs_output, enrich_with_code_names, AnalysisResult, AnalysisStatus,
@@ -316,7 +316,7 @@ fn get_verification_data_from_cache() -> (PathBuf, String, i32) {
         },
         Err(_) => {
             eprintln!("Error: No cached verification found.");
-            eprintln!("Run with a project path first: probe-verus verify <project-path>");
+            eprintln!("Run with a project path first: probe-verus run-verus <project-path>");
             std::process::exit(1);
         }
     };
@@ -378,8 +378,8 @@ fn enrich_with_code_names_if_available(result: &mut AnalysisResult, atoms_path: 
 }
 
 /// Internal run-verus implementation that returns Result for better error handling.
-/// Used by the unified `verify` command (which pre-gathers metadata to share a timestamp).
-pub fn run_verus_internal(config: &VerifyInternalConfig) -> Result<VerifySummary, String> {
+/// Used by the unified `extract` command (which pre-gathers metadata to share a timestamp).
+pub fn run_verus_internal(config: &ExtractInternalConfig) -> Result<VerifySummary, String> {
     let runner = VerusRunner::new();
 
     let extra = if config.verus_args.is_empty() {
@@ -410,7 +410,7 @@ pub fn run_verus_internal(config: &VerifyInternalConfig) -> Result<VerifySummary
     }
 
     // When atoms are available, produce probe-verus/proofs (dictionary keyed by
-    // code-name) -- matching cmd_verify behavior. Otherwise fall back to the
+    // code-name) -- matching cmd_extract behavior. Otherwise fall back to the
     // full verification-report envelope.
     let wrote_proofs = if let Some(atoms) = config.atoms_path {
         if atoms.exists() {

@@ -26,7 +26,7 @@ cargo install --path .
 
 ### External tool dependencies
 
-Some commands (`atomize`, `verify`) require external tools. After installing
+Some commands (`atomize`, `extract`) require external tools. After installing
 probe-verus, run `setup` to auto-download them:
 
 ```bash
@@ -47,7 +47,7 @@ For manual installation options, see [tools/INSTALL.md](tools/INSTALL.md).
 | `run-verus` | cargo verus |
 | `specify` | None |
 | `setup` | None |
-| `verify` | verus-analyzer, scip, cargo verus |
+| `extract` | verus-analyzer, scip, cargo verus |
 
 ## Commands
 
@@ -63,7 +63,7 @@ Commands:
   setup           Install or check status of external tools
   specify         Extract function specifications from atoms.json
   stubify         Convert .md files with YAML frontmatter to JSON
-  verify          Run unified pipeline: atomize + specify + run-verus (designed for Docker/CI)
+  extract         Run unified pipeline: atomize + specify + run-verus (designed for Docker/CI)
 ```
 
 ---
@@ -524,15 +524,15 @@ Tools are installed to `~/.probe-verus/tools/`. Existing tools on your `PATH` ar
 
 ---
 
-### `verify` - Unified Pipeline (CI/Docker)
+### `extract` - Unified Pipeline (CI/Docker)
 
-Run the unified 3-step pipeline: `atomize` + `specify` + `run-verus`. Produces a single unified JSON file (`probe-verus/verify` schema) where each atom entry includes optional `verification-status` and `specified` fields, matching the `probe-lean verify` output structure. A pipeline summary (`verify_summary.json`) is also written to the output directory.
+Run the unified 3-step pipeline: `atomize` + `specify` + `run-verus`. Produces a single unified JSON file (`probe-verus/extract` schema) where each atom entry includes optional `verification-status` and `specified` fields, matching the `probe-lean verify` output structure. A pipeline summary (`extract_summary.json`) is also written to the output directory.
 
 ```bash
-probe-verus verify <PROJECT_PATH> [OPTIONS]
+probe-verus extract <PROJECT_PATH> [OPTIONS]
 
 Options:
-  -o, --output <DIR>           Output directory for verify_summary.json (default: ./output)
+  -o, --output <DIR>           Output directory for extract_summary.json (default: ./output)
   -p, --package <NAME>         Package to verify (for workspaces)
       --skip-atomize           Skip the atomize step
       --skip-specify           Skip the specify step
@@ -551,13 +551,13 @@ Options:
 
 **Examples:**
 ```bash
-probe-verus verify ./my-verus-project -p my-crate
-probe-verus verify ./my-verus-project --auto-install   # CI-friendly
-probe-verus verify ./my-verus-project --separate-outputs  # Also write atoms/specs/proofs files
-probe-verus verify ./my-verus-project --skip-atomize -a path/to/atoms.json
+probe-verus extract ./my-verus-project -p my-crate
+probe-verus extract ./my-verus-project --auto-install   # CI-friendly
+probe-verus extract ./my-verus-project --separate-outputs  # Also write atoms/specs/proofs files
+probe-verus extract ./my-verus-project --skip-atomize -a path/to/atoms.json
 ```
 
-**Docker entrypoint:** `probe-verus verify`
+**Docker entrypoint:** `probe-verus extract`
 
 ---
 

@@ -1,13 +1,13 @@
-# BAIF Verus Verify Action
+# BAIF Verus Extract Action
 # Runs Verus formal verification and produces verification results JSON
 #
 # Usage:
-#   - uses: beneficial-ai-foundation/probe-verus/action@v3
+#   - uses: beneficial-ai-foundation/probe-verus/action@v4
 #     with:
 #       project-path: ./my-verus-crate
 #     # outputs: results-file, atoms-file, verified-count, total-functions
 
-name: 'BAIF Verus Verify'
+name: 'BAIF Verus Extract'
 description: 'Run Verus formal verification on a Rust/Verus project and produce verification results'
 author: 'Beneficial AI Foundation'
 
@@ -20,7 +20,7 @@ inputs:
     description: 'Path to the Verus project (directory containing Cargo.toml with verus metadata)'
     required: true
   package:
-    description: 'Package name for workspace projects (passed to probe-verus verify -p)'
+    description: 'Package name for workspace projects (passed to probe-verus extract -p)'
     required: false
     default: ''
   verus-version:

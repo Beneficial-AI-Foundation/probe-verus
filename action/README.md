@@ -1,4 +1,4 @@
-# BAIF Verus Verify Action
+# BAIF Verus Extract Action
 
 A GitHub Action to run [Verus](https://github.com/verus-lang/verus) formal verification on Rust projects and produce structured verification results.
 
@@ -141,7 +141,7 @@ When atoms are available (the default), results use the `probe-verus/proofs` sch
 {
   "schema": "probe-verus/proofs",
   "schema-version": "2.0",
-  "tool": { "name": "probe-verus", "version": "2.0.0", "command": "verify" },
+  "tool": { "name": "probe-verus", "version": "4.0.0", "command": "run-verus" },
   "source": { "repo": "...", "commit": "...", "language": "rust", "package": "...", "package-version": "..." },
   "timestamp": "2026-03-06T12:00:00Z",
   "data": {

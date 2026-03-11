@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 See the [Versioning Policy section in CLAUDE.md](CLAUDE.md#versioning-policy) for
 what constitutes a breaking change.
 
+## [4.0.0] - 2026-03-11
+
+### Breaking
+- **Command rename**: `verify` -> `extract` (unified pipeline: atomize + specify + run-verus)
+- JSON output schema changed from `probe-verus/verify` to `probe-verus/extract`
+- Summary schema changed from `probe-verus/verify-summary` to `probe-verus/extract-summary`
+- Summary file renamed from `verify_summary.json` to `extract_summary.json`
+- Envelope `tool.command` changed from `"verify"` to `"extract"`
+- Docker entrypoint changed from `probe-verus verify` to `probe-verus extract`
+- Internal type `VerifyInternalConfig` renamed to `ExtractInternalConfig`
+
+### Unchanged
+- `--skip-verify` flag retains its name (it skips the verification step, not the command)
+
 ## [3.0.0] - 2026-03-10
 
 ### Breaking
@@ -205,7 +219,9 @@ what constitutes a breaking change.
 
 Initial release. SCIP-based call graph generation for Rust/Verus projects.
 
-[Unreleased]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v2.1.0...HEAD
+[Unreleased]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v4.0.0...HEAD
+[4.0.0]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v3.0.0...v4.0.0
+[3.0.0]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v2.1.0...v3.0.0
 [2.1.0]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v1.5.0...v2.0.0
 [1.5.0]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v1.4.0...v1.5.0

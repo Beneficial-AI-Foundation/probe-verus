@@ -272,6 +272,7 @@ mod tests {
             },
             kind,
             language: "rust".to_string(),
+            rust_qualified_name: None,
         }
     }
 

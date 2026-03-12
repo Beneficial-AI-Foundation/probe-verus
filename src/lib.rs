@@ -207,6 +207,15 @@ pub struct AtomWithLines {
     /// Source language of the atom (for cross-language merge compatibility)
     #[serde(default = "default_language")]
     pub language: String,
+    /// Rust-style qualified name derived from file path and display name.
+    /// Enables cross-language matching with Aeneas-generated Lean code.
+    /// Format: `crate_name::module::path::Type::method`
+    #[serde(
+        rename = "rust-qualified-name",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    pub rust_qualified_name: Option<String>,
 }
 
 /// Unified atom: all `AtomWithLines` fields plus optional verification and specification status.
@@ -272,6 +281,48 @@ fn make_unique_key(
     match line {
         Some(l) => format!("{}@{}", base, l),
         None => base,
+    }
+}
+
+/// Derive a Rust-style qualified name from the code-path (file) and SCIP symbol.
+///
+/// The qualified name uses `::` separators and underscore-style crate names to match
+/// the format produced by tools like Aeneas. This enables cross-language matching
+/// between probe-verus atoms and probe-lean atoms via a translations file.
+///
+/// Examples:
+/// - `("curve25519-dalek/src/backend/serial/u64/field.rs", "FieldElement51::reduce")`
+///   → `"curve25519_dalek::backend::serial::u64::field::FieldElement51::reduce"`
+/// - `("curve25519-dalek/src/backend/mod.rs", "variable_base_mul")`
+///   → `"curve25519_dalek::backend::variable_base_mul"`
+pub fn derive_rust_qualified_name(code_path: &str, display_name: &str) -> Option<String> {
+    if code_path.is_empty() {
+        return None;
+    }
+
+    // Strip crate directory prefix: "crate-name/src/..." → "..."
+    let parts: Vec<&str> = code_path.splitn(2, "/src/").collect();
+    if parts.len() != 2 {
+        return None;
+    }
+
+    let crate_name = parts[0]
+        .rsplit('/')
+        .next()
+        .unwrap_or(parts[0])
+        .replace('-', "_");
+
+    // Convert file path to module path: "backend/serial/u64/field.rs" → "backend::serial::u64::field"
+    let file_path = parts[1];
+    let module_path = file_path
+        .trim_end_matches(".rs")
+        .trim_end_matches("/mod")
+        .replace('/', "::");
+
+    if module_path.is_empty() || module_path == "lib" {
+        Some(format!("{}::{}", crate_name, display_name))
+    } else {
+        Some(format!("{}::{}::{}", crate_name, module_path, display_name))
     }
 }
 
@@ -1466,6 +1517,10 @@ fn convert_to_atoms_with_lines_internal(
             }
 
             let code_module = extract_code_module(&code_name);
+            let rqn = derive_rust_qualified_name(
+                &data.node.relative_path,
+                &data.node.display_name,
+            );
             AtomWithLines {
                 display_name: data.node.display_name.clone(),
                 code_name,
@@ -1479,6 +1534,7 @@ fn convert_to_atoms_with_lines_internal(
                 },
                 kind: data.kind,
                 language: "rust".to_string(),
+                rust_qualified_name: rqn,
             }
         })
         .collect()
@@ -1593,6 +1649,7 @@ pub fn add_external_stubs(atoms_dict: &mut BTreeMap<String, AtomWithLines>) -> u
                 },
                 kind: DeclKind::Exec,
                 language: "rust".to_string(),
+                rust_qualified_name: None,
             },
         );
     }
@@ -1845,6 +1902,7 @@ mod tests {
                 },
                 kind: DeclKind::Exec,
                 language: "rust".to_string(),
+                rust_qualified_name: None,
             },
         );
 
@@ -1882,6 +1940,7 @@ mod tests {
                 },
                 kind: DeclKind::Exec,
                 language: "rust".to_string(),
+                rust_qualified_name: None,
             },
         );
         atoms_dict.insert(
@@ -1899,6 +1958,7 @@ mod tests {
                 },
                 kind: DeclKind::Exec,
                 language: "rust".to_string(),
+                rust_qualified_name: None,
             },
         );
 
@@ -1951,6 +2011,7 @@ mod tests {
             },
             kind: DeclKind::Exec,
             language: "rust".to_string(),
+            rust_qualified_name: None,
         };
         let json = serde_json::to_value(&atom).unwrap();
         assert_eq!(json["language"], "rust");
@@ -2008,5 +2069,87 @@ mod tests {
         let atoms: BTreeMap<String, AtomWithLines> = serde_json::from_value(data).unwrap();
         assert_eq!(atoms.len(), 1);
         assert_eq!(atoms["probe:test/1.0.0/foo()"].language, "rust");
+    }
+
+    #[test]
+    fn test_derive_rust_qualified_name_free_function() {
+        let rqn = derive_rust_qualified_name(
+            "curve25519-dalek/src/backend/mod.rs",
+            "variable_base_mul",
+        );
+        assert_eq!(
+            rqn.unwrap(),
+            "curve25519_dalek::backend::variable_base_mul"
+        );
+    }
+
+    #[test]
+    fn test_derive_rust_qualified_name_method() {
+        let rqn = derive_rust_qualified_name(
+            "curve25519-dalek/src/backend/serial/u64/field.rs",
+            "FieldElement51::reduce",
+        );
+        assert_eq!(
+            rqn.unwrap(),
+            "curve25519_dalek::backend::serial::u64::field::FieldElement51::reduce"
+        );
+    }
+
+    #[test]
+    fn test_derive_rust_qualified_name_lib_root() {
+        let rqn = derive_rust_qualified_name("my-crate/src/lib.rs", "init");
+        assert_eq!(rqn.unwrap(), "my_crate::init");
+    }
+
+    #[test]
+    fn test_derive_rust_qualified_name_empty_path() {
+        assert!(derive_rust_qualified_name("", "foo").is_none());
+    }
+
+    #[test]
+    fn test_derive_rust_qualified_name_no_src() {
+        assert!(derive_rust_qualified_name("some/path/file.rs", "foo").is_none());
+    }
+
+    #[test]
+    fn test_rust_qualified_name_serialized_when_present() {
+        let atom = AtomWithLines {
+            display_name: "reduce".to_string(),
+            code_name: "probe:crate/1.0/reduce()".to_string(),
+            dependencies: BTreeSet::new(),
+            dependencies_with_locations: Vec::new(),
+            code_module: String::new(),
+            code_path: "my-crate/src/field.rs".to_string(),
+            code_text: CodeTextInfo {
+                lines_start: 1,
+                lines_end: 10,
+            },
+            kind: DeclKind::Exec,
+            language: "rust".to_string(),
+            rust_qualified_name: Some("my_crate::field::reduce".to_string()),
+        };
+        let json = serde_json::to_value(&atom).unwrap();
+        assert_eq!(json["rust-qualified-name"], "my_crate::field::reduce");
+    }
+
+    #[test]
+    fn test_rust_qualified_name_omitted_when_none() {
+        let atom = AtomWithLines {
+            display_name: "foo".to_string(),
+            code_name: "probe:crate/1.0/foo()".to_string(),
+            dependencies: BTreeSet::new(),
+            dependencies_with_locations: Vec::new(),
+            code_module: String::new(),
+            code_path: String::new(),
+            code_text: CodeTextInfo {
+                lines_start: 0,
+                lines_end: 0,
+            },
+            kind: DeclKind::Exec,
+            language: "rust".to_string(),
+            rust_qualified_name: None,
+        };
+        let json = serde_json::to_value(&atom).unwrap();
+        assert!(json.get("rust-qualified-name").is_none());
     }
 }

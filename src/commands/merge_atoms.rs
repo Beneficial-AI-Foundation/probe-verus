@@ -220,6 +220,7 @@ mod tests {
             },
             kind: DeclKind::Exec,
             language: "rust".to_string(),
+            rust_qualified_name: None,
         }
     }
 
@@ -237,6 +238,7 @@ mod tests {
             },
             kind: DeclKind::Exec,
             language: "rust".to_string(),
+            rust_qualified_name: None,
         }
     }
 

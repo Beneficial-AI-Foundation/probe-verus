@@ -218,6 +218,32 @@ pub struct AtomWithLines {
     pub rust_qualified_name: Option<String>,
 }
 
+/// The kind of a specification condition.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SpecConditionKind {
+    Precondition,
+    Postcondition,
+}
+
+/// A single specification condition (precondition or postcondition).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpecCondition {
+    pub kind: SpecConditionKind,
+    /// Raw text of the condition block (e.g. "requires\n    x > 0,\n    y < 100")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// Individual clauses split from the condition block
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub clauses: Vec<String>,
+    /// Short names of functions called in this condition (AST-extracted)
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub calls: Vec<String>,
+    /// Fully qualified paths of function calls in this condition
+    #[serde(rename = "calls-full", skip_serializing_if = "Vec::is_empty", default)]
+    pub calls_full: Vec<String>,
+}
+
 /// Unified atom: all `AtomWithLines` fields plus optional verification and specification status.
 ///
 /// Produced by the `extract` pipeline to match the `probe-lean/verify` output structure.
@@ -231,8 +257,9 @@ pub struct UnifiedAtom {
         skip_serializing_if = "Option::is_none"
     )]
     pub verification_status: Option<String>,
+    /// Specification conditions. Empty array = no specs; absent = not analyzed.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub specified: Option<bool>,
+    pub specs: Option<Vec<SpecCondition>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -241,6 +268,30 @@ pub struct CodeTextInfo {
     pub lines_start: usize,
     #[serde(rename = "lines-end")]
     pub lines_end: usize,
+}
+
+/// Split a requires/ensures text block into individual clause strings.
+///
+/// Strips the leading keyword (`requires` or `ensures`) and splits by lines,
+/// filtering out empty lines and trailing commas.
+pub fn split_clauses(text: &str) -> Vec<String> {
+    let trimmed = text.trim();
+    let body = if let Some(rest) = trimmed.strip_prefix("requires") {
+        rest.trim()
+    } else if let Some(rest) = trimmed.strip_prefix("ensures") {
+        rest.trim()
+    } else {
+        trimmed
+    };
+
+    if body.is_empty() {
+        return Vec::new();
+    }
+
+    body.lines()
+        .map(|l| l.trim().trim_end_matches(',').trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect()
 }
 
 /// Parse a SCIP JSON file
@@ -1517,10 +1568,7 @@ fn convert_to_atoms_with_lines_internal(
             }
 
             let code_module = extract_code_module(&code_name);
-            let rqn = derive_rust_qualified_name(
-                &data.node.relative_path,
-                &data.node.display_name,
-            );
+            let rqn = derive_rust_qualified_name(&data.node.relative_path, &data.node.display_name);
             AtomWithLines {
                 display_name: data.node.display_name.clone(),
                 code_name,
@@ -2073,14 +2121,9 @@ mod tests {
 
     #[test]
     fn test_derive_rust_qualified_name_free_function() {
-        let rqn = derive_rust_qualified_name(
-            "curve25519-dalek/src/backend/mod.rs",
-            "variable_base_mul",
-        );
-        assert_eq!(
-            rqn.unwrap(),
-            "curve25519_dalek::backend::variable_base_mul"
-        );
+        let rqn =
+            derive_rust_qualified_name("curve25519-dalek/src/backend/mod.rs", "variable_base_mul");
+        assert_eq!(rqn.unwrap(), "curve25519_dalek::backend::variable_base_mul");
     }
 
     #[test]

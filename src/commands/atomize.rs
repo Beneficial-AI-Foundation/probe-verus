@@ -239,7 +239,7 @@ pub fn atomize_internal(config: &AtomizeInternalConfig) -> Result<usize, String>
         &call_graph,
         &symbol_to_display_name,
         config.project_path,
-        false,
+        config.with_locations,
     );
 
     let duplicates = find_duplicate_code_names(&atoms);

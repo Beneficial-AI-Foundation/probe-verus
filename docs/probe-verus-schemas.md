@@ -1,7 +1,7 @@
 # probe-verus Data Schemas
 
-Version: 3.0
-Date: 2026-03-10
+Version: 4.0
+Date: 2026-03-16
 
 This document specifies the concrete JSON `data` payloads produced by each
 probe-verus subcommand.  It complements the language-agnostic
@@ -361,8 +361,12 @@ is **not** serialized (the code-name key serves as the identifier).
 ### Overview
 
 The primary output of the `extract` command.  Each entry is an atom enriched
-with optional `verification-status` and `specified` fields, matching the
+with optional `verification-status` and structured `specs` fields, matching the
 `probe-lean/verify` output structure.
+
+Specifications are separated from dependencies: function calls in
+`requires`/`ensures` clauses are removed from `dependencies` (when location
+data is available) and instead appear in the `specs` array.
 
 By default, only this file is produced.  Pass `--separate-outputs` to also
 write the individual atoms, specs, and proofs files.
@@ -385,7 +389,32 @@ write the individual atoms, specs, and proofs files.
     "kind": "exec",
     "language": "rust",
     "verification-status": "verified",
-    "specified": true
+    "specs": [
+      {
+        "kind": "precondition",
+        "text": "requires\n    x > 0,\n    y < 100",
+        "clauses": ["x > 0", "y < 100"],
+        "calls": ["is_valid"],
+        "calls-full": ["crate::specs::is_valid"]
+      },
+      {
+        "kind": "postcondition",
+        "text": "ensures\n    result > x",
+        "clauses": ["result > x"],
+        "calls": ["helper_spec"],
+        "calls-full": ["crate::specs::helper_spec"]
+      }
+    ]
+  },
+  "probe:my-crate/1.0.0/module/unspecified_fn()": {
+    "display-name": "unspecified_fn",
+    "dependencies": [],
+    "code-module": "module",
+    "code-path": "src/module.rs",
+    "code-text": { "lines-start": 80, "lines-end": 90 },
+    "kind": "exec",
+    "language": "rust",
+    "specs": []
   },
   "probe:external/1.0.0/other/func()": {
     "display-name": "func",
@@ -407,7 +436,26 @@ are added:
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `verification-status` | string | no | `"verified"`, `"failed"`, or `"unverified"` (absent when `--skip-verify`) |
-| `specified` | boolean | no | Whether the function has any spec (absent when `--skip-specify`) |
+| `specs` | array of SpecCondition | no | Specification conditions (absent when `--skip-specify` or for external stubs). Empty array = analyzed, no specs. |
+
+To check whether a function has specs, test `specs != []`.  The `specs` field
+is absent (not serialized) only for external stubs or when the specify step was
+skipped entirely.
+
+### SpecCondition
+
+Each element in the `specs` array is a typed condition:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `kind` | string | `"precondition"` or `"postcondition"` |
+| `text` | string | Raw text of the condition block including keyword (e.g. `"requires\n    x > 0"`) |
+| `clauses` | array of strings | Individual clauses split from the block (omitted if empty) |
+| `calls` | array of strings | Short names of functions called in this condition (AST-extracted, omitted if empty) |
+| `calls-full` | array of strings | Fully qualified Rust paths of function calls (omitted if empty) |
+
+In Verus, a function has at most one `requires` block (precondition) and one
+`ensures` block (postcondition), so the array has 0–2 elements.
 
 ### Verification Status Mapping
 
@@ -418,10 +466,21 @@ are added:
 | `sorries` | `"unverified"` | Contains `assume()`/`admit()` |
 | `warning` | `"verified"` | Passed with warnings |
 
+### Dependency Filtering
+
+When the `extract` pipeline runs, it internally computes call location data
+(the same data available via `--with-locations` on `atomize`).  During the
+merge step, dependencies tagged as `"precondition"` or `"postcondition"` are
+removed from the `dependencies` array.  These spec-related calls appear
+exclusively in the corresponding `specs` array entries.
+
+If location data is not available (e.g., when using pre-existing atoms without
+location tags), all dependencies are preserved as-is.
+
 ### Notes
 
 - External stubs (functions defined outside the workspace) will not have
-  `verification-status` or `specified` fields since they are not parsed by
+  `verification-status` or `specs` fields since they are not parsed by
   specify or verified by run-verus.
 - When a pipeline step is skipped (`--skip-specify` or `--skip-verify`),
   the corresponding field is absent from **all** entries.

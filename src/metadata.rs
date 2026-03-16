@@ -125,6 +125,7 @@ pub struct AtomizeInternalConfig<'a> {
     pub use_rust_analyzer: bool,
     pub allow_duplicates: bool,
     pub auto_install: bool,
+    pub with_locations: bool,
     pub metadata: &'a ProjectMetadata,
 }
 

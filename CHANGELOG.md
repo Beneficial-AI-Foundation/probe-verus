@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 See the [Versioning Policy section in CLAUDE.md](CLAUDE.md#versioning-policy) for
 what constitutes a breaking change.
 
+## [5.0.0] - 2026-03-16
+
+### Breaking
+- **Specs as typed array**: The `specs` field on `UnifiedAtom` (in `probe-verus/extract` output) is now an array of `SpecCondition` objects, each with a `kind` field (`"precondition"` or `"postcondition"`). Replaces the previous `specified`/`preconditions`/`postconditions` object structure.
+- To check whether a function has specs: `specs != []` (empty array = analyzed, no specs; absent = not analyzed)
+- Each `SpecCondition` includes `kind`, `text`, `clauses`, `calls`, and `calls-full` fields
+- In the `extract` pipeline, function calls inside `requires`/`ensures` clauses are filtered out of `dependencies` and appear exclusively in `specs` array entries
+- `AtomizeInternalConfig` now includes a `with_locations` field (internal API)
+
+### Added
+- `SpecCondition`, `SpecConditionKind` types in `lib.rs` for typed pre/postcondition representation
+- `split_clauses()` public utility function for splitting spec text blocks into individual clause strings
+- Dependency filtering in `merge_into_unified`: calls tagged as `precondition`/`postcondition` are removed from `dependencies` when location data is available
+- New unit tests: `test_specs_clause_splitting`, `test_dep_filtering_with_locations`
+- New integration tests: `test_specs_preconditions_postconditions_content`
+
+### Changed
+- `extract` pipeline internally computes `dependencies-with-locations` (via `with_locations: true`) to enable spec/dep separation
+- Schema docs updated to version 4.0
+
 ## [4.0.0] - 2026-03-11
 
 ### Breaking

@@ -361,8 +361,8 @@ is **not** serialized (the code-name key serves as the identifier).
 ### Overview
 
 The primary output of the `extract` command.  Each entry is an atom enriched
-with optional `specs`, `is-disabled`, `verification-status`, and categorized
-dependency fields, aligning with the `probe-lean/verify` output structure.
+with optional `primary-spec`, `is-disabled`, `verification-status`, and categorized
+dependency fields, aligning with the `probe-lean/extract` output structure.
 
 Dependencies are categorized into three subsets (analogous to probe-lean's
 `type-dependencies` and `term-dependencies`):
@@ -404,7 +404,7 @@ write the individual atoms, specs, and proofs files.
     "code-text": { "lines-start": 42, "lines-end": 67 },
     "kind": "exec",
     "language": "rust",
-    "specs": "requires\n    x > 0,\n    y < 100\nensures\n    result > x",
+    "primary-spec": "requires\n    x > 0,\n    y < 100\nensures\n    result > x",
     "is-disabled": false,
     "verification-status": "verified"
   },
@@ -417,7 +417,7 @@ write the individual atoms, specs, and proofs files.
     "code-text": { "lines-start": 80, "lines-end": 90 },
     "kind": "exec",
     "language": "rust",
-    "specs": "",
+    "primary-spec": "",
     "is-disabled": true
   },
   "probe:external/1.0.0/other/func()": {
@@ -442,7 +442,7 @@ optional fields are added:
 | `requires-dependencies` | array of strings | no | Subset of `dependencies` called in `requires` clauses (omitted when empty) |
 | `ensures-dependencies` | array of strings | no | Subset of `dependencies` called in `ensures` clauses (omitted when empty) |
 | `body-dependencies` | array of strings | no | Subset of `dependencies` called in the function body (omitted when empty) |
-| `specs` | string | no | Full spec text (requires + ensures concatenated). Empty string = analyzed, no spec. Absent = not analyzed. |
+| `primary-spec` | string | no | Full spec text (requires + ensures concatenated). Empty string = analyzed, no spec. Absent = not analyzed. |
 | `is-disabled` | bool | no | `false` if the function has a spec; `true` otherwise. Absent for external stubs or when `--skip-specify`. |
 | `verification-status` | string | no | `"verified"`, `"failed"`, or `"unverified"` (absent when `--skip-verify`) |
 
@@ -474,7 +474,7 @@ the atomize step).  The three subcategory fields partition this union:
 ### Notes
 
 - External stubs (functions defined outside the workspace) will not have
-  `specs`, `is-disabled`, or `verification-status` fields since they are not
+  `primary-spec`, `is-disabled`, or `verification-status` fields since they are not
   parsed by specify or verified by run-verus.
 - When a pipeline step is skipped (`--skip-specify` or `--skip-verify`),
   the corresponding field is absent from **all** entries.

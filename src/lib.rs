@@ -246,8 +246,8 @@ pub struct UnifiedAtom {
     )]
     pub body_dependencies: BTreeSet<String>,
     /// Full spec text (requires + ensures). Empty string = analyzed, no spec. Absent = not analyzed.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub specs: Option<String>,
+    #[serde(rename = "primary-spec", skip_serializing_if = "Option::is_none")]
+    pub primary_spec: Option<String>,
     /// `true` when the function has no spec, `false` when it does. Absent = not analyzed.
     #[serde(rename = "is-disabled", skip_serializing_if = "Option::is_none")]
     pub is_disabled: Option<bool>,

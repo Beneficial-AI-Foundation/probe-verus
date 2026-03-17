@@ -102,7 +102,7 @@ fn merge_fixture_files(
                 requires_dependencies: requires_deps,
                 ensures_dependencies: ensures_deps,
                 body_dependencies: body_deps,
-                specs: spec_text,
+                primary_spec: spec_text,
                 is_disabled,
                 verification_status,
             },
@@ -139,9 +139,9 @@ fn test_unified_specs_matches_specs_file() {
             .get(code_name)
             .unwrap_or_else(|| panic!("Spec key missing from unified output: {}", code_name));
         let spec_text = unified_entry
-            .specs
+            .primary_spec
             .as_ref()
-            .expect("specs field should be present");
+            .expect("primary_spec field should be present");
         let has_specs = !spec_text.is_empty();
         let expected = spec_entry.requires_text.is_some() || spec_entry.ensures_text.is_some();
         assert_eq!(
@@ -184,8 +184,8 @@ fn test_external_stubs_have_no_enrichment() {
 
     let ext = &unified["probe:external/1.0.0/lib/ext()"];
     assert!(
-        ext.specs.is_none(),
-        "External stub should have no 'specs' field"
+        ext.primary_spec.is_none(),
+        "External stub should have no 'primary-spec' field"
     );
     assert!(
         ext.is_disabled.is_none(),
@@ -208,20 +208,20 @@ fn test_full_merge_all_fields_populated() {
 
     let foo = &unified["probe:test-crate/0.1.0/module/foo()"];
     assert_eq!(foo.atom.display_name, "foo");
-    assert!(!foo.specs.as_ref().unwrap().is_empty());
+    assert!(!foo.primary_spec.as_ref().unwrap().is_empty());
     assert_eq!(foo.is_disabled, Some(false));
     assert_eq!(foo.verification_status.as_deref(), Some("verified"));
 
     let bar = &unified["probe:test-crate/0.1.0/module/bar()"];
     assert_eq!(bar.atom.display_name, "bar");
-    assert_eq!(bar.specs.as_deref(), Some(""));
+    assert_eq!(bar.primary_spec.as_deref(), Some(""));
     assert_eq!(bar.is_disabled, Some(true));
     assert_eq!(bar.verification_status.as_deref(), Some("failed"));
 
     // baz has specs (ensures only) but no proofs entry
     let baz = &unified["probe:test-crate/0.1.0/module/baz()"];
     assert_eq!(baz.atom.display_name, "baz");
-    assert!(!baz.specs.as_ref().unwrap().is_empty());
+    assert!(!baz.primary_spec.as_ref().unwrap().is_empty());
     assert_eq!(baz.is_disabled, Some(false));
     assert!(baz.verification_status.is_none());
 }
@@ -239,18 +239,18 @@ fn test_unified_json_serialization_format() {
     let foo_json = &json["probe:test-crate/0.1.0/module/foo()"];
     assert_eq!(foo_json["display-name"], "foo");
     assert_eq!(foo_json["verification-status"], "verified");
-    assert!(foo_json["specs"].is_string());
-    assert!(!foo_json["specs"].as_str().unwrap().is_empty());
+    assert!(foo_json["primary-spec"].is_string());
+    assert!(!foo_json["primary-spec"].as_str().unwrap().is_empty());
     assert_eq!(foo_json["is-disabled"], false);
     assert_eq!(foo_json["kind"], "exec");
     assert_eq!(foo_json["language"], "rust");
 
     // bar: analyzed but no specs -> empty string, is-disabled=true
     let bar_json = &json["probe:test-crate/0.1.0/module/bar()"];
-    assert_eq!(bar_json["specs"], "");
+    assert_eq!(bar_json["primary-spec"], "");
     assert_eq!(bar_json["is-disabled"], true);
 
-    // ext: no verification-status, specs, or is-disabled (skip_serializing_if)
+    // ext: no verification-status, primary-spec, or is-disabled (skip_serializing_if)
     let ext_json = &json["probe:external/1.0.0/lib/ext()"];
     assert_eq!(ext_json["display-name"], "ext");
     assert!(
@@ -258,8 +258,8 @@ fn test_unified_json_serialization_format() {
         "External stub should not have verification-status in JSON"
     );
     assert!(
-        ext_json.get("specs").is_none(),
-        "External stub should not have specs in JSON"
+        ext_json.get("primary-spec").is_none(),
+        "External stub should not have primary-spec in JSON"
     );
     assert!(
         ext_json.get("is-disabled").is_none(),
@@ -275,18 +275,21 @@ fn test_specs_text_content() {
 
     let foo = &unified["probe:test-crate/0.1.0/module/foo()"];
     assert_eq!(
-        foo.specs.as_deref(),
+        foo.primary_spec.as_deref(),
         Some("requires\n    x > 0,\n    y < 100\nensures\n    result > x")
     );
     assert_eq!(foo.is_disabled, Some(false));
 
     // baz has only ensures
     let baz = &unified["probe:test-crate/0.1.0/module/baz()"];
-    assert_eq!(baz.specs.as_deref(), Some("ensures\n    result == x * 2"));
+    assert_eq!(
+        baz.primary_spec.as_deref(),
+        Some("ensures\n    result == x * 2")
+    );
     assert_eq!(baz.is_disabled, Some(false));
 
     // bar has no specs
     let bar = &unified["probe:test-crate/0.1.0/module/bar()"];
-    assert_eq!(bar.specs.as_deref(), Some(""));
+    assert_eq!(bar.primary_spec.as_deref(), Some(""));
     assert_eq!(bar.is_disabled, Some(true));
 }

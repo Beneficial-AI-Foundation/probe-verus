@@ -498,7 +498,7 @@ pub fn merge_into_unified(
                 requires_dependencies: requires_deps,
                 ensures_dependencies: ensures_deps,
                 body_dependencies: body_deps,
-                specs: spec_text,
+                primary_spec: spec_text,
                 is_disabled,
                 verification_status,
             },
@@ -733,7 +733,7 @@ mod tests {
         assert_eq!(result.len(), 3);
         for entry in result.values() {
             assert!(entry.verification_status.is_none());
-            assert!(entry.specs.is_none());
+            assert!(entry.primary_spec.is_none());
             assert!(entry.is_disabled.is_none());
         }
         assert_eq!(
@@ -754,18 +754,18 @@ mod tests {
 
         let foo = &result["probe:test/0.1.0/module/foo()"];
         assert_eq!(
-            foo.specs.as_deref(),
+            foo.primary_spec.as_deref(),
             Some("requires\n    x > 0\nensures\n    result > x")
         );
         assert_eq!(foo.is_disabled, Some(false));
 
         let bar = &result["probe:test/0.1.0/module/bar()"];
-        assert_eq!(bar.specs.as_deref(), Some(""));
+        assert_eq!(bar.primary_spec.as_deref(), Some(""));
         assert_eq!(bar.is_disabled, Some(true));
 
         // External stub has no spec match
         let ext = &result["probe:external/1.0.0/lib/ext()"];
-        assert!(ext.specs.is_none());
+        assert!(ext.primary_spec.is_none());
         assert!(ext.is_disabled.is_none());
 
         // No proofs -> no verification-status
@@ -799,7 +799,7 @@ mod tests {
             .verification_status
             .is_none());
         for entry in result.values() {
-            assert!(entry.specs.is_none());
+            assert!(entry.primary_spec.is_none());
             assert!(entry.is_disabled.is_none());
         }
     }
@@ -817,18 +817,18 @@ mod tests {
         assert_eq!(result.len(), 3);
 
         let foo = &result["probe:test/0.1.0/module/foo()"];
-        assert!(!foo.specs.as_ref().unwrap().is_empty());
+        assert!(!foo.primary_spec.as_ref().unwrap().is_empty());
         assert_eq!(foo.is_disabled, Some(false));
         assert_eq!(foo.verification_status.as_deref(), Some("verified"));
         assert_eq!(foo.atom.display_name, "foo");
 
         let bar = &result["probe:test/0.1.0/module/bar()"];
-        assert_eq!(bar.specs.as_deref(), Some(""));
+        assert_eq!(bar.primary_spec.as_deref(), Some(""));
         assert_eq!(bar.is_disabled, Some(true));
         assert_eq!(bar.verification_status.as_deref(), Some("failed"));
 
         let ext = &result["probe:external/1.0.0/lib/ext()"];
-        assert!(ext.specs.is_none());
+        assert!(ext.primary_spec.is_none());
         assert!(ext.is_disabled.is_none());
         assert!(ext.verification_status.is_none());
     }
@@ -856,18 +856,18 @@ mod tests {
         let foo_json = &json["probe:test/0.1.0/module/foo()"];
         assert_eq!(foo_json["display-name"], "foo");
         assert_eq!(foo_json["verification-status"], "verified");
-        assert!(foo_json["specs"].is_string());
-        assert!(!foo_json["specs"].as_str().unwrap().is_empty());
+        assert!(foo_json["primary-spec"].is_string());
+        assert!(!foo_json["primary-spec"].as_str().unwrap().is_empty());
         assert_eq!(foo_json["is-disabled"], false);
         assert_eq!(foo_json["kind"], "exec");
 
         let bar_json = &json["probe:test/0.1.0/module/bar()"];
-        assert_eq!(bar_json["specs"], "");
+        assert_eq!(bar_json["primary-spec"], "");
         assert_eq!(bar_json["is-disabled"], true);
 
         let ext_json = &json["probe:external/1.0.0/lib/ext()"];
         assert!(ext_json.get("verification-status").is_none());
-        assert!(ext_json.get("specs").is_none());
+        assert!(ext_json.get("primary-spec").is_none());
         assert!(ext_json.get("is-disabled").is_none());
     }
 
@@ -956,9 +956,9 @@ mod tests {
             .body_dependencies
             .contains("probe:test/0.1.0/module/bar()"));
 
-        // specs text and is-disabled
+        // primary-spec text and is-disabled
         assert_eq!(
-            foo.specs.as_deref(),
+            foo.primary_spec.as_deref(),
             Some("requires\n    is_valid(x)\nensures\n    helper(x)")
         );
         assert_eq!(foo.is_disabled, Some(false));

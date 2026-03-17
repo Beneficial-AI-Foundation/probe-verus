@@ -1179,6 +1179,8 @@ fn convert_to_atoms_with_lines_internal(
         lines_end: usize,
         base_code_name: String,
         kind: DeclKind,
+        /// "verus" if found in verus_syn span map, "rust" otherwise
+        language: String,
         /// Line range of requires clause, if present
         requires_range: Option<(usize, usize)>,
         /// Line range of ensures clause, if present
@@ -1209,17 +1211,22 @@ fn convert_to_atoms_with_lines_internal(
                 }
             };
 
-            // Get kind from span_map (defaults to Exec if not found)
-            let kind = if let Some(map) = span_map {
-                verus_parser::get_function_kind(
+            // Get kind from span_map (defaults to Exec if not found).
+            // Derive language from is_verus: true for functions inside `verus!{}`
+            // blocks, false for plain Rust functions.
+            let (kind, language) = if let Some(map) = span_map {
+                match verus_parser::get_function_kind(
                     map,
                     &node.relative_path,
                     &node.display_name,
                     lines_start,
-                )
-                .unwrap_or(DeclKind::Exec)
+                ) {
+                    Some((k, true)) => (k, "verus".to_string()),
+                    Some((k, false)) => (k, "rust".to_string()),
+                    None => (DeclKind::Exec, "rust".to_string()),
+                }
             } else {
-                DeclKind::Exec
+                (DeclKind::Exec, "rust".to_string())
             };
 
             // Get spec ranges (requires/ensures line ranges)
@@ -1248,6 +1255,7 @@ fn convert_to_atoms_with_lines_internal(
                 lines_end,
                 base_code_name,
                 kind,
+                language,
                 requires_range,
                 ensures_range,
             }
@@ -1553,7 +1561,7 @@ fn convert_to_atoms_with_lines_internal(
                     lines_end: data.lines_end,
                 },
                 kind: data.kind,
-                language: "rust".to_string(),
+                language: data.language,
                 rust_qualified_name: rqn,
             }
         })

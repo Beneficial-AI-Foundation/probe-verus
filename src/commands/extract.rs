@@ -631,7 +631,7 @@ mod tests {
                     "code-path": "src/module.rs",
                     "code-text": {"lines-start": 10, "lines-end": 20},
                     "kind": "exec",
-                    "language": "rust"
+                    "language": "verus"
                 },
                 "probe:test/0.1.0/module/bar()": {
                     "display-name": "bar",
@@ -640,7 +640,7 @@ mod tests {
                     "code-path": "src/module.rs",
                     "code-text": {"lines-start": 30, "lines-end": 40},
                     "kind": "proof",
-                    "language": "rust"
+                    "language": "verus"
                 },
                 "probe:external/1.0.0/lib/ext()": {
                     "display-name": "ext",
@@ -860,15 +860,18 @@ mod tests {
         assert!(!foo_json["primary-spec"].as_str().unwrap().is_empty());
         assert_eq!(foo_json["is-disabled"], false);
         assert_eq!(foo_json["kind"], "exec");
+        assert_eq!(foo_json["language"], "verus");
 
         let bar_json = &json["probe:test/0.1.0/module/bar()"];
         assert_eq!(bar_json["primary-spec"], "");
         assert_eq!(bar_json["is-disabled"], true);
+        assert_eq!(bar_json["language"], "verus");
 
         let ext_json = &json["probe:external/1.0.0/lib/ext()"];
         assert!(ext_json.get("verification-status").is_none());
         assert!(ext_json.get("primary-spec").is_none());
         assert!(ext_json.get("is-disabled").is_none());
+        assert_eq!(ext_json["language"], "rust");
     }
 
     #[test]
@@ -896,7 +899,7 @@ mod tests {
                     "code-path": "src/module.rs",
                     "code-text": {"lines-start": 10, "lines-end": 20},
                     "kind": "exec",
-                    "language": "rust"
+                    "language": "verus"
                 }
             }
         });

@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 See the [Versioning Policy section in CLAUDE.md](CLAUDE.md#versioning-policy) for
 what constitutes a breaking change.
 
+## [5.1.0] - 2026-03-17
+
+### Changed
+- **Rust/Verus language distinction**: The `language` field on each atom is now `"verus"` for functions found inside `verus!{}` blocks (by verus_syn), and `"rust"` for plain Rust functions. Previously all atoms had `language: "rust"`.
+
 ## [5.0.0] - 2026-03-16
 
 ### Breaking

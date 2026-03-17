@@ -28,6 +28,8 @@ pub struct FunctionSpan {
     pub end_line: usize,
     /// Declaration kind (spec, proof, exec)
     pub kind: DeclKind,
+    /// Whether this function was found inside a `verus!{}` block
+    pub is_verus: bool,
     /// Line range of requires clause (start, end), if present
     pub requires_range: Option<(usize, usize)>,
     /// Line range of ensures clause (start, end), if present
@@ -153,12 +155,15 @@ impl<'ast> Visit<'ast> for CallNameCollector {
 /// Visitor that collects function spans from an AST
 struct FunctionSpanVisitor {
     functions: Vec<FunctionSpan>,
+    /// Depth counter: >0 when visiting inside a `verus!{}` macro
+    inside_verus: usize,
 }
 
 impl FunctionSpanVisitor {
     fn new() -> Self {
         Self {
             functions: Vec::new(),
+            inside_verus: 0,
         }
     }
 
@@ -192,6 +197,7 @@ impl<'ast> Visit<'ast> for FunctionSpanVisitor {
             start_line,
             end_line,
             kind,
+            is_verus: self.inside_verus > 0,
             requires_range,
             ensures_range,
         });
@@ -213,6 +219,7 @@ impl<'ast> Visit<'ast> for FunctionSpanVisitor {
             start_line,
             end_line,
             kind,
+            is_verus: self.inside_verus > 0,
             requires_range,
             ensures_range,
         });
@@ -234,6 +241,7 @@ impl<'ast> Visit<'ast> for FunctionSpanVisitor {
             start_line,
             end_line,
             kind,
+            is_verus: self.inside_verus > 0,
             requires_range,
             ensures_range,
         });
@@ -266,9 +274,11 @@ impl<'ast> Visit<'ast> for FunctionSpanVisitor {
             if *ident == "verus" {
                 // Try to parse the macro body as items
                 if let Ok(items) = verus_syn::parse2::<VerusMacroBody>(node.mac.tokens.clone()) {
+                    self.inside_verus += 1;
                     for item in items.items {
                         self.visit_item(&item);
                     }
+                    self.inside_verus -= 1;
                 }
             } else if *ident == "cfg_if" {
                 // Try to parse the cfg_if! macro body
@@ -391,6 +401,8 @@ pub fn parse_file_for_spans(file_path: &Path) -> Result<Vec<FunctionSpan>, Strin
 pub struct SpanAndMode {
     pub end_line: usize,
     pub kind: DeclKind,
+    /// Whether this function was found inside a `verus!{}` block
+    pub is_verus: bool,
     /// Line range of requires clause (start, end), if present
     pub requires_range: Option<(usize, usize)>,
     /// Line range of ensures clause (start, end), if present
@@ -424,6 +436,7 @@ pub fn build_function_span_map(
                     SpanAndMode {
                         end_line: func.end_line,
                         kind: func.kind,
+                        is_verus: func.is_verus,
                         requires_range: func.requires_range,
                         ensures_range: func.ensures_range,
                     },
@@ -481,18 +494,20 @@ pub fn get_function_end_line(
 /// Get the declaration kind (exec, proof, spec) given its path, name, and start line.
 ///
 /// Uses the same lookup strategy as get_function_end_line.
+/// Returns `(kind, is_verus)` -- `is_verus` is true when the function was
+/// inside a `verus!{}` block.
 pub fn get_function_kind(
     span_map: &HashMap<(String, String, usize), SpanAndMode>,
     relative_path: &str,
     function_name: &str,
     start_line: usize,
-) -> Option<DeclKind> {
+) -> Option<(DeclKind, bool)> {
     let bare_name = bare_function_name(function_name);
 
     // Try exact match first
     let key = (relative_path.to_string(), bare_name.to_string(), start_line);
     if let Some(span_and_mode) = span_map.get(&key) {
-        return Some(span_and_mode.kind);
+        return Some((span_and_mode.kind, span_and_mode.is_verus));
     }
 
     // Try containment match
@@ -502,7 +517,7 @@ pub fn get_function_kind(
             && start_line >= *parsed_start
             && start_line <= span_and_mode.end_line
         {
-            return Some(span_and_mode.kind);
+            return Some((span_and_mode.kind, span_and_mode.is_verus));
         }
     }
 

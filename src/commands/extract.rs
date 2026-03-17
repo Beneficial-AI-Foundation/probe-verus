@@ -8,11 +8,9 @@ use probe_verus::metadata::{
     wrap_in_envelope, AtomizeInternalConfig, ExtractInternalConfig, ProjectMetadata,
     SpecifyInternalConfig,
 };
-use probe_verus::{
-    split_clauses, AtomWithLines, CallLocation, SpecCondition, SpecConditionKind, UnifiedAtom,
-};
+use probe_verus::{AtomWithLines, CallLocation, UnifiedAtom};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 #[derive(Serialize)]
@@ -76,7 +74,7 @@ pub fn cmd_extract(
     allow_duplicates: bool,
     auto_install: bool,
     with_atoms: Option<PathBuf>,
-    with_spec_text: bool,
+    _with_spec_text: bool,
     taxonomy_config: Option<PathBuf>,
     verus_args: Vec<String>,
     separate_outputs: bool,
@@ -155,7 +153,7 @@ pub fn cmd_extract(
                     path: &project_path,
                     output: &specs_path,
                     atoms_path: ap,
-                    with_spec_text,
+                    with_spec_text: true,
                     taxonomy_config_path: taxonomy_config.as_deref(),
                     taxonomy_explain: false,
                     metadata: &metadata,
@@ -398,25 +396,13 @@ fn print_summary(result: &ExtractPipelineResult) {
 // Unified output merge
 // =============================================================================
 
-/// Deserialization target for specs entries with full spec data.
+/// Deserialization target for specs entries (only the text fields we need).
 #[derive(Deserialize)]
 struct SpecsEntry {
-    #[serde(default)]
-    has_requires: bool,
-    #[serde(default)]
-    has_ensures: bool,
     #[serde(default)]
     requires_text: Option<String>,
     #[serde(default)]
     ensures_text: Option<String>,
-    #[serde(rename = "requires-calls", default)]
-    requires_calls: Vec<String>,
-    #[serde(rename = "ensures-calls", default)]
-    ensures_calls: Vec<String>,
-    #[serde(rename = "requires-calls-full", default)]
-    requires_calls_full: Vec<String>,
-    #[serde(rename = "ensures-calls-full", default)]
-    ensures_calls_full: Vec<String>,
 }
 
 /// Minimal deserialization target for proofs entries (only the `status` field).
@@ -436,45 +422,23 @@ fn map_verification_status(status: &str) -> &'static str {
     }
 }
 
-/// Build a `Vec<SpecCondition>` from a specs entry.
-fn build_spec_conditions(entry: &SpecsEntry) -> Vec<SpecCondition> {
-    let mut conditions = Vec::new();
-
-    if entry.has_requires {
-        conditions.push(SpecCondition {
-            kind: SpecConditionKind::Precondition,
-            text: entry.requires_text.clone(),
-            clauses: entry
-                .requires_text
-                .as_deref()
-                .map(split_clauses)
-                .unwrap_or_default(),
-            calls: entry.requires_calls.clone(),
-            calls_full: entry.requires_calls_full.clone(),
-        });
+/// Build the full spec text from a specs entry (requires + ensures concatenated).
+fn build_spec_text(entry: &SpecsEntry) -> String {
+    let mut parts = Vec::new();
+    if let Some(ref t) = entry.requires_text {
+        parts.push(t.as_str());
     }
-
-    if entry.has_ensures {
-        conditions.push(SpecCondition {
-            kind: SpecConditionKind::Postcondition,
-            text: entry.ensures_text.clone(),
-            clauses: entry
-                .ensures_text
-                .as_deref()
-                .map(split_clauses)
-                .unwrap_or_default(),
-            calls: entry.ensures_calls.clone(),
-            calls_full: entry.ensures_calls_full.clone(),
-        });
+    if let Some(ref t) = entry.ensures_text {
+        parts.push(t.as_str());
     }
-
-    conditions
+    parts.join("\n")
 }
 
 /// Merge atoms, specs, and proofs into a unified `BTreeMap<String, UnifiedAtom>`.
 ///
-/// When specs are available, dependencies are filtered to exclude calls in
-/// precondition/postcondition locations (those appear in `specs` instead).
+/// Dependencies are kept as the full union. When location data is available,
+/// three subcategories (`requires-dependencies`, `ensures-dependencies`,
+/// `body-dependencies`) are derived from it.
 ///
 /// This is `pub` so integration tests can call it directly.
 pub fn merge_into_unified(
@@ -496,23 +460,30 @@ pub fn merge_into_unified(
 
     let mut unified: BTreeMap<String, UnifiedAtom> = BTreeMap::new();
 
-    for (code_name, mut atom) in atoms {
-        let spec_conditions: Option<Vec<SpecCondition>> = specs
+    for (code_name, atom) in atoms {
+        let spec_text: Option<String> = specs
             .as_ref()
             .and_then(|s| s.get(&code_name))
-            .map(build_spec_conditions);
+            .map(build_spec_text);
 
-        // Filter out precondition/postcondition deps when location data is available
-        if spec_conditions.is_some() && !atom.dependencies_with_locations.is_empty() {
-            let inner_code_names: std::collections::BTreeSet<String> = atom
-                .dependencies_with_locations
-                .iter()
-                .filter(|d| d.location == CallLocation::Inner)
-                .map(|d| d.code_name.clone())
-                .collect();
-            atom.dependencies = inner_code_names;
-            atom.dependencies_with_locations
-                .retain(|d| d.location == CallLocation::Inner);
+        let is_disabled = spec_text.as_ref().map(|s| s.is_empty());
+
+        // Derive categorized dependencies from location data
+        let mut requires_deps = BTreeSet::new();
+        let mut ensures_deps = BTreeSet::new();
+        let mut body_deps = BTreeSet::new();
+        for d in &atom.dependencies_with_locations {
+            match d.location {
+                CallLocation::Precondition => {
+                    requires_deps.insert(d.code_name.clone());
+                }
+                CallLocation::Postcondition => {
+                    ensures_deps.insert(d.code_name.clone());
+                }
+                CallLocation::Inner => {
+                    body_deps.insert(d.code_name.clone());
+                }
+            }
         }
 
         let verification_status = proofs
@@ -524,8 +495,12 @@ pub fn merge_into_unified(
             code_name,
             UnifiedAtom {
                 atom,
+                requires_dependencies: requires_deps,
+                ensures_dependencies: ensures_deps,
+                body_dependencies: body_deps,
+                specs: spec_text,
+                is_disabled,
                 verification_status,
-                specs: spec_conditions,
             },
         );
     }
@@ -759,6 +734,7 @@ mod tests {
         for entry in result.values() {
             assert!(entry.verification_status.is_none());
             assert!(entry.specs.is_none());
+            assert!(entry.is_disabled.is_none());
         }
         assert_eq!(
             result["probe:test/0.1.0/module/foo()"].atom.display_name,
@@ -776,24 +752,22 @@ mod tests {
 
         assert_eq!(result.len(), 3);
 
-        let foo_specs = result["probe:test/0.1.0/module/foo()"]
-            .specs
-            .as_ref()
-            .unwrap();
-        assert_eq!(foo_specs.len(), 2);
-        assert_eq!(foo_specs[0].kind, SpecConditionKind::Precondition);
-        assert_eq!(foo_specs[0].calls, vec!["is_valid"]);
-        assert_eq!(foo_specs[1].kind, SpecConditionKind::Postcondition);
-        assert_eq!(foo_specs[1].calls, vec!["helper"]);
+        let foo = &result["probe:test/0.1.0/module/foo()"];
+        assert_eq!(
+            foo.specs.as_deref(),
+            Some("requires\n    x > 0\nensures\n    result > x")
+        );
+        assert_eq!(foo.is_disabled, Some(false));
 
-        let bar_specs = result["probe:test/0.1.0/module/bar()"]
-            .specs
-            .as_ref()
-            .unwrap();
-        assert!(bar_specs.is_empty());
+        let bar = &result["probe:test/0.1.0/module/bar()"];
+        assert_eq!(bar.specs.as_deref(), Some(""));
+        assert_eq!(bar.is_disabled, Some(true));
 
         // External stub has no spec match
-        assert!(result["probe:external/1.0.0/lib/ext()"].specs.is_none());
+        let ext = &result["probe:external/1.0.0/lib/ext()"];
+        assert!(ext.specs.is_none());
+        assert!(ext.is_disabled.is_none());
+
         // No proofs -> no verification-status
         for entry in result.values() {
             assert!(entry.verification_status.is_none());
@@ -821,13 +795,12 @@ mod tests {
                 .as_deref(),
             Some("failed")
         );
-        // External stub has no proof
         assert!(result["probe:external/1.0.0/lib/ext()"]
             .verification_status
             .is_none());
-        // No specs -> no specs
         for entry in result.values() {
             assert!(entry.specs.is_none());
+            assert!(entry.is_disabled.is_none());
         }
     }
 
@@ -844,16 +817,19 @@ mod tests {
         assert_eq!(result.len(), 3);
 
         let foo = &result["probe:test/0.1.0/module/foo()"];
-        assert_eq!(foo.specs.as_ref().unwrap().len(), 2);
+        assert!(!foo.specs.as_ref().unwrap().is_empty());
+        assert_eq!(foo.is_disabled, Some(false));
         assert_eq!(foo.verification_status.as_deref(), Some("verified"));
         assert_eq!(foo.atom.display_name, "foo");
 
         let bar = &result["probe:test/0.1.0/module/bar()"];
-        assert!(bar.specs.as_ref().unwrap().is_empty());
+        assert_eq!(bar.specs.as_deref(), Some(""));
+        assert_eq!(bar.is_disabled, Some(true));
         assert_eq!(bar.verification_status.as_deref(), Some("failed"));
 
         let ext = &result["probe:external/1.0.0/lib/ext()"];
         assert!(ext.specs.is_none());
+        assert!(ext.is_disabled.is_none());
         assert!(ext.verification_status.is_none());
     }
 
@@ -880,42 +856,23 @@ mod tests {
         let foo_json = &json["probe:test/0.1.0/module/foo()"];
         assert_eq!(foo_json["display-name"], "foo");
         assert_eq!(foo_json["verification-status"], "verified");
-        assert!(foo_json["specs"].is_array());
-        assert_eq!(foo_json["specs"].as_array().unwrap().len(), 2);
-        assert_eq!(foo_json["specs"][0]["kind"], "precondition");
-        assert_eq!(foo_json["specs"][1]["kind"], "postcondition");
+        assert!(foo_json["specs"].is_string());
+        assert!(!foo_json["specs"].as_str().unwrap().is_empty());
+        assert_eq!(foo_json["is-disabled"], false);
         assert_eq!(foo_json["kind"], "exec");
+
+        let bar_json = &json["probe:test/0.1.0/module/bar()"];
+        assert_eq!(bar_json["specs"], "");
+        assert_eq!(bar_json["is-disabled"], true);
 
         let ext_json = &json["probe:external/1.0.0/lib/ext()"];
         assert!(ext_json.get("verification-status").is_none());
         assert!(ext_json.get("specs").is_none());
+        assert!(ext_json.get("is-disabled").is_none());
     }
 
     #[test]
-    fn test_specs_clause_splitting() {
-        let dir = TempDir::new().unwrap();
-        let atoms_path = write_json(&dir, "atoms.json", &atoms_json());
-        let specs_path = write_json(&dir, "specs.json", &specs_json());
-
-        let result = merge_into_unified(&atoms_path, Some(&specs_path), None).unwrap();
-        let foo_specs = result["probe:test/0.1.0/module/foo()"]
-            .specs
-            .as_ref()
-            .unwrap();
-
-        let pre = &foo_specs[0];
-        assert_eq!(pre.kind, SpecConditionKind::Precondition);
-        assert_eq!(pre.clauses, vec!["x > 0"]);
-        assert_eq!(pre.text.as_deref(), Some("requires\n    x > 0"));
-
-        let post = &foo_specs[1];
-        assert_eq!(post.kind, SpecConditionKind::Postcondition);
-        assert_eq!(post.clauses, vec!["result > x"]);
-        assert_eq!(post.text.as_deref(), Some("ensures\n    result > x"));
-    }
-
-    #[test]
-    fn test_dep_filtering_with_locations() {
+    fn test_dep_categorization_with_locations() {
         let atoms_with_locs = serde_json::json!({
             "schema": "probe-verus/atoms",
             "schema-version": "2.0",
@@ -927,11 +884,13 @@ mod tests {
                     "display-name": "foo",
                     "dependencies": [
                         "probe:test/0.1.0/module/bar()",
-                        "probe:test/0.1.0/specs/is_valid()"
+                        "probe:test/0.1.0/specs/is_valid()",
+                        "probe:test/0.1.0/specs/helper()"
                     ],
                     "dependencies-with-locations": [
                         {"code-name": "probe:test/0.1.0/module/bar()", "location": "inner", "line": 15},
-                        {"code-name": "probe:test/0.1.0/specs/is_valid()", "location": "precondition", "line": 12}
+                        {"code-name": "probe:test/0.1.0/specs/is_valid()", "location": "precondition", "line": 12},
+                        {"code-name": "probe:test/0.1.0/specs/helper()", "location": "postcondition", "line": 13}
                     ],
                     "code-module": "module",
                     "code-path": "src/module.rs",
@@ -954,13 +913,9 @@ mod tests {
                     "kind": "exec",
                     "specified": true,
                     "has_requires": true,
-                    "has_ensures": false,
-                    "has_decreases": false,
-                    "has_trusted_assumption": false,
-                    "is_external_body": false,
-                    "has_no_decreases_attr": false,
+                    "has_ensures": true,
                     "requires_text": "requires\n    is_valid(x)",
-                    "requires-calls": ["is_valid"]
+                    "ensures_text": "ensures\n    helper(x)"
                 }
             }
         });
@@ -972,22 +927,40 @@ mod tests {
         let result = merge_into_unified(&atoms_path, Some(&specs_path), None).unwrap();
         let foo = &result["probe:test/0.1.0/module/foo()"];
 
-        // Only inner deps remain after filtering
-        assert_eq!(foo.atom.dependencies.len(), 1);
+        // dependencies is the full union (unchanged)
+        assert_eq!(foo.atom.dependencies.len(), 3);
         assert!(foo
             .atom
             .dependencies
             .contains("probe:test/0.1.0/module/bar()"));
-        assert!(!foo
+        assert!(foo
             .atom
             .dependencies
             .contains("probe:test/0.1.0/specs/is_valid()"));
+        assert!(foo
+            .atom
+            .dependencies
+            .contains("probe:test/0.1.0/specs/helper()"));
 
-        // dependencies-with-locations also filtered
-        assert_eq!(foo.atom.dependencies_with_locations.len(), 1);
+        // Categorized deps
+        assert_eq!(foo.requires_dependencies.len(), 1);
+        assert!(foo
+            .requires_dependencies
+            .contains("probe:test/0.1.0/specs/is_valid()"));
+        assert_eq!(foo.ensures_dependencies.len(), 1);
+        assert!(foo
+            .ensures_dependencies
+            .contains("probe:test/0.1.0/specs/helper()"));
+        assert_eq!(foo.body_dependencies.len(), 1);
+        assert!(foo
+            .body_dependencies
+            .contains("probe:test/0.1.0/module/bar()"));
+
+        // specs text and is-disabled
         assert_eq!(
-            foo.atom.dependencies_with_locations[0].location,
-            CallLocation::Inner
+            foo.specs.as_deref(),
+            Some("requires\n    is_valid(x)\nensures\n    helper(x)")
         );
+        assert_eq!(foo.is_disabled, Some(false));
     }
 }

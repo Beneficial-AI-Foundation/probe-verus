@@ -4,11 +4,9 @@
 //! produces consistent results, using pre-built fixture files.
 
 use probe_verus::metadata::unwrap_envelope;
-use probe_verus::{
-    split_clauses, AtomWithLines, CallLocation, SpecCondition, SpecConditionKind, UnifiedAtom,
-};
+use probe_verus::{AtomWithLines, CallLocation, UnifiedAtom};
 use serde::Deserialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 const FIXTURES: &str = "tests/fixtures/unified_test";
@@ -16,21 +14,9 @@ const FIXTURES: &str = "tests/fixtures/unified_test";
 #[derive(Deserialize)]
 struct SpecsEntry {
     #[serde(default)]
-    has_requires: bool,
-    #[serde(default)]
-    has_ensures: bool,
-    #[serde(default)]
     requires_text: Option<String>,
     #[serde(default)]
     ensures_text: Option<String>,
-    #[serde(rename = "requires-calls", default)]
-    requires_calls: Vec<String>,
-    #[serde(rename = "ensures-calls", default)]
-    ensures_calls: Vec<String>,
-    #[serde(rename = "requires-calls-full", default)]
-    requires_calls_full: Vec<String>,
-    #[serde(rename = "ensures-calls-full", default)]
-    ensures_calls_full: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -58,38 +44,15 @@ fn load_enveloped<T: serde::de::DeserializeOwned>(path: &Path) -> BTreeMap<Strin
         .unwrap_or_else(|e| panic!("Failed to deserialize {}: {}", path.display(), e))
 }
 
-fn build_spec_conditions(entry: &SpecsEntry) -> Vec<SpecCondition> {
-    let mut conditions = Vec::new();
-
-    if entry.has_requires {
-        conditions.push(SpecCondition {
-            kind: SpecConditionKind::Precondition,
-            text: entry.requires_text.clone(),
-            clauses: entry
-                .requires_text
-                .as_deref()
-                .map(split_clauses)
-                .unwrap_or_default(),
-            calls: entry.requires_calls.clone(),
-            calls_full: entry.requires_calls_full.clone(),
-        });
+fn build_spec_text(entry: &SpecsEntry) -> String {
+    let mut parts = Vec::new();
+    if let Some(ref t) = entry.requires_text {
+        parts.push(t.as_str());
     }
-
-    if entry.has_ensures {
-        conditions.push(SpecCondition {
-            kind: SpecConditionKind::Postcondition,
-            text: entry.ensures_text.clone(),
-            clauses: entry
-                .ensures_text
-                .as_deref()
-                .map(split_clauses)
-                .unwrap_or_default(),
-            calls: entry.ensures_calls.clone(),
-            calls_full: entry.ensures_calls_full.clone(),
-        });
+    if let Some(ref t) = entry.ensures_text {
+        parts.push(t.as_str());
     }
-
-    conditions
+    parts.join("\n")
 }
 
 /// Merge atoms + specs + proofs into unified output (mirrors the logic in extract.rs).
@@ -103,22 +66,29 @@ fn merge_fixture_files(
     let proofs: Option<BTreeMap<String, ProofsEntryMinimal>> = proofs_path.map(load_enveloped);
 
     let mut unified = BTreeMap::new();
-    for (code_name, mut atom) in atoms {
-        let spec_conditions: Option<Vec<SpecCondition>> = specs
+    for (code_name, atom) in atoms {
+        let spec_text: Option<String> = specs
             .as_ref()
             .and_then(|s| s.get(&code_name))
-            .map(build_spec_conditions);
+            .map(build_spec_text);
 
-        if spec_conditions.is_some() && !atom.dependencies_with_locations.is_empty() {
-            let inner_code_names: std::collections::BTreeSet<String> = atom
-                .dependencies_with_locations
-                .iter()
-                .filter(|d| d.location == CallLocation::Inner)
-                .map(|d| d.code_name.clone())
-                .collect();
-            atom.dependencies = inner_code_names;
-            atom.dependencies_with_locations
-                .retain(|d| d.location == CallLocation::Inner);
+        let is_disabled = spec_text.as_ref().map(|s| s.is_empty());
+
+        let mut requires_deps = BTreeSet::new();
+        let mut ensures_deps = BTreeSet::new();
+        let mut body_deps = BTreeSet::new();
+        for d in &atom.dependencies_with_locations {
+            match d.location {
+                CallLocation::Precondition => {
+                    requires_deps.insert(d.code_name.clone());
+                }
+                CallLocation::Postcondition => {
+                    ensures_deps.insert(d.code_name.clone());
+                }
+                CallLocation::Inner => {
+                    body_deps.insert(d.code_name.clone());
+                }
+            }
         }
 
         let verification_status = proofs
@@ -129,8 +99,12 @@ fn merge_fixture_files(
             code_name,
             UnifiedAtom {
                 atom,
+                requires_dependencies: requires_deps,
+                ensures_dependencies: ensures_deps,
+                body_dependencies: body_deps,
+                specs: spec_text,
+                is_disabled,
                 verification_status,
-                specs: spec_conditions,
             },
         );
     }
@@ -164,12 +138,12 @@ fn test_unified_specs_matches_specs_file() {
         let unified_entry = unified
             .get(code_name)
             .unwrap_or_else(|| panic!("Spec key missing from unified output: {}", code_name));
-        let spec_conditions = unified_entry
+        let spec_text = unified_entry
             .specs
             .as_ref()
             .expect("specs field should be present");
-        let has_specs = !spec_conditions.is_empty();
-        let expected = spec_entry.has_requires || spec_entry.has_ensures;
+        let has_specs = !spec_text.is_empty();
+        let expected = spec_entry.requires_text.is_some() || spec_entry.ensures_text.is_some();
         assert_eq!(
             has_specs, expected,
             "Mismatch for {}: unified has_specs={}, expected={}",
@@ -214,6 +188,10 @@ fn test_external_stubs_have_no_enrichment() {
         "External stub should have no 'specs' field"
     );
     assert!(
+        ext.is_disabled.is_none(),
+        "External stub should have no 'is-disabled' field"
+    );
+    assert!(
         ext.verification_status.is_none(),
         "External stub should have no 'verification-status' field"
     );
@@ -230,23 +208,21 @@ fn test_full_merge_all_fields_populated() {
 
     let foo = &unified["probe:test-crate/0.1.0/module/foo()"];
     assert_eq!(foo.atom.display_name, "foo");
-    let foo_specs = foo.specs.as_ref().unwrap();
-    assert_eq!(foo_specs.len(), 2);
-    assert_eq!(foo_specs[0].kind, SpecConditionKind::Precondition);
-    assert_eq!(foo_specs[1].kind, SpecConditionKind::Postcondition);
+    assert!(!foo.specs.as_ref().unwrap().is_empty());
+    assert_eq!(foo.is_disabled, Some(false));
     assert_eq!(foo.verification_status.as_deref(), Some("verified"));
 
     let bar = &unified["probe:test-crate/0.1.0/module/bar()"];
     assert_eq!(bar.atom.display_name, "bar");
-    assert!(bar.specs.as_ref().unwrap().is_empty());
+    assert_eq!(bar.specs.as_deref(), Some(""));
+    assert_eq!(bar.is_disabled, Some(true));
     assert_eq!(bar.verification_status.as_deref(), Some("failed"));
 
     // baz has specs (ensures only) but no proofs entry
     let baz = &unified["probe:test-crate/0.1.0/module/baz()"];
     assert_eq!(baz.atom.display_name, "baz");
-    let baz_specs = baz.specs.as_ref().unwrap();
-    assert_eq!(baz_specs.len(), 1);
-    assert_eq!(baz_specs[0].kind, SpecConditionKind::Postcondition);
+    assert!(!baz.specs.as_ref().unwrap().is_empty());
+    assert_eq!(baz.is_disabled, Some(false));
     assert!(baz.verification_status.is_none());
 }
 
@@ -259,23 +235,22 @@ fn test_unified_json_serialization_format() {
 
     let json = serde_json::to_value(&unified).unwrap();
 
-    // foo: has both verification-status and specs
+    // foo: has specs, verification-status, is-disabled=false
     let foo_json = &json["probe:test-crate/0.1.0/module/foo()"];
     assert_eq!(foo_json["display-name"], "foo");
     assert_eq!(foo_json["verification-status"], "verified");
-    assert!(foo_json["specs"].is_array());
-    assert_eq!(foo_json["specs"].as_array().unwrap().len(), 2);
-    assert_eq!(foo_json["specs"][0]["kind"], "precondition");
-    assert_eq!(foo_json["specs"][1]["kind"], "postcondition");
+    assert!(foo_json["specs"].is_string());
+    assert!(!foo_json["specs"].as_str().unwrap().is_empty());
+    assert_eq!(foo_json["is-disabled"], false);
     assert_eq!(foo_json["kind"], "exec");
     assert_eq!(foo_json["language"], "rust");
 
-    // bar: analyzed but no specs -> empty array
+    // bar: analyzed but no specs -> empty string, is-disabled=true
     let bar_json = &json["probe:test-crate/0.1.0/module/bar()"];
-    assert!(bar_json["specs"].is_array());
-    assert_eq!(bar_json["specs"].as_array().unwrap().len(), 0);
+    assert_eq!(bar_json["specs"], "");
+    assert_eq!(bar_json["is-disabled"], true);
 
-    // ext: no verification-status or specs (skip_serializing_if)
+    // ext: no verification-status, specs, or is-disabled (skip_serializing_if)
     let ext_json = &json["probe:external/1.0.0/lib/ext()"];
     assert_eq!(ext_json["display-name"], "ext");
     assert!(
@@ -286,32 +261,32 @@ fn test_unified_json_serialization_format() {
         ext_json.get("specs").is_none(),
         "External stub should not have specs in JSON"
     );
+    assert!(
+        ext_json.get("is-disabled").is_none(),
+        "External stub should not have is-disabled in JSON"
+    );
 }
 
 #[test]
-fn test_specs_preconditions_postconditions_content() {
+fn test_specs_text_content() {
     let atoms_path = Path::new(FIXTURES).join("atoms.json");
     let specs_path = Path::new(FIXTURES).join("specs.json");
     let unified = merge_fixture_files(&atoms_path, Some(&specs_path), None);
 
     let foo = &unified["probe:test-crate/0.1.0/module/foo()"];
-    let specs = foo.specs.as_ref().unwrap();
+    assert_eq!(
+        foo.specs.as_deref(),
+        Some("requires\n    x > 0,\n    y < 100\nensures\n    result > x")
+    );
+    assert_eq!(foo.is_disabled, Some(false));
 
-    let pre = &specs[0];
-    assert_eq!(pre.kind, SpecConditionKind::Precondition);
-    assert_eq!(pre.clauses, vec!["x > 0", "y < 100"]);
-    assert_eq!(pre.calls, vec!["is_valid"]);
-
-    let post = &specs[1];
-    assert_eq!(post.kind, SpecConditionKind::Postcondition);
-    assert_eq!(post.clauses, vec!["result > x"]);
-    assert_eq!(post.calls, vec!["helper_spec"]);
-
-    // baz has only postconditions
+    // baz has only ensures
     let baz = &unified["probe:test-crate/0.1.0/module/baz()"];
-    let baz_specs = baz.specs.as_ref().unwrap();
-    assert_eq!(baz_specs.len(), 1);
-    assert_eq!(baz_specs[0].kind, SpecConditionKind::Postcondition);
-    assert_eq!(baz_specs[0].clauses, vec!["result == x * 2"]);
-    assert_eq!(baz_specs[0].calls, vec!["spec_helper"]);
+    assert_eq!(baz.specs.as_deref(), Some("ensures\n    result == x * 2"));
+    assert_eq!(baz.is_disabled, Some(false));
+
+    // bar has no specs
+    let bar = &unified["probe:test-crate/0.1.0/module/bar()"];
+    assert_eq!(bar.specs.as_deref(), Some(""));
+    assert_eq!(bar.is_disabled, Some(true));
 }

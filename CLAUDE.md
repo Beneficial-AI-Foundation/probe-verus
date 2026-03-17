@@ -85,8 +85,7 @@ src/
 
 - `FunctionNode`: Call graph node with callees and type context
 - `AtomWithLines`: Output format with line ranges
-- `UnifiedAtom`: `AtomWithLines` + optional `verification-status` and `specs` array (extract pipeline output)
-- `SpecCondition`, `SpecConditionKind`: Typed pre/postcondition in the `specs` array
+- `UnifiedAtom`: `AtomWithLines` + optional `specs` text, `is-disabled`, `verification-status`, and categorized dependency fields (extract pipeline output)
 - `FunctionInfo`: Function metadata with mode, specs, ensures/requires calls
 - `TaxonomyConfig`, `TaxonomyRule`, `MatchCriteria`: TOML-based spec classification rules
 - `FunctionInterval`: Interval tree entry for error→function mapping

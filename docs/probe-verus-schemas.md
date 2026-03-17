@@ -1,7 +1,7 @@
 # probe-verus Data Schemas
 
-Version: 4.0
-Date: 2026-03-16
+Version: 5.0
+Date: 2026-03-17
 
 This document specifies the concrete JSON `data` payloads produced by each
 probe-verus subcommand.  It complements the language-agnostic
@@ -361,12 +361,17 @@ is **not** serialized (the code-name key serves as the identifier).
 ### Overview
 
 The primary output of the `extract` command.  Each entry is an atom enriched
-with optional `verification-status` and structured `specs` fields, matching the
-`probe-lean/verify` output structure.
+with optional `specs`, `is-disabled`, `verification-status`, and categorized
+dependency fields, aligning with the `probe-lean/verify` output structure.
 
-Specifications are separated from dependencies: function calls in
-`requires`/`ensures` clauses are removed from `dependencies` (when location
-data is available) and instead appear in the `specs` array.
+Dependencies are categorized into three subsets (analogous to probe-lean's
+`type-dependencies` and `term-dependencies`):
+
+- `requires-dependencies` — functions called in `requires` clauses
+- `ensures-dependencies` — functions called in `ensures` clauses
+- `body-dependencies` — functions called in the function body
+
+The existing `dependencies` field is the union of all three.
 
 By default, only this file is produced.  Pass `--separate-outputs` to also
 write the individual atoms, specs, and proofs files.
@@ -374,13 +379,24 @@ write the individual atoms, specs, and proofs files.
 ### Data Shape
 
 `data` is an object keyed by code-name.  Each value is a `UnifiedAtom`
-(an `AtomWithLines` with two optional fields):
+(an `AtomWithLines` with additional optional fields):
 
 ```json
 {
   "probe:my-crate/1.0.0/module/MyType#method()": {
     "display-name": "MyType::method",
     "dependencies": [
+      "probe:my-crate/1.0.0/module/helper()",
+      "probe:my-crate/1.0.0/specs/is_valid()",
+      "probe:my-crate/1.0.0/specs/helper_spec()"
+    ],
+    "requires-dependencies": [
+      "probe:my-crate/1.0.0/specs/is_valid()"
+    ],
+    "ensures-dependencies": [
+      "probe:my-crate/1.0.0/specs/helper_spec()"
+    ],
+    "body-dependencies": [
       "probe:my-crate/1.0.0/module/helper()"
     ],
     "code-module": "module",
@@ -388,33 +404,21 @@ write the individual atoms, specs, and proofs files.
     "code-text": { "lines-start": 42, "lines-end": 67 },
     "kind": "exec",
     "language": "rust",
-    "verification-status": "verified",
-    "specs": [
-      {
-        "kind": "precondition",
-        "text": "requires\n    x > 0,\n    y < 100",
-        "clauses": ["x > 0", "y < 100"],
-        "calls": ["is_valid"],
-        "calls-full": ["crate::specs::is_valid"]
-      },
-      {
-        "kind": "postcondition",
-        "text": "ensures\n    result > x",
-        "clauses": ["result > x"],
-        "calls": ["helper_spec"],
-        "calls-full": ["crate::specs::helper_spec"]
-      }
-    ]
+    "specs": "requires\n    x > 0,\n    y < 100\nensures\n    result > x",
+    "is-disabled": false,
+    "verification-status": "verified"
   },
   "probe:my-crate/1.0.0/module/unspecified_fn()": {
     "display-name": "unspecified_fn",
-    "dependencies": [],
+    "dependencies": ["probe:my-crate/1.0.0/module/other()"],
+    "body-dependencies": ["probe:my-crate/1.0.0/module/other()"],
     "code-module": "module",
     "code-path": "src/module.rs",
     "code-text": { "lines-start": 80, "lines-end": 90 },
     "kind": "exec",
     "language": "rust",
-    "specs": []
+    "specs": "",
+    "is-disabled": true
   },
   "probe:external/1.0.0/other/func()": {
     "display-name": "func",
@@ -430,32 +434,33 @@ write the individual atoms, specs, and proofs files.
 
 ### Field Reference
 
-All fields from `AtomWithLines` (section 1) are present.  Two optional fields
-are added:
+All fields from `AtomWithLines` (section 1) are present.  The following
+optional fields are added:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
+| `requires-dependencies` | array of strings | no | Subset of `dependencies` called in `requires` clauses (omitted when empty) |
+| `ensures-dependencies` | array of strings | no | Subset of `dependencies` called in `ensures` clauses (omitted when empty) |
+| `body-dependencies` | array of strings | no | Subset of `dependencies` called in the function body (omitted when empty) |
+| `specs` | string | no | Full spec text (requires + ensures concatenated). Empty string = analyzed, no spec. Absent = not analyzed. |
+| `is-disabled` | bool | no | `false` if the function has a spec; `true` otherwise. Absent for external stubs or when `--skip-specify`. |
 | `verification-status` | string | no | `"verified"`, `"failed"`, or `"unverified"` (absent when `--skip-verify`) |
-| `specs` | array of SpecCondition | no | Specification conditions (absent when `--skip-specify` or for external stubs). Empty array = analyzed, no specs. |
 
-To check whether a function has specs, test `specs != []`.  The `specs` field
-is absent (not serialized) only for external stubs or when the specify step was
-skipped entirely.
+### Dependency Categorization
 
-### SpecCondition
+The `extract` pipeline internally computes call location data (the same data
+available via `--with-locations` on `atomize`).  Each dependency is tagged as
+`"precondition"`, `"postcondition"`, or `"inner"` based on whether it appears
+in a `requires` clause, `ensures` clause, or the function body.
 
-Each element in the `specs` array is a typed condition:
+The `dependencies` field is the **union** of all categories (unchanged from
+the atomize step).  The three subcategory fields partition this union:
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `kind` | string | `"precondition"` or `"postcondition"` |
-| `text` | string | Raw text of the condition block including keyword (e.g. `"requires\n    x > 0"`) |
-| `clauses` | array of strings | Individual clauses split from the block (omitted if empty) |
-| `calls` | array of strings | Short names of functions called in this condition (AST-extracted, omitted if empty) |
-| `calls-full` | array of strings | Fully qualified Rust paths of function calls (omitted if empty) |
-
-In Verus, a function has at most one `requires` block (precondition) and one
-`ensures` block (postcondition), so the array has 0–2 elements.
+| probe-lean analogy | probe-verus field | Source |
+|--------------------|-------------------|--------|
+| `type-dependencies` | `requires-dependencies` + `ensures-dependencies` | Spec clauses |
+| `term-dependencies` | `body-dependencies` | Function body |
+| `dependencies` | `dependencies` | Union of all |
 
 ### Verification Status Mapping
 
@@ -466,22 +471,11 @@ In Verus, a function has at most one `requires` block (precondition) and one
 | `sorries` | `"unverified"` | Contains `assume()`/`admit()` |
 | `warning` | `"verified"` | Passed with warnings |
 
-### Dependency Filtering
-
-When the `extract` pipeline runs, it internally computes call location data
-(the same data available via `--with-locations` on `atomize`).  During the
-merge step, dependencies tagged as `"precondition"` or `"postcondition"` are
-removed from the `dependencies` array.  These spec-related calls appear
-exclusively in the corresponding `specs` array entries.
-
-If location data is not available (e.g., when using pre-existing atoms without
-location tags), all dependencies are preserved as-is.
-
 ### Notes
 
 - External stubs (functions defined outside the workspace) will not have
-  `verification-status` or `specs` fields since they are not parsed by
-  specify or verified by run-verus.
+  `specs`, `is-disabled`, or `verification-status` fields since they are not
+  parsed by specify or verified by run-verus.
 - When a pipeline step is skipped (`--skip-specify` or `--skip-verify`),
   the corresponding field is absent from **all** entries.
 

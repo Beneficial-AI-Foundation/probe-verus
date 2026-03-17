@@ -218,33 +218,8 @@ pub struct AtomWithLines {
     pub rust_qualified_name: Option<String>,
 }
 
-/// The kind of a specification condition.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum SpecConditionKind {
-    Precondition,
-    Postcondition,
-}
-
-/// A single specification condition (precondition or postcondition).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SpecCondition {
-    pub kind: SpecConditionKind,
-    /// Raw text of the condition block (e.g. "requires\n    x > 0,\n    y < 100")
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub text: Option<String>,
-    /// Individual clauses split from the condition block
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub clauses: Vec<String>,
-    /// Short names of functions called in this condition (AST-extracted)
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub calls: Vec<String>,
-    /// Fully qualified paths of function calls in this condition
-    #[serde(rename = "calls-full", skip_serializing_if = "Vec::is_empty", default)]
-    pub calls_full: Vec<String>,
-}
-
-/// Unified atom: all `AtomWithLines` fields plus optional verification and specification status.
+/// Unified atom: all `AtomWithLines` fields plus optional verification, specification,
+/// and categorized dependency fields.
 ///
 /// Produced by the `extract` pipeline to match the `probe-lean/verify` output structure.
 /// When a step is skipped, the corresponding field is absent (serialized as missing key).
@@ -253,13 +228,34 @@ pub struct UnifiedAtom {
     #[serde(flatten)]
     pub atom: AtomWithLines,
     #[serde(
+        rename = "requires-dependencies",
+        skip_serializing_if = "BTreeSet::is_empty",
+        default
+    )]
+    pub requires_dependencies: BTreeSet<String>,
+    #[serde(
+        rename = "ensures-dependencies",
+        skip_serializing_if = "BTreeSet::is_empty",
+        default
+    )]
+    pub ensures_dependencies: BTreeSet<String>,
+    #[serde(
+        rename = "body-dependencies",
+        skip_serializing_if = "BTreeSet::is_empty",
+        default
+    )]
+    pub body_dependencies: BTreeSet<String>,
+    /// Full spec text (requires + ensures). Empty string = analyzed, no spec. Absent = not analyzed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub specs: Option<String>,
+    /// `true` when the function has no spec, `false` when it does. Absent = not analyzed.
+    #[serde(rename = "is-disabled", skip_serializing_if = "Option::is_none")]
+    pub is_disabled: Option<bool>,
+    #[serde(
         rename = "verification-status",
         skip_serializing_if = "Option::is_none"
     )]
     pub verification_status: Option<String>,
-    /// Specification conditions. Empty array = no specs; absent = not analyzed.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub specs: Option<Vec<SpecCondition>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -268,30 +264,6 @@ pub struct CodeTextInfo {
     pub lines_start: usize,
     #[serde(rename = "lines-end")]
     pub lines_end: usize,
-}
-
-/// Split a requires/ensures text block into individual clause strings.
-///
-/// Strips the leading keyword (`requires` or `ensures`) and splits by lines,
-/// filtering out empty lines and trailing commas.
-pub fn split_clauses(text: &str) -> Vec<String> {
-    let trimmed = text.trim();
-    let body = if let Some(rest) = trimmed.strip_prefix("requires") {
-        rest.trim()
-    } else if let Some(rest) = trimmed.strip_prefix("ensures") {
-        rest.trim()
-    } else {
-        trimmed
-    };
-
-    if body.is_empty() {
-        return Vec::new();
-    }
-
-    body.lines()
-        .map(|l| l.trim().trim_end_matches(',').trim().to_string())
-        .filter(|l| !l.is_empty())
-        .collect()
 }
 
 /// Parse a SCIP JSON file

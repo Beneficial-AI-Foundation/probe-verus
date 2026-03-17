@@ -11,22 +11,21 @@ what constitutes a breaking change.
 ## [5.0.0] - 2026-03-16
 
 ### Breaking
-- **Specs as typed array**: The `specs` field on `UnifiedAtom` (in `probe-verus/extract` output) is now an array of `SpecCondition` objects, each with a `kind` field (`"precondition"` or `"postcondition"`). Replaces the previous `specified`/`preconditions`/`postconditions` object structure.
-- To check whether a function has specs: `specs != []` (empty array = analyzed, no specs; absent = not analyzed)
-- Each `SpecCondition` includes `kind`, `text`, `clauses`, `calls`, and `calls-full` fields
-- In the `extract` pipeline, function calls inside `requires`/`ensures` clauses are filtered out of `dependencies` and appear exclusively in `specs` array entries
+- **Specs as text string**: The `specs` field on `UnifiedAtom` (in `probe-verus/extract` output) is now a single text string containing the full spec (requires + ensures concatenated). Empty string = analyzed, no spec; absent = not analyzed.
+- **Categorized dependencies**: Three new dependency subcategory fields: `requires-dependencies`, `ensures-dependencies`, `body-dependencies`. Analogous to probe-lean's `type-dependencies` / `term-dependencies`. `dependencies` is the union (no longer filtered).
+- **`is-disabled` field**: `true` when the function has no spec, `false` when it does. Absent for external stubs or when `--skip-specify`. Aligns with probe-aeneas semantics.
+- Removed `SpecCondition`, `SpecConditionKind` types and the `split_clauses()` public function from `lib.rs`
 - `AtomizeInternalConfig` now includes a `with_locations` field (internal API)
 
 ### Added
-- `SpecCondition`, `SpecConditionKind` types in `lib.rs` for typed pre/postcondition representation
-- `split_clauses()` public utility function for splitting spec text blocks into individual clause strings
-- Dependency filtering in `merge_into_unified`: calls tagged as `precondition`/`postcondition` are removed from `dependencies` when location data is available
-- New unit tests: `test_specs_clause_splitting`, `test_dep_filtering_with_locations`
-- New integration tests: `test_specs_preconditions_postconditions_content`
+- `requires-dependencies`, `ensures-dependencies`, `body-dependencies` fields on `UnifiedAtom` for categorized dependency tracking
+- `is-disabled` boolean field on `UnifiedAtom`
+- `build_spec_text()` function in extract for concatenating requires/ensures text
 
 ### Changed
-- `extract` pipeline internally computes `dependencies-with-locations` (via `with_locations: true`) to enable spec/dep separation
-- Schema docs updated to version 4.0
+- `extract` pipeline internally computes `dependencies-with-locations` (via `with_locations: true`) to derive dependency categories
+- `dependencies` in extract output is now the full union (spec calls are no longer filtered out)
+- Schema docs updated to version 5.0
 
 ## [4.0.0] - 2026-03-11
 

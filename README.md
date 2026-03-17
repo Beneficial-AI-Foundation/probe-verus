@@ -4,6 +4,20 @@ Probe Verus projects: generate call graph atoms, extract specifications, and ana
 
 `probe-verus` analyzes Rust/Verus codebases and produces structured JSON describing every function, its dependencies, source locations, specifications, and verification status. Output follows the Schema 2.0 envelope format; see [docs/SCHEMA.md](docs/SCHEMA.md) for the full specification.
 
+## Prerequisites
+
+- **Rust toolchain** (`cargo`) -- install via [rustup.rs](https://rustup.rs/)
+- **External tools** -- some commands require `verus-analyzer`, `scip`, or `cargo verus`. Run `probe-verus setup` to auto-download them, or see [tools/INSTALL.md](tools/INSTALL.md) for manual options.
+
+| Command | Required Tools |
+|---------|----------------|
+| `extract` | verus-analyzer, scip, cargo verus |
+| `atomize` | verus-analyzer, scip |
+| `specify` | None |
+| `run-verus` | cargo verus |
+| `list-functions` | None |
+| `setup` | None |
+
 ## Installation
 
 ### Pre-built binaries (recommended)
@@ -23,26 +37,6 @@ powershell -ExecutionPolicy ByPass -c "irm https://github.com/Beneficial-AI-Foun
 ```bash
 cargo install --path .
 ```
-
-### External tool dependencies
-
-Some commands require external tools. After installing probe-verus, run `setup` to auto-download them:
-
-```bash
-probe-verus setup            # downloads verus-analyzer and scip
-probe-verus setup --status   # check what's installed and where
-```
-
-For manual installation options, see [tools/INSTALL.md](tools/INSTALL.md).
-
-| Command | Required Tools |
-|---------|----------------|
-| `extract` | verus-analyzer, scip, cargo verus |
-| `atomize` | verus-analyzer, scip |
-| `specify` | None |
-| `run-verus` | cargo verus |
-| `list-functions` | None |
-| `setup` | None |
 
 ## Quick Start
 

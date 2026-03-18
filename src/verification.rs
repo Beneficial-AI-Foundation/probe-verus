@@ -1049,7 +1049,7 @@ struct AtomEntry {
 ///    come from SCIP (the fn keyword line).
 fn find_code_name_in_atoms(
     loc: &FunctionLocation,
-    atoms: &HashMap<String, AtomEntry>,
+    atoms: &BTreeMap<String, AtomEntry>,
 ) -> Option<String> {
     let loc_suffix = extract_src_suffix(&loc.code_path);
 
@@ -1113,7 +1113,7 @@ pub fn enrich_with_code_names(
         .map_err(|e| format!("Failed to parse {}: {}", atoms_path.display(), e))?;
     let data = crate::metadata::unwrap_envelope(json);
 
-    let atoms: HashMap<String, AtomEntry> = serde_json::from_value(data).map_err(|e| {
+    let atoms: BTreeMap<String, AtomEntry> = serde_json::from_value(data).map_err(|e| {
         format!(
             "Failed to deserialize atoms from {}: {}",
             atoms_path.display(),
@@ -1162,7 +1162,7 @@ pub fn convert_to_proofs_output(
         .map_err(|e| format!("Failed to parse {}: {}", atoms_path.display(), e))?;
     let data = crate::metadata::unwrap_envelope(json);
 
-    let atoms: HashMap<String, AtomEntry> = serde_json::from_value(data).map_err(|e| {
+    let atoms: BTreeMap<String, AtomEntry> = serde_json::from_value(data).map_err(|e| {
         format!(
             "Failed to deserialize atoms from {}: {}",
             atoms_path.display(),
@@ -1247,7 +1247,7 @@ mod tests {
     #[test]
     fn test_find_code_name_exact_match() {
         let loc = make_loc("foo", "src/lib.rs", 10, 20);
-        let mut atoms = HashMap::new();
+        let mut atoms = BTreeMap::new();
         atoms.insert(
             "code_foo".to_string(),
             make_atom_entry("foo", "src/lib.rs", 10),
@@ -1261,7 +1261,7 @@ mod tests {
     #[test]
     fn test_find_code_name_suffix_match() {
         let loc = make_loc("bar", "src/impls.rs", 20, 30);
-        let mut atoms = HashMap::new();
+        let mut atoms = BTreeMap::new();
         atoms.insert(
             "code_bar".to_string(),
             make_atom_entry("MyType::bar", "src/impls.rs", 20),
@@ -1276,7 +1276,7 @@ mod tests {
     fn test_find_code_name_within_span_for_doc_comments() {
         // loc span starts at doc comment (line 40), atom at fn keyword (line 50)
         let loc = make_loc("compress", "src/edwards.rs", 40, 70);
-        let mut atoms = HashMap::new();
+        let mut atoms = BTreeMap::new();
         atoms.insert(
             "code_compress".to_string(),
             make_atom_entry("EdwardsPoint::compress", "src/edwards.rs", 50),
@@ -1290,7 +1290,7 @@ mod tests {
     #[test]
     fn test_find_code_name_prefers_closest() {
         let loc = make_loc("baz", "src/mod.rs", 100, 110);
-        let mut atoms = HashMap::new();
+        let mut atoms = BTreeMap::new();
         atoms.insert(
             "code_baz_far".to_string(),
             make_atom_entry("baz", "src/mod.rs", 100 + LINE_TOLERANCE),
@@ -1368,13 +1368,12 @@ mod tests {
     // Core algorithm correctness tests (C4, C5)
     // =========================================================================
 
-    /// C4: find_code_name_in_atoms iterates HashMap — when two atoms tie on
-    /// effective_diff, the result depends on iteration order.
+    /// C4: find_code_name_in_atoms must be deterministic when two atoms tie
+    /// on effective_diff. Fixed by using BTreeMap for deterministic iteration.
     #[test]
     fn test_find_code_name_deterministic_on_tie() {
         let loc = make_loc("foo", "src/lib.rs", 10, 20);
-        let mut atoms = HashMap::new();
-        // Two atoms at the exact same line — identical effective_diff
+        let mut atoms = BTreeMap::new();
         atoms.insert(
             "probe:a/1.0/foo()".to_string(),
             make_atom_entry("foo", "src/lib.rs", 10),
@@ -1384,23 +1383,13 @@ mod tests {
             make_atom_entry("foo", "src/lib.rs", 10),
         );
 
-        // Run many times to detect non-determinism
         let results: Vec<_> = (0..50)
             .map(|_| find_code_name_in_atoms(&loc, &atoms))
             .collect();
 
         let first = &results[0];
-        let all_same = results.iter().all(|r| r == first);
-        if !all_same {
-            eprintln!(
-                "BUG C4 CONFIRMED: find_code_name_in_atoms is non-deterministic. \
-                 Got different results across 50 runs."
-            );
-        }
-        // This assertion documents the desired property.
-        // It may fail non-deterministically, confirming the bug.
         assert!(
-            all_same,
+            results.iter().all(|r| r == first),
             "find_code_name_in_atoms should be deterministic when atoms tie"
         );
     }
@@ -1410,7 +1399,7 @@ mod tests {
     #[test]
     fn test_find_code_name_filename_only_ambiguous() {
         let loc = make_loc("helper", "helpers.rs", 10, 20);
-        let mut atoms = HashMap::new();
+        let mut atoms = BTreeMap::new();
         atoms.insert(
             "probe:a/1.0/foo_helper()".to_string(),
             make_atom_entry("helper", "src/foo/helpers.rs", 10),
@@ -1422,9 +1411,9 @@ mod tests {
 
         let result = find_code_name_in_atoms(&loc, &atoms);
 
-        // Both atoms match by filename only ("helpers.rs"). The function should
-        // either return None (ambiguous) or pick deterministically.
-        // Currently it picks whichever HashMap yields first — non-deterministic.
+        // Both atoms match by filename only ("helpers.rs"). With BTreeMap
+        // iteration the result is now deterministic, but still potentially
+        // wrong if multiple files share the name.
         if result.is_some() {
             eprintln!(
                 "C5 NOTE: filename-only match resolved to {:?} — \

@@ -48,6 +48,41 @@ fn strip_comments(line: &str, in_block_comment: &mut bool) -> String {
     result
 }
 
+/// Replace string literal contents with spaces so that keywords inside
+/// strings (e.g. `"admit()"`) are not matched by text searches.
+/// Handles `"..."` and raw strings `r#"..."#` at a best-effort level.
+fn strip_string_literals(line: &str) -> String {
+    let mut result = String::with_capacity(line.len());
+    let chars: Vec<char> = line.chars().collect();
+    let len = chars.len();
+    let mut i = 0;
+
+    while i < len {
+        if chars[i] == '"' {
+            result.push('"');
+            i += 1;
+            while i < len && chars[i] != '"' {
+                if chars[i] == '\\' && i + 1 < len {
+                    result.push(' ');
+                    result.push(' ');
+                    i += 2;
+                } else {
+                    result.push(' ');
+                    i += 1;
+                }
+            }
+            if i < len {
+                result.push('"');
+                i += 1;
+            }
+        } else {
+            result.push(chars[i]);
+            i += 1;
+        }
+    }
+    result
+}
+
 /// Type alias for spec clause line ranges: (requires_range, ensures_range)
 /// Each range is Option<(start_line, end_line)> using 1-based line numbers.
 pub type SpecRanges = (Option<(usize, usize)>, Option<(usize, usize)>);
@@ -748,7 +783,7 @@ impl FunctionInfo {
     /// - no `#[verifier::external_body]` (`is_external_body`)
     /// - no `#[verifier::exec_allows_no_decreases_clause]` (`has_no_decreases_attr`)
     pub fn is_proved(&self) -> bool {
-        let has_spec = self.has_requires || self.has_ensures || self.is_external_body;
+        let has_spec = self.has_requires || self.has_ensures;
         has_spec
             && !self.has_trusted_assumption
             && !self.is_external_body
@@ -956,18 +991,23 @@ impl FunctionInfoVisitor {
 
     /// Check if the function body (between start and end lines) contains assume() or admit().
     ///
-    /// Strips line comments (`//`) and tracks block comments (`/* */`) so that
-    /// occurrences inside comments are not counted.  String literals are rare
-    /// enough in Verus proof code that they are not stripped here.
+    /// Strips line comments (`//`), tracks block comments (`/* */`), and
+    /// removes string literal contents so that occurrences inside comments
+    /// or strings are not counted.
     fn has_trusted_assumption(&self, start_line: usize, end_line: usize) -> bool {
         if let Some(content) = &self.file_content {
             let lines: Vec<&str> = content.lines().collect();
             let start_idx = start_line.saturating_sub(1);
             let end_idx = end_line.min(lines.len());
 
+            if start_idx >= end_idx {
+                return false;
+            }
+
             let mut in_block_comment = false;
             for line in &lines[start_idx..end_idx] {
                 let code = strip_comments(line, &mut in_block_comment);
+                let code = strip_string_literals(&code);
                 if code.contains("assume(") || code.contains("admit(") {
                     return true;
                 }
@@ -1636,6 +1676,85 @@ impl Foo {{
     }
 
     // =========================================================================
+    // Soundness tests: is_proved() logic (S1)
+    // =========================================================================
+
+    fn make_test_func_info(
+        has_requires: bool,
+        has_ensures: bool,
+        has_trusted_assumption: bool,
+        is_external_body: bool,
+        has_no_decreases_attr: bool,
+    ) -> FunctionInfo {
+        FunctionInfo {
+            name: "test_fn".to_string(),
+            file: Some("src/lib.rs".to_string()),
+            spec_text: SpecText {
+                lines_start: 1,
+                lines_end: 10,
+            },
+            kind: DeclKind::Exec,
+            kind_display: Some("exec".to_string()),
+            visibility: None,
+            context: None,
+            specified: has_requires || has_ensures,
+            has_requires,
+            has_ensures,
+            has_decreases: false,
+            has_trusted_assumption,
+            is_external_body,
+            has_no_decreases_attr,
+            requires_text: None,
+            ensures_text: None,
+            ensures_calls: Vec::new(),
+            requires_calls: Vec::new(),
+            ensures_calls_full: Vec::new(),
+            requires_calls_full: Vec::new(),
+            ensures_fn_calls: Vec::new(),
+            ensures_method_calls: Vec::new(),
+            requires_fn_calls: Vec::new(),
+            requires_method_calls: Vec::new(),
+            display_name: None,
+            impl_type: None,
+            doc_comment: None,
+            signature_text: None,
+            body_text: None,
+            module_path: None,
+            fn_line: 1,
+        }
+    }
+
+    /// S1: external_body with specs should not count as proved.
+    #[test]
+    fn test_external_body_with_spec_not_proved() {
+        let func = make_test_func_info(true, true, false, true, false);
+        assert!(
+            !func.is_proved(),
+            "external_body function must not be considered proved"
+        );
+    }
+
+    /// S1: function with spec and no escape hatches should be proved.
+    #[test]
+    fn test_clean_spec_function_is_proved() {
+        let func = make_test_func_info(true, false, false, false, false);
+        assert!(
+            func.is_proved(),
+            "function with requires and no escape hatches should be proved"
+        );
+    }
+
+    /// S1: function with no spec should not be proved.
+    #[test]
+    fn test_no_spec_not_proved() {
+        let func = make_test_func_info(false, false, false, false, false);
+        assert!(
+            !func.is_proved(),
+            "function without spec should not be proved"
+        );
+    }
+
+    // =========================================================================
     // Soundness tests: assume/admit detection (S3)
     // =========================================================================
 
@@ -1693,9 +1812,9 @@ fn unsafe_function() {{
         );
     }
 
-    /// S3: admit() in a string literal should not be detected as a trusted assumption.
+    /// S3: admit() in a string literal must not be detected as a trusted assumption.
     #[test]
-    fn test_admit_in_string_literal_detected_as_trusted() {
+    fn test_admit_in_string_literal_not_detected_as_trusted() {
         let mut file = NamedTempFile::new().unwrap();
         writeln!(
             file,
@@ -1714,11 +1833,9 @@ fn logging_function() {{
             .iter()
             .find(|f| f.name == "logging_function")
             .unwrap();
-        if f.has_trusted_assumption {
-            eprintln!(
-                "BUG S3 CONFIRMED: admit() in a string literal is incorrectly \
-                 detected as a trusted assumption"
-            );
-        }
+        assert!(
+            !f.has_trusted_assumption,
+            "admit() in a string literal must not be detected as a trusted assumption"
+        );
     }
 }

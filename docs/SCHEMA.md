@@ -469,7 +469,7 @@ the atomize step).  The three subcategory fields partition this union:
 | `success` | `"verified"` | Passed verification |
 | `failure` | `"failed"` | Verification errors |
 | `sorries` | `"unverified"` | Contains `assume()`/`admit()` |
-| `warning` | `"verified"` | Passed with warnings |
+| `warning` | `"unverified"` | Passed with warnings (defensive: treated as unverified) |
 
 ### Notes
 

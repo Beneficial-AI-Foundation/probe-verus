@@ -95,11 +95,11 @@ where
 {
     let mut best_match: Option<&str> = None;
     let mut best_score = PathMatchScore::None;
+    let mut best_count: usize = 0;
 
     for candidate in candidates {
         let score = calculate_path_match_score(query, candidate);
 
-        // Exact match - return immediately
         if score == PathMatchScore::Exact {
             return Some(candidate);
         }
@@ -107,7 +107,14 @@ where
         if score > best_score {
             best_match = Some(candidate);
             best_score = score;
+            best_count = 1;
+        } else if score == best_score && score > PathMatchScore::None {
+            best_count += 1;
         }
+    }
+
+    if best_count > 1 && best_score < PathMatchScore::Exact {
+        return None;
     }
 
     if best_score > PathMatchScore::None {
@@ -139,11 +146,11 @@ impl PathMatcher {
     pub fn find_best_match(&self, query: &str) -> Option<&String> {
         let mut best_match: Option<&String> = None;
         let mut best_score = PathMatchScore::None;
+        let mut best_count: usize = 0;
 
         for candidate in &self.known_paths {
             let score = calculate_path_match_score(query, candidate);
 
-            // Exact match - return immediately
             if score == PathMatchScore::Exact {
                 return Some(candidate);
             }
@@ -151,7 +158,14 @@ impl PathMatcher {
             if score > best_score {
                 best_match = Some(candidate);
                 best_score = score;
+                best_count = 1;
+            } else if score == best_score && score > PathMatchScore::None {
+                best_count += 1;
             }
+        }
+
+        if best_count > 1 && best_score < PathMatchScore::Exact {
+            return None;
         }
 
         if best_score > PathMatchScore::None {
@@ -234,8 +248,12 @@ mod tests {
             Some(&"src/lemmas/edwards_lemmas/constants_lemmas.rs".to_string())
         );
 
-        // Ambiguous filename-only should return one of them
+        // Ambiguous filename-only with multiple candidates should return None
         let result = matcher.find_best_match("constants_lemmas.rs");
-        assert!(result.is_some());
+        assert!(
+            result.is_none(),
+            "ambiguous filename-only match should return None, got {:?}",
+            result
+        );
     }
 }

@@ -28,8 +28,7 @@ fn map_verification_status(status: &str) -> &'static str {
     match status {
         "success" => "verified",
         "failure" => "failed",
-        "sorries" => "unverified",
-        "warning" => "verified",
+        "sorries" | "warning" => "unverified",
         _ => "failed",
     }
 }

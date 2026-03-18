@@ -18,6 +18,11 @@ jobs:
         with:
           path: probe-verus
 
+      - uses: actions/checkout@v4
+        with:
+          repository: Beneficial-AI-Foundation/probe
+          path: probe
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -102,71 +107,79 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
+        with:
+          path: probe-verus
+
+      - uses: actions/checkout@v4
+        with:
+          repository: Beneficial-AI-Foundation/probe
+          path: probe
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-      
+
       - name: Cache cargo registry
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+            probe-verus/target
+          key: ${{ runner.os }}-cargo-integ-${{ hashFiles('probe-verus/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
-      
+            ${{ runner.os }}-cargo-integ-
+
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
-      
+
       - name: Install verus-analyzer
         run: |
-          # Download latest verus-analyzer binary
           VERUS_URL=$(curl -s https://api.github.com/repos/verus-lang/verus-analyzer/releases/latest | jq -r '.assets[] | select(.name == "verus-analyzer-x86_64-unknown-linux-gnu.gz") | .browser_download_url')
           wget "$VERUS_URL" -O verus-analyzer.gz
           gunzip verus-analyzer.gz
           chmod +x verus-analyzer
           sudo mv verus-analyzer /usr/local/bin/
           verus-analyzer --version
-      
+
       - name: Install scip
         run: |
-          # Download scip binary from sourcegraph/scip releases
           SCIP_URL=$(curl -s https://api.github.com/repos/sourcegraph/scip/releases/latest | jq -r '.assets[] | select(.name == "scip-linux-amd64.tar.gz") | .browser_download_url')
           wget "$SCIP_URL" -O scip-linux.tar.gz
           tar -xzf scip-linux.tar.gz
           chmod +x scip
           sudo mv scip /usr/local/bin/
           scip --version
-      
+
       - name: Clone dalek-lite test project
         run: |
           git clone --depth 1 https://github.com/Beneficial-AI-Foundation/dalek-lite.git /tmp/dalek-lite
-      
+
       - name: Generate SCIP index for dalek-lite
         run: |
           cd /tmp/dalek-lite
           verus-analyzer scip .
           scip print --json index.scip > index.scip.json
-      
+
       - name: Copy SCIP JSON to test location
+        working-directory: probe-verus
         run: |
           mkdir -p data
           cp /tmp/dalek-lite/index.scip.json data/curve_top.json
-      
+
       - name: Run integration tests
+        working-directory: probe-verus
         run: cargo test --test duplicate_symbols --verbose
-      
+
       - name: Run function coverage test
+        working-directory: probe-verus
         run: cargo test --test function_coverage --verbose -- --nocapture
-      
+
       - name: Upload SCIP artifacts (on failure)
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: scip-data
           path: |
-            data/curve_top.json
+            probe-verus/data/curve_top.json
           retention-days: 7
 

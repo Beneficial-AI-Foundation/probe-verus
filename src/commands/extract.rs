@@ -460,6 +460,8 @@ pub fn merge_into_unified(
             .and_then(|s| s.get(&code_name))
             .map(build_spec_text);
 
+        // `is_disabled` semantics: `None` = function was not analyzed for specs;
+        // `Some(true)` = function was analyzed but has no spec; `Some(false)` = function has a spec.
         let is_disabled = spec_text.as_ref().map(|s| s.is_empty());
 
         // Derive categorized dependencies from location data

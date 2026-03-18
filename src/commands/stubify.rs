@@ -24,16 +24,18 @@ pub struct StubFrontmatter {
 /// Walks through a directory hierarchy of .md files with YAML frontmatter
 /// and converts them to a JSON file where keys are file paths and values
 /// are the frontmatter fields.
-pub fn cmd_stubify(path: PathBuf, output: Option<PathBuf>, project_path_override: Option<PathBuf>) {
+pub fn cmd_stubify(
+    path: PathBuf,
+    output: Option<PathBuf>,
+    project_path_override: Option<PathBuf>,
+) -> Result<(), String> {
     // Validate input path
     if !path.exists() {
-        eprintln!("Error: Path does not exist: {}", path.display());
-        std::process::exit(1);
+        return Err(format!("Path does not exist: {}", path.display()));
     }
 
     if !path.is_dir() {
-        eprintln!("Error: Path must be a directory: {}", path.display());
-        std::process::exit(1);
+        return Err(format!("Path must be a directory: {}", path.display()));
     }
 
     // Walk directory and collect .md files
@@ -76,8 +78,7 @@ pub fn cmd_stubify(path: PathBuf, output: Option<PathBuf>, project_path_override
     }
 
     if processed == 0 {
-        eprintln!("Error: No .md files found in {}", path.display());
-        std::process::exit(1);
+        return Err(format!("No .md files found in {}", path.display()));
     }
 
     // Resolve project root: explicit flag > auto-detect from input path
@@ -88,13 +89,15 @@ pub fn cmd_stubify(path: PathBuf, output: Option<PathBuf>, project_path_override
         output.unwrap_or_else(|| get_default_output_path(&project_root, &metadata, "stubs"));
 
     if let Some(parent) = output.parent() {
-        std::fs::create_dir_all(parent).expect("Failed to create output directory");
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create output directory: {}", e))?;
     }
 
     // Wrap in envelope and write
     let envelope = wrap_in_envelope("probe-verus/stubs", "stubify", &stubs, &metadata);
-    let json = serde_json::to_string_pretty(&envelope).expect("Failed to serialize JSON");
-    std::fs::write(&output, &json).expect("Failed to write output file");
+    let json = serde_json::to_string_pretty(&envelope)
+        .map_err(|e| format!("Failed to serialize JSON: {}", e))?;
+    std::fs::write(&output, &json).map_err(|e| format!("Failed to write output file: {}", e))?;
 
     println!(
         "Wrote {} stubs to {} ({} errors)",
@@ -102,6 +105,7 @@ pub fn cmd_stubify(path: PathBuf, output: Option<PathBuf>, project_path_override
         output.display(),
         errors
     );
+    Ok(())
 }
 
 /// Parse YAML frontmatter from a markdown file.

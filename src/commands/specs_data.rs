@@ -12,6 +12,17 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
+
+static PROSE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)^(this|the|it|we|for|if|when|note|see|returns|computes|checks|ensures|requires|proves|helper|verify|convert|used|should|must|can)\b")
+        .expect("valid regex")
+});
+static WORD_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"[a-zA-Z]{4,}").expect("valid regex"));
+static RE_SIG_KEYWORD: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?m)^\s*(requires|ensures)\b").expect("valid regex")
+});
 
 /// Top-level output matching the existing specs_data.json schema.
 #[derive(Serialize)]
@@ -125,8 +136,6 @@ fn extract_math_interpretation(doc_comment: &str) -> String {
         return String::new();
     }
 
-    let prose_re = Regex::new(r"(?i)^(this|the|it|we|for|if|when|note|see|returns|computes|checks|ensures|requires|proves|helper|verify|convert|used|should|must|can)\b").unwrap();
-    let word_re = Regex::new(r"[a-zA-Z]{4,}").unwrap();
     let math_words: HashSet<&str> = [
         "sqrt", "mod", "pow", "spec", "nat", "int", "bool", "field", "scalar", "point", "limb",
         "byte", "bits",
@@ -142,13 +151,13 @@ fn extract_math_interpretation(doc_comment: &str) -> String {
         if !line.contains('=') && !line.contains('\u{2261}') {
             continue;
         }
-        if prose_re.is_match(line) {
+        if PROSE_RE.is_match(line) {
             continue;
         }
         if line.len() > 100 {
             continue;
         }
-        let words: Vec<_> = word_re.find_iter(line).collect();
+        let words: Vec<_> = WORD_RE.find_iter(line).collect();
         let non_math_words = words
             .iter()
             .filter(|w| !math_words.contains(w.as_str().to_lowercase().as_str()))
@@ -244,16 +253,11 @@ struct FocusFunction {
 /// parser produces paths relative to the src root (e.g., `edwards.rs`).
 /// We store both the original path and the src-relative suffix so matching
 /// works regardless of whether `compute_project_prefix` adds a prefix.
-fn load_libsignal_entrypoints(path: &Path) -> HashSet<(String, String)> {
-    let data = std::fs::read_to_string(path).unwrap_or_else(|e| {
-        panic!(
-            "Failed to read libsignal entrypoints {}: {}",
-            path.display(),
-            e
-        )
-    });
+fn load_libsignal_entrypoints(path: &Path) -> Result<HashSet<(String, String)>, String> {
+    let data = std::fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read libsignal entrypoints {}: {}", path.display(), e))?;
     let parsed: EntrypointsJson = serde_json::from_str(&data)
-        .unwrap_or_else(|e| panic!("Failed to parse libsignal entrypoints JSON: {}", e));
+        .map_err(|e| format!("Failed to parse libsignal entrypoints JSON: {}", e))?;
     let mut set = HashSet::new();
     for f in parsed.focus_functions {
         set.insert((f.display_name.clone(), f.relative_path.clone()));
@@ -263,7 +267,7 @@ fn load_libsignal_entrypoints(path: &Path) -> HashSet<(String, String)> {
             set.insert((f.display_name.clone(), suffix.to_string()));
         }
     }
-    set
+    Ok(set)
 }
 
 /// Compute the transitive closure of spec/axiom names reachable from
@@ -300,12 +304,12 @@ pub fn cmd_specs_data(
     github_base_url: Option<String>,
     libsignal_entrypoints: Option<PathBuf>,
     project_path: Option<PathBuf>,
-) {
+) -> Result<(), String> {
     let github_base = github_base_url.unwrap_or_default();
 
     let libsignal_set: HashSet<(String, String)> = match &libsignal_entrypoints {
         Some(path) => {
-            let set = load_libsignal_entrypoints(path);
+            let set = load_libsignal_entrypoints(path)?;
             eprintln!(
                 "Loaded {} libsignal entrypoints from {}",
                 set.len(),
@@ -351,7 +355,6 @@ pub fn cmd_specs_data(
     // relative paths from the grandparent.
     let project_prefix = compute_project_prefix(&src_path);
 
-    let re_sig_keyword = Regex::new(r"(?m)^\s*(requires|ensures)\b").unwrap();
     for func in &parsed.functions {
         let file = func.file.as_deref().unwrap_or("");
         let full_file_path = if let Some(ref prefix) = project_prefix {
@@ -468,7 +471,7 @@ pub fn cmd_specs_data(
                 // Build contract from signature (truncated before requires/ensures)
                 // plus AST-extracted requires/ensures text for accuracy.
                 let sig = func.signature_text.as_deref().unwrap_or("");
-                let sig_only = if let Some(pos) = re_sig_keyword.find(sig) {
+                let sig_only = if let Some(pos) = RE_SIG_KEYWORD.find(sig) {
                     sig[..pos.start()].trim_end()
                 } else {
                     sig.trim_end()
@@ -564,8 +567,9 @@ pub fn cmd_specs_data(
         &metadata,
     );
 
-    let json = serde_json::to_string_pretty(&envelope).expect("Failed to serialize JSON");
-    std::fs::write(&output, &json).expect("Failed to write output file");
+    let json = serde_json::to_string_pretty(&envelope)
+        .map_err(|e| format!("Failed to serialize JSON: {}", e))?;
+    std::fs::write(&output, &json).map_err(|e| format!("Failed to write output file: {}", e))?;
 
     eprintln!(
         "Wrote specs_data.json: {} spec functions, {} verified functions ({} libsignal) -> {}",
@@ -574,4 +578,5 @@ pub fn cmd_specs_data(
         libsignal_count,
         output.display()
     );
+    Ok(())
 }

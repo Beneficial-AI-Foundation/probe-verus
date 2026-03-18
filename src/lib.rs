@@ -589,27 +589,7 @@ pub fn build_call_graph(
         }
     }
 
-    // Build a map from (symbol, line) -> unique_key for occurrence processing
     let mut symbol_line_to_key: HashMap<(String, i32), String> = HashMap::new();
-    for (key, node) in &call_graph {
-        if let Some(defs) = symbol_to_definitions.get(&node.symbol) {
-            // Find the definition line that matches this node's signature
-            for (idx, node_in_graph) in call_graph.values().enumerate() {
-                if node_in_graph.symbol == node.symbol {
-                    if let Some((_, line)) = defs.get(idx) {
-                        // This is a bit tricky - we need to match by signature
-                        if node_in_graph.signature_text == node.signature_text {
-                            symbol_line_to_key.insert((node.symbol.clone(), *line), key.clone());
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Rebuild the symbol_line_to_key map more correctly
-    symbol_line_to_key.clear();
     let mut symbol_seen_for_lines: HashMap<String, usize> = HashMap::new();
     let mut symbol_self_type_idx_for_lines: HashMap<String, usize> = HashMap::new();
     for doc in &scip_data.documents {
@@ -664,6 +644,7 @@ pub fn build_call_graph(
         let mut current_function_key: Option<String> = None;
 
         let mut ordered_occurrences = doc.occurrences.clone();
+        ordered_occurrences.retain(|o| o.range.len() >= 2);
         ordered_occurrences.sort_by(|a, b| {
             let a_start = (a.range[0], a.range[1]);
             let b_start = (b.range[0], b.range[1]);

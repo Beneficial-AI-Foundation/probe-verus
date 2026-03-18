@@ -319,18 +319,18 @@ impl CompilationErrorParser {
             // Check for file location
             if let Some(caps) = self.file_location_pattern.captures(line) {
                 let file_path = caps[1].to_string();
-                let line_num: i32 = caps[2].parse().unwrap_or(0);
-                let column: i32 = caps[3].parse().unwrap_or(0);
+                let line_num: Option<i32> = caps[2].parse().ok();
+                let column: Option<i32> = caps[3].parse().ok();
 
                 if let Some(ref mut err) = current_error {
                     err.file = Some(file_path);
-                    err.line = Some(line_num);
-                    err.column = Some(column);
+                    err.line = line_num;
+                    err.column = column;
                     err.full_message.push(line.to_string());
                 } else if let Some(ref mut warn) = current_warning {
                     warn.file = Some(file_path);
-                    warn.line = Some(line_num);
-                    warn.column = Some(column);
+                    warn.line = line_num;
+                    warn.column = column;
                     warn.full_message.push(line.to_string());
                 }
                 continue;
@@ -430,8 +430,10 @@ impl VerificationParser {
 
         for (i, line) in lines.iter().enumerate() {
             if let Some(caps) = self.error_pattern.captures(line) {
+                let Ok(line_number) = caps[2].parse::<i32>() else {
+                    continue;
+                };
                 let file_path = caps[1].to_string();
-                let line_number: i32 = caps[2].parse().unwrap_or(0);
 
                 // Look back to see if this is an actual error
                 let mut is_actual_error = false;

@@ -144,15 +144,14 @@ pub fn merge_atoms_maps(
 }
 
 /// Execute the merge-atoms command.
-pub fn cmd_merge_atoms(inputs: Vec<PathBuf>, output: PathBuf) {
+pub fn cmd_merge_atoms(inputs: Vec<PathBuf>, output: PathBuf) -> Result<(), String> {
     println!("═══════════════════════════════════════════════════════════");
     println!("  Probe Verus - Merge Atoms: Combine Indexed Projects");
     println!("═══════════════════════════════════════════════════════════");
     println!();
 
     if inputs.len() < 2 {
-        eprintln!("Error: merge-atoms requires at least 2 input files");
-        std::process::exit(1);
+        return Err("merge-atoms requires at least 2 input files".to_string());
     }
 
     let mut maps = Vec::new();
@@ -165,10 +164,7 @@ pub fn cmd_merge_atoms(inputs: Vec<PathBuf>, output: PathBuf) {
                 envelope_inputs.extend(file_inputs);
                 maps.push(atoms);
             }
-            Err(e) => {
-                eprintln!("Error: {}", e);
-                std::process::exit(1);
-            }
+            Err(e) => return Err(e),
         }
     }
     println!();
@@ -178,8 +174,9 @@ pub fn cmd_merge_atoms(inputs: Vec<PathBuf>, output: PathBuf) {
 
     let timestamp = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
     let envelope = wrap_merged_envelope(&merged, envelope_inputs, &timestamp);
-    let json = serde_json::to_string_pretty(&envelope).expect("Failed to serialize JSON");
-    std::fs::write(&output, &json).expect("Failed to write output file");
+    let json = serde_json::to_string_pretty(&envelope)
+        .map_err(|e| format!("Failed to serialize JSON: {}", e))?;
+    std::fs::write(&output, &json).map_err(|e| format!("Failed to write output file: {}", e))?;
 
     println!();
     println!("═══════════════════════════════════════════════════════════");
@@ -198,6 +195,7 @@ pub fn cmd_merge_atoms(inputs: Vec<PathBuf>, output: PathBuf) {
         println!("  Conflicts (kept base): {}", stats.conflicts);
     }
     println!();
+    Ok(())
 }
 
 #[cfg(test)]

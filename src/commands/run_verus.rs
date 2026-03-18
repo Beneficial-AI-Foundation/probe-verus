@@ -46,7 +46,7 @@ pub fn cmd_run_verus(
     no_cache: bool,
     with_atoms: Option<PathBuf>,
     verus_args: Vec<String>,
-) {
+) -> Result<(), String> {
     let (project_path, verification_output, exit_code) = get_verification_data(
         project_path,
         from_file,
@@ -71,7 +71,8 @@ pub fn cmd_run_verus(
         output.unwrap_or_else(|| get_default_output_path(&project_path, &metadata, "proofs"));
 
     if let Some(parent) = output_path.parent() {
-        std::fs::create_dir_all(parent).expect("Failed to create output directory");
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create output directory: {}", e))?;
     }
 
     // Resolve atoms path: explicit flag value > auto-discover in .verilib/probes/
@@ -82,19 +83,17 @@ pub fn cmd_run_verus(
             Ok(proofs_output) => {
                 let envelope =
                     wrap_in_envelope("probe-verus/proofs", "run-verus", &proofs_output, &metadata);
-                let json =
-                    serde_json::to_string_pretty(&envelope).expect("Failed to serialize JSON");
-                std::fs::write(&output_path, &json).expect("Failed to write JSON output");
+                let json = serde_json::to_string_pretty(&envelope)
+                    .map_err(|e| format!("Failed to serialize JSON: {}", e))?;
+                std::fs::write(&output_path, &json)
+                    .map_err(|e| format!("Failed to write JSON output: {}", e))?;
                 println!(
                     "Wrote {} functions to {}",
                     proofs_output.len(),
                     output_path.display()
                 );
             }
-            Err(e) => {
-                eprintln!("Error converting to proofs output: {}", e);
-                std::process::exit(1);
-            }
+            Err(e) => return Err(format!("Error converting to proofs output: {}", e)),
         },
         None => {
             let envelope = wrap_in_envelope(
@@ -103,8 +102,10 @@ pub fn cmd_run_verus(
                 &result,
                 &metadata,
             );
-            let json = serde_json::to_string_pretty(&envelope).expect("Failed to serialize JSON");
-            std::fs::write(&output_path, &json).expect("Failed to write JSON output");
+            let json = serde_json::to_string_pretty(&envelope)
+                .map_err(|e| format!("Failed to serialize JSON: {}", e))?;
+            std::fs::write(&output_path, &json)
+                .map_err(|e| format!("Failed to write JSON output: {}", e))?;
             println!("JSON output written to {}", output_path.display());
             eprintln!(
                 "Note: no atoms.json found; output lacks code-name enrichment. \
@@ -140,8 +141,9 @@ pub fn cmd_run_verus(
     }
 
     if result.status != AnalysisStatus::Success {
-        std::process::exit(1);
+        return Err("Verification failed".to_string());
     }
+    Ok(())
 }
 
 /// Get verification data from either running verification or using cached data.

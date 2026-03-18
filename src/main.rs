@@ -369,7 +369,7 @@ fn main() {
             allow_duplicates,
             auto_install,
         } => {
-            cmd_atomize(
+            if let Err(e) = cmd_atomize(
                 project_path,
                 output,
                 regenerate_scip,
@@ -377,10 +377,16 @@ fn main() {
                 rust_analyzer,
                 allow_duplicates,
                 auto_install,
-            );
+            ) {
+                eprintln!("Error: {e}");
+                std::process::exit(1);
+            }
         }
         Commands::MergeAtoms { inputs, output } => {
-            cmd_merge_atoms(inputs, output);
+            if let Err(e) = cmd_merge_atoms(inputs, output) {
+                eprintln!("Error: {e}");
+                std::process::exit(1);
+            }
         }
         Commands::ListFunctions {
             path,
@@ -391,7 +397,7 @@ fn main() {
             show_kind,
             output,
         } => {
-            cmd_functions(
+            if let Err(e) = cmd_functions(
                 path,
                 format,
                 exclude_verus_constructs,
@@ -399,7 +405,10 @@ fn main() {
                 show_visibility,
                 show_kind,
                 output,
-            );
+            ) {
+                eprintln!("Error: {e}");
+                std::process::exit(1);
+            }
         }
         Commands::RunVerus {
             project_path,
@@ -413,7 +422,7 @@ fn main() {
             with_atoms,
             verus_args,
         } => {
-            cmd_run_verus(
+            if let Err(e) = cmd_run_verus(
                 project_path,
                 from_file,
                 exit_code,
@@ -424,7 +433,10 @@ fn main() {
                 no_cache,
                 with_atoms,
                 verus_args,
-            );
+            ) {
+                eprintln!("Error: {e}");
+                std::process::exit(1);
+            }
         }
         Commands::Specify {
             path,
@@ -452,20 +464,26 @@ fn main() {
             libsignal_entrypoints,
             project_path,
         } => {
-            cmd_specs_data(
+            if let Err(e) = cmd_specs_data(
                 src_path,
                 output,
                 github_base_url,
                 libsignal_entrypoints,
                 project_path,
-            );
+            ) {
+                eprintln!("Error: {e}");
+                std::process::exit(1);
+            }
         }
         Commands::TrackedCsv {
             src_path,
             output,
             github_base_url,
         } => {
-            cmd_tracked_csv(src_path, output, github_base_url);
+            if let Err(e) = cmd_tracked_csv(src_path, output, github_base_url) {
+                eprintln!("Error: {e}");
+                std::process::exit(1);
+            }
         }
         Commands::CalleeCrates {
             function,
@@ -475,21 +493,27 @@ fn main() {
             exclude_stdlib,
             exclude_crates,
         } => {
-            cmd_callee_crates(
+            if let Err(e) = cmd_callee_crates(
                 function,
                 depth,
                 atoms_file,
                 output,
                 exclude_stdlib,
                 exclude_crates,
-            );
+            ) {
+                eprintln!("Error: {e}");
+                std::process::exit(1);
+            }
         }
         Commands::Stubify {
             path,
             output,
             project_path,
         } => {
-            cmd_stubify(path, output, project_path);
+            if let Err(e) = cmd_stubify(path, output, project_path) {
+                eprintln!("Error: {e}");
+                std::process::exit(1);
+            }
         }
         Commands::Setup { status } => {
             cmd_setup(status);

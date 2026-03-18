@@ -214,22 +214,10 @@ pub fn cmd_callee_crates(
     output: Option<PathBuf>,
     exclude_stdlib: bool,
     exclude_crates: Vec<String>,
-) {
-    let atoms = match load_atoms(atoms_file) {
-        Ok(a) => a,
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            std::process::exit(1);
-        }
-    };
+) -> Result<(), String> {
+    let atoms = load_atoms(atoms_file)?;
 
-    let resolved = match resolve_function(&atoms, &function) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            std::process::exit(1);
-        }
-    };
+    let resolved = resolve_function(&atoms, &function)?;
 
     let callees = collect_callees_up_to_depth(&atoms, &resolved, depth);
     let crates = group_by_crate(&callees, exclude_stdlib, &exclude_crates);
@@ -240,17 +228,20 @@ pub fn cmd_callee_crates(
         crates,
     };
 
-    let json = serde_json::to_string_pretty(&output_data).expect("Failed to serialize JSON");
+    let json = serde_json::to_string_pretty(&output_data)
+        .map_err(|e| format!("Failed to serialize JSON: {}", e))?;
 
     match output {
         Some(path) => {
-            std::fs::write(&path, &json).expect("Failed to write output file");
+            std::fs::write(&path, &json)
+                .map_err(|e| format!("Failed to write output file: {}", e))?;
             eprintln!("Output written to {}", path.display());
         }
         None => {
             println!("{}", json);
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]

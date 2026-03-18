@@ -25,10 +25,9 @@ pub fn cmd_functions(
     show_visibility: bool,
     show_kind: bool,
     output: Option<PathBuf>,
-) {
+) -> Result<(), String> {
     if !path.exists() {
-        eprintln!("Error: Path does not exist: {}", path.display());
-        std::process::exit(1);
+        return Err(format!("Path does not exist: {}", path.display()));
     }
 
     let include_verus_constructs = !exclude_verus_constructs;
@@ -52,9 +51,11 @@ pub fn cmd_functions(
 
     match actual_format {
         OutputFormat::Json => {
-            let json = serde_json::to_string_pretty(&parsed_output).unwrap();
+            let json = serde_json::to_string_pretty(&parsed_output)
+                .map_err(|e| format!("Failed to serialize JSON: {}", e))?;
             if let Some(output_path) = output {
-                std::fs::write(&output_path, &json).expect("Failed to write JSON output");
+                std::fs::write(&output_path, &json)
+                    .map_err(|e| format!("Failed to write JSON output: {}", e))?;
                 println!("JSON output written to {}", output_path.display());
             } else {
                 println!("{}", json);
@@ -99,4 +100,5 @@ pub fn cmd_functions(
             );
         }
     }
+    Ok(())
 }

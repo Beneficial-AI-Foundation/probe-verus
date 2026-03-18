@@ -9,7 +9,11 @@ use crate::DeclKind;
 use std::path::PathBuf;
 
 /// Generate the tracked CSV file.
-pub fn cmd_tracked_csv(src_path: PathBuf, output: PathBuf, github_base_url: Option<String>) {
+pub fn cmd_tracked_csv(
+    src_path: PathBuf,
+    output: PathBuf,
+    github_base_url: Option<String>,
+) -> Result<(), String> {
     let github_base = github_base_url.unwrap_or_default();
 
     eprintln!("Parsing source files from: {}", src_path.display());
@@ -90,17 +94,20 @@ pub fn cmd_tracked_csv(src_path: PathBuf, output: PathBuf, github_base_url: Opti
 
     // Write CSV (using csv crate to properly quote fields containing commas)
     if let Some(parent) = output.parent() {
-        std::fs::create_dir_all(parent).ok();
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create output directory: {}", e))?;
     }
-    let file = std::fs::File::create(&output).expect("Failed to create output file");
+    let file = std::fs::File::create(&output)
+        .map_err(|e| format!("Failed to create output file: {}", e))?;
     let mut wtr = csv::Writer::from_writer(file);
     wtr.write_record(["function", "module", "link", "has_spec", "has_proof"])
-        .unwrap();
+        .map_err(|e| format!("Failed to write CSV header: {}", e))?;
     for (function, module, link, has_spec, has_proof) in &rows {
         wtr.write_record([function, module, link, has_spec, has_proof])
-            .unwrap();
+            .map_err(|e| format!("Failed to write CSV record: {}", e))?;
     }
-    wtr.flush().unwrap();
+    wtr.flush()
+        .map_err(|e| format!("Failed to flush CSV output: {}", e))?;
 
     // Print summary
     let total = rows.len();
@@ -119,4 +126,5 @@ pub fn cmd_tracked_csv(src_path: PathBuf, output: PathBuf, github_base_url: Opti
         }
     );
     eprintln!("  Without complete proof: {}", total - proof_count);
+    Ok(())
 }

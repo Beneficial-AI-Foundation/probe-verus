@@ -22,17 +22,14 @@ pub fn cmd_atomize(
     use_rust_analyzer: bool,
     allow_duplicates: bool,
     auto_install: bool,
-) {
+) -> Result<(), String> {
     println!("═══════════════════════════════════════════════════════════");
     println!("  Probe Verus - Atomize: Generate Call Graph Data");
     println!("═══════════════════════════════════════════════════════════");
     println!();
 
     // Validate project
-    if let Err(msg) = validate_project(&project_path) {
-        eprintln!("✗ Error: {}", msg);
-        std::process::exit(1);
-    }
+    validate_project(&project_path)?;
     println!("  ✓ Valid Rust project found");
 
     // Get or generate SCIP JSON
@@ -43,18 +40,13 @@ pub fn cmd_atomize(
     };
     let mut scip_cache =
         ScipCache::with_analyzer(&project_path, analyzer).with_auto_install(auto_install);
-    let json_path = get_scip_json(&mut scip_cache, regenerate_scip);
+    let json_path = get_scip_json(&mut scip_cache, regenerate_scip)?;
 
     // Parse SCIP JSON and build call graph
     println!("Parsing SCIP JSON and building call graph...");
 
-    let scip_index = match parse_scip_json(json_path.to_str().unwrap()) {
-        Ok(idx) => idx,
-        Err(e) => {
-            eprintln!("✗ Failed to parse SCIP JSON: {}", e);
-            std::process::exit(1);
-        }
-    };
+    let scip_index = parse_scip_json(json_path.to_string_lossy().as_ref())
+        .map_err(|e| format!("Failed to parse SCIP JSON: {}", e))?;
 
     let (call_graph, symbol_to_display_name) = build_call_graph(&scip_index);
     println!("  ✓ Call graph built with {} functions", call_graph.len());
@@ -89,7 +81,7 @@ pub fn cmd_atomize(
         } else {
             eprintln!();
             eprintln!("{}", report);
-            std::process::exit(1);
+            return Err(format!("Found {} duplicate code_name(s)", duplicates.len()));
         }
     }
 
@@ -111,16 +103,19 @@ pub fn cmd_atomize(
         output.unwrap_or_else(|| get_default_output_path(&project_path, &metadata, "atoms"));
 
     if let Some(parent) = output.parent() {
-        std::fs::create_dir_all(parent).expect("Failed to create output directory");
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create output directory: {}", e))?;
     }
 
     // Wrap in envelope and write
     let envelope = wrap_in_envelope("probe-verus/atoms", "atomize", &atoms_dict, &metadata);
-    let json = serde_json::to_string_pretty(&envelope).expect("Failed to serialize JSON");
-    std::fs::write(&output, &json).expect("Failed to write output file");
+    let json = serde_json::to_string_pretty(&envelope)
+        .map_err(|e| format!("Failed to serialize JSON: {}", e))?;
+    std::fs::write(&output, &json).map_err(|e| format!("Failed to write output file: {}", e))?;
 
     // Print success summary
     print_success_summary(&output, &atoms_dict);
+    Ok(())
 }
 
 /// Validate that the project path exists and contains a Cargo.toml.
@@ -144,7 +139,7 @@ fn validate_project(project_path: &Path) -> Result<(), String> {
 }
 
 /// Get the SCIP JSON path, generating if necessary.
-fn get_scip_json(cache: &mut ScipCache, regenerate: bool) -> PathBuf {
+fn get_scip_json(cache: &mut ScipCache, regenerate: bool) -> Result<PathBuf, String> {
     if cache.has_cached_json() && !regenerate {
         println!(
             "  ✓ Found existing SCIP JSON at {}",
@@ -152,7 +147,7 @@ fn get_scip_json(cache: &mut ScipCache, regenerate: bool) -> PathBuf {
         );
         println!("    (use --regenerate-scip to force regeneration)");
         println!();
-        return cache.json_path();
+        return Ok(cache.json_path());
     }
 
     // Need to generate
@@ -160,16 +155,11 @@ fn get_scip_json(cache: &mut ScipCache, regenerate: bool) -> PathBuf {
     println!("Generating SCIP index {}...", reason);
     println!("  (This may take a while for large projects)");
 
-    match cache.get_or_generate(regenerate, true) {
-        Ok(path) => {
-            println!();
-            path
-        }
-        Err(e) => {
-            eprintln!("✗ Error: {}", e);
-            std::process::exit(1);
-        }
-    }
+    let path = cache
+        .get_or_generate(regenerate, true)
+        .map_err(|e| e.to_string())?;
+    println!();
+    Ok(path)
 }
 
 /// Format a human-readable report of duplicate code_names.
@@ -230,7 +220,7 @@ pub fn atomize_internal(config: &AtomizeInternalConfig) -> Result<usize, String>
         .get_or_generate(config.regenerate_scip, config.verbose)
         .map_err(|e| e.to_string())?;
 
-    let scip_index = parse_scip_json(json_path.to_str().unwrap())
+    let scip_index = parse_scip_json(json_path.to_string_lossy().as_ref())
         .map_err(|e| format!("Failed to parse SCIP JSON: {}", e))?;
 
     let (call_graph, symbol_to_display_name) = build_call_graph(&scip_index);

@@ -20,9 +20,8 @@ static PROSE_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 static WORD_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"[a-zA-Z]{4,}").expect("valid regex"));
-static RE_SIG_KEYWORD: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?m)^\s*(requires|ensures)\b").expect("valid regex")
-});
+static RE_SIG_KEYWORD: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?m)^\s*(requires|ensures)\b").expect("valid regex"));
 
 /// Top-level output matching the existing specs_data.json schema.
 #[derive(Serialize)]
@@ -254,8 +253,13 @@ struct FocusFunction {
 /// We store both the original path and the src-relative suffix so matching
 /// works regardless of whether `compute_project_prefix` adds a prefix.
 fn load_libsignal_entrypoints(path: &Path) -> Result<HashSet<(String, String)>, String> {
-    let data = std::fs::read_to_string(path)
-        .map_err(|e| format!("Failed to read libsignal entrypoints {}: {}", path.display(), e))?;
+    let data = std::fs::read_to_string(path).map_err(|e| {
+        format!(
+            "Failed to read libsignal entrypoints {}: {}",
+            path.display(),
+            e
+        )
+    })?;
     let parsed: EntrypointsJson = serde_json::from_str(&data)
         .map_err(|e| format!("Failed to parse libsignal entrypoints JSON: {}", e))?;
     let mut set = HashSet::new();

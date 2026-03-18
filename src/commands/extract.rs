@@ -406,12 +406,17 @@ struct ProofsEntryMinimal {
 }
 
 /// Map a Verus `VerificationStatus` string to the 3-value web status matching probe-lean.
+///
+/// `"warning"` is mapped to `"unverified"` as a defensive measure: the `Warning`
+/// variant is never produced by the current pipeline, but could appear in
+/// hand-edited proofs.json or future Verus output. Until the exact semantics of
+/// Verus warnings are documented and confirmed safe, treating them as unverified
+/// prevents overstating assurance.
 fn map_verification_status(status: &str) -> &'static str {
     match status {
         "success" => "verified",
         "failure" => "failed",
-        "sorries" => "unverified",
-        "warning" => "verified",
+        "sorries" | "warning" => "unverified",
         _ => "failed",
     }
 }
@@ -834,7 +839,7 @@ mod tests {
         assert_eq!(map_verification_status("success"), "verified");
         assert_eq!(map_verification_status("failure"), "failed");
         assert_eq!(map_verification_status("sorries"), "unverified");
-        assert_eq!(map_verification_status("warning"), "verified");
+        assert_eq!(map_verification_status("warning"), "unverified");
         assert_eq!(map_verification_status("unknown"), "failed");
     }
 

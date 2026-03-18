@@ -1084,13 +1084,13 @@ fn find_code_name_in_atoms(
                     line_diff
                 };
 
-                if effective_diff < best_line_diff {
+                let is_better = effective_diff < best_line_diff
+                    || (effective_diff == best_line_diff
+                        && best_match.is_some_and(|prev| code_name < prev));
+
+                if is_better {
                     best_match = Some(code_name);
                     best_line_diff = effective_diff;
-
-                    if effective_diff == 0 {
-                        break;
-                    }
                 }
             }
         }
@@ -1362,5 +1362,75 @@ mod tests {
         );
 
         assert_eq!(result, Some("lemma_edwards_d_limbs_bounded".to_string()));
+    }
+
+    // =========================================================================
+    // Core algorithm correctness tests (C4, C5)
+    // =========================================================================
+
+    /// C4: find_code_name_in_atoms iterates HashMap — when two atoms tie on
+    /// effective_diff, the result depends on iteration order.
+    #[test]
+    fn test_find_code_name_deterministic_on_tie() {
+        let loc = make_loc("foo", "src/lib.rs", 10, 20);
+        let mut atoms = HashMap::new();
+        // Two atoms at the exact same line — identical effective_diff
+        atoms.insert(
+            "probe:a/1.0/foo()".to_string(),
+            make_atom_entry("foo", "src/lib.rs", 10),
+        );
+        atoms.insert(
+            "probe:b/1.0/foo()".to_string(),
+            make_atom_entry("foo", "src/lib.rs", 10),
+        );
+
+        // Run many times to detect non-determinism
+        let results: Vec<_> = (0..50)
+            .map(|_| find_code_name_in_atoms(&loc, &atoms))
+            .collect();
+
+        let first = &results[0];
+        let all_same = results.iter().all(|r| r == first);
+        if !all_same {
+            eprintln!(
+                "BUG C4 CONFIRMED: find_code_name_in_atoms is non-deterministic. \
+                 Got different results across 50 runs."
+            );
+        }
+        // This assertion documents the desired property.
+        // It may fail non-deterministically, confirming the bug.
+        assert!(
+            all_same,
+            "find_code_name_in_atoms should be deterministic when atoms tie"
+        );
+    }
+
+    /// C5: When only filenames match (not full paths), ambiguous files can
+    /// cause wrong error attribution.
+    #[test]
+    fn test_find_code_name_filename_only_ambiguous() {
+        let loc = make_loc("helper", "helpers.rs", 10, 20);
+        let mut atoms = HashMap::new();
+        atoms.insert(
+            "probe:a/1.0/foo_helper()".to_string(),
+            make_atom_entry("helper", "src/foo/helpers.rs", 10),
+        );
+        atoms.insert(
+            "probe:a/1.0/bar_helper()".to_string(),
+            make_atom_entry("helper", "src/bar/helpers.rs", 10),
+        );
+
+        let result = find_code_name_in_atoms(&loc, &atoms);
+
+        // Both atoms match by filename only ("helpers.rs"). The function should
+        // either return None (ambiguous) or pick deterministically.
+        // Currently it picks whichever HashMap yields first — non-deterministic.
+        if result.is_some() {
+            eprintln!(
+                "C5 NOTE: filename-only match resolved to {:?} — \
+                 could be wrong if multiple files share the name",
+                result
+            );
+        }
     }
 }

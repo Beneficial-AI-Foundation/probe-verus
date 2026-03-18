@@ -1,13 +1,13 @@
 //! Specify command - Extract function specifications to JSON.
 
-use probe_verus::constants::LINE_TOLERANCE;
-use probe_verus::metadata::{
+use crate::constants::LINE_TOLERANCE;
+use crate::metadata::{
     find_project_root, gather_metadata, get_default_output_path, unwrap_envelope, wrap_in_envelope,
     SpecifyInternalConfig,
 };
-use probe_verus::path_utils::{extract_src_suffix, paths_match_by_suffix};
-use probe_verus::taxonomy;
-use probe_verus::verus_parser::{self, FunctionInfo, ParsedOutput};
+use crate::path_utils::{extract_src_suffix, paths_match_by_suffix};
+use crate::taxonomy;
+use crate::verus_parser::{self, FunctionInfo, ParsedOutput};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -308,8 +308,8 @@ fn find_matching_atom(func: &FunctionInfo, atoms: &BTreeMap<String, AtomEntry>) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use probe_verus::verus_parser::SpecText;
-    use probe_verus::DeclKind;
+    use crate::verus_parser::SpecText;
+    use crate::DeclKind;
 
     fn make_func(
         name: &str,

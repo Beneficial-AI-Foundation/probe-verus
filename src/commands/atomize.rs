@@ -1,6 +1,6 @@
 //! Atomize command - Generate call graph atoms from SCIP indexes.
 
-use probe_verus::{
+use crate::{
     add_external_stubs, build_call_graph, convert_to_atoms_with_parsed_spans,
     find_duplicate_code_names,
     metadata::{gather_metadata, get_default_output_path, wrap_in_envelope, AtomizeInternalConfig},
@@ -173,7 +173,7 @@ fn get_scip_json(cache: &mut ScipCache, regenerate: bool) -> PathBuf {
 }
 
 /// Format a human-readable report of duplicate code_names.
-fn format_duplicate_report(duplicates: &[probe_verus::DuplicateCodeName]) -> String {
+fn format_duplicate_report(duplicates: &[crate::DuplicateCodeName]) -> String {
     let mut msg = format!(
         "WARNING: Found {} duplicate code_name(s):\n",
         duplicates.len()

@@ -4,10 +4,10 @@
 //! from other indexed projects, enabling cross-project call graphs without
 //! requiring a single combined workspace.
 
-use probe_verus::metadata::{
+use crate::metadata::{
     extract_envelope_inputs, unwrap_envelope, wrap_merged_envelope, MergedInput,
 };
-use probe_verus::{normalize_code_name, AtomWithLines};
+use crate::{normalize_code_name, AtomWithLines};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -203,7 +203,7 @@ pub fn cmd_merge_atoms(inputs: Vec<PathBuf>, output: PathBuf) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use probe_verus::{CodeTextInfo, DeclKind};
+    use crate::{CodeTextInfo, DeclKind};
     use std::collections::BTreeSet;
 
     fn make_real_atom(name: &str, code_name: &str, code_path: &str) -> AtomWithLines {

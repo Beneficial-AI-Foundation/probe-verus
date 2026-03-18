@@ -4,8 +4,8 @@
 //! It outputs a CSV with the same schema consumed by the dashboard scripts:
 //! `function,module,link,has_spec,has_proof`
 
-use probe_verus::verus_parser::{compute_project_prefix, parse_all_functions_ext};
-use probe_verus::DeclKind;
+use crate::verus_parser::{compute_project_prefix, parse_all_functions_ext};
+use crate::DeclKind;
 use std::path::PathBuf;
 
 /// Generate the tracked CSV file.

@@ -1,6 +1,6 @@
 //! Stubify command - Convert .md files with YAML frontmatter to JSON.
 
-use probe_verus::metadata::{
+use crate::metadata::{
     find_project_root, gather_metadata, get_default_output_path, wrap_in_envelope,
 };
 use serde::{Deserialize, Serialize};
@@ -107,7 +107,7 @@ pub fn cmd_stubify(path: PathBuf, output: Option<PathBuf>, project_path_override
 /// Parse YAML frontmatter from a markdown file.
 ///
 /// Expects files in the format:
-/// ```
+/// ```text
 /// ---
 /// code-line: 123
 /// code-path: path/to/file.rs

@@ -36,6 +36,7 @@ zip = { version = "8.1", default-features = false, features = ["deflate"] }
 chrono = { version = "0.4.44", default-features = false, features = ["clock"] }
 
 [dev-dependencies]
+probe-extract-check = { path = "../probe/probe-extract-check" }
 tempfile = "3.10"
 
 [profile.release]

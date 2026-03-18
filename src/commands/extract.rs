@@ -3,12 +3,12 @@
 use super::atomize::atomize_internal;
 use super::run_verus::{run_verus_internal, VerifySummary};
 use super::specify::specify_internal;
-use probe_verus::metadata::{
+use crate::metadata::{
     find_default_atoms_path, gather_metadata, get_default_output_path, unwrap_envelope,
     wrap_in_envelope, AtomizeInternalConfig, ExtractInternalConfig, ProjectMetadata,
     SpecifyInternalConfig,
 };
-use probe_verus::{AtomWithLines, CallLocation, UnifiedAtom};
+use crate::{AtomWithLines, CallLocation, UnifiedAtom};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -78,22 +78,20 @@ pub fn cmd_extract(
     taxonomy_config: Option<PathBuf>,
     verus_args: Vec<String>,
     separate_outputs: bool,
-) {
+) -> Result<(), String> {
     if !project_path.exists() {
-        eprintln!(
-            "Error: Project path does not exist: {}",
+        return Err(format!(
+            "Project path does not exist: {}",
             project_path.display()
-        );
-        std::process::exit(1);
+        ));
     }
 
     let cargo_toml = project_path.join("Cargo.toml");
     if !cargo_toml.exists() {
-        eprintln!(
-            "Error: Not a valid Rust project (Cargo.toml not found): {}",
+        return Err(format!(
+            "Not a valid Rust project (Cargo.toml not found): {}",
             project_path.display()
-        );
-        std::process::exit(1);
+        ));
     }
 
     let metadata = gather_metadata(&project_path);
@@ -102,10 +100,8 @@ pub fn cmd_extract(
     let specs_path = get_default_output_path(&project_path, &metadata, "specs");
     let results_path = get_default_output_path(&project_path, &metadata, "proofs");
 
-    if let Err(e) = std::fs::create_dir_all(&output_dir) {
-        eprintln!("Error: Failed to create output directory: {}", e);
-        std::process::exit(1);
-    }
+    std::fs::create_dir_all(&output_dir)
+        .map_err(|e| format!("Failed to create output directory: {e}"))?;
 
     print_header(&project_path, &output_dir, &package);
 
@@ -230,12 +226,10 @@ pub fn cmd_extract(
         }
     }
 
-    let exit_code = match result.status.as_str() {
-        "success" => 0,
-        "verification_failed" => 0,
-        _ => 1,
-    };
-    std::process::exit(exit_code);
+    match result.status.as_str() {
+        "success" | "verification_failed" => Ok(()),
+        status => Err(format!("extract pipeline failed with status: {status}")),
+    }
 }
 
 fn print_header(project_path: &Path, output_dir: &Path, package: &Option<String>) {

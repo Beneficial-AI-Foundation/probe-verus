@@ -15,9 +15,7 @@ use clap::{Parser, Subcommand};
 use probe_verus::constants::DEFAULT_OUTPUT_DIR;
 use std::path::PathBuf;
 
-// Import command implementations
-mod commands;
-use commands::{
+use probe_verus::commands::{
     cmd_atomize, cmd_callee_crates, cmd_extract, cmd_functions, cmd_merge_atoms, cmd_run_verus,
     cmd_setup, cmd_specify, cmd_specs_data, cmd_stubify, cmd_tracked_csv, OutputFormat,
 };
@@ -514,7 +512,7 @@ fn main() {
             verus_args,
             separate_outputs,
         } => {
-            cmd_extract(
+            if let Err(e) = cmd_extract(
                 project_path,
                 output,
                 skip_atomize,
@@ -531,7 +529,10 @@ fn main() {
                 taxonomy_config,
                 verus_args,
                 separate_outputs,
-            );
+            ) {
+                eprintln!("Error: {e}");
+                std::process::exit(1);
+            }
         }
     }
 }

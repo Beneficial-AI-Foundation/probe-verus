@@ -5,9 +5,9 @@
 //! categorizes them, computes cross-references, and outputs JSON matching the
 //! existing specs_data.json schema consumed by docs/specs.js.
 
-use probe_verus::metadata::{find_project_root, gather_metadata, wrap_in_envelope};
-use probe_verus::verus_parser::{compute_project_prefix, parse_all_functions_ext, FunctionInfo};
-use probe_verus::DeclKind;
+use crate::metadata::{find_project_root, gather_metadata, wrap_in_envelope};
+use crate::verus_parser::{compute_project_prefix, parse_all_functions_ext, FunctionInfo};
+use crate::DeclKind;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};

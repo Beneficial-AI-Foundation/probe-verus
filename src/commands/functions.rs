@@ -1,6 +1,6 @@
 //! Functions command - List all functions in a Rust/Verus project.
 
-use probe_verus::verus_parser::{self, ParsedOutput};
+use crate::verus_parser::{self, ParsedOutput};
 use std::path::PathBuf;
 
 /// Output format for function listing.

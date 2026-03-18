@@ -1,6 +1,6 @@
 //! `setup` subcommand: install and manage external tool dependencies.
 
-use probe_verus::tool_manager;
+use crate::tool_manager;
 
 pub fn cmd_setup(status: bool) {
     if status {

@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::path::Path;
 
+pub mod commands;
 pub mod constants;
 pub mod error;
 pub mod metadata;

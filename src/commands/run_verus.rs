@@ -1,11 +1,11 @@
 //! Run-verus command - Run Verus verification and analyze results.
 
-use probe_verus::constants::{DATA_DIR, VERIFICATION_CONFIG_FILE, VERIFICATION_OUTPUT_FILE};
-use probe_verus::metadata::{
+use crate::constants::{DATA_DIR, VERIFICATION_CONFIG_FILE, VERIFICATION_OUTPUT_FILE};
+use crate::metadata::{
     find_default_atoms_path, gather_metadata, get_default_output_path, wrap_in_envelope,
     ExtractInternalConfig,
 };
-use probe_verus::verification::{
+use crate::verification::{
     convert_to_proofs_output, enrich_with_code_names, AnalysisResult, AnalysisStatus,
     VerificationAnalyzer, VerusRunner,
 };

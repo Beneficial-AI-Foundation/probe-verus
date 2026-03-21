@@ -85,8 +85,18 @@ runs:
           exit 1
         fi
         
-        # Extract [package.metadata.verus] section
+        # Extract [package.metadata.verus] section from root Cargo.toml
         METADATA=$(awk '/^\[package\.metadata\.verus\]/{flag=1;next}/^\[/{flag=0}flag' "$CARGO_TOML")
+        
+        # Workspace fallback: search member crate Cargo.toml files
+        if [ -z "$(echo "$METADATA" | tr -d '[:space:]')" ]; then
+          MEMBER_TOML=$(grep -rl '\[package\.metadata\.verus\]' "$PROJECT_PATH" --include='Cargo.toml' | head -1) || true
+          if [ -n "$MEMBER_TOML" ] && [ "$MEMBER_TOML" != "$CARGO_TOML" ]; then
+            echo "Found Verus metadata in member crate: $MEMBER_TOML"
+            METADATA=$(awk '/^\[package\.metadata\.verus\]/{flag=1;next}/^\[/{flag=0}flag' "$MEMBER_TOML")
+          fi
+        fi
+        
         echo "::debug::METADATA section: $METADATA"
         
         # Get Verus version: (1) explicit input, (2) metadata release, (3) dep rev lookup

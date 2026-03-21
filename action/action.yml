@@ -74,6 +74,8 @@ runs:
     - name: Extract versions from Cargo.toml
       id: versions
       shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
       run: |
         PROJECT_PATH="${{ inputs.project-path }}"
         CARGO_TOML="$PROJECT_PATH/Cargo.toml"
@@ -87,15 +89,52 @@ runs:
         METADATA=$(awk '/^\[package\.metadata\.verus\]/{flag=1;next}/^\[/{flag=0}flag' "$CARGO_TOML")
         echo "::debug::METADATA section: $METADATA"
         
-        # Get Verus version (from input or Cargo.toml)
+        # Get Verus version: (1) explicit input, (2) metadata release, (3) dep rev lookup
         VERUS_VERSION="${{ inputs.verus-version }}"
         if [ -z "$VERUS_VERSION" ]; then
           VERUS_VERSION=$(echo "$METADATA" | grep -E '^\s*release\s*=' | sed 's/.*= *"\([^"]*\)".*/\1/' | head -1) || true
-          if [ -z "$VERUS_VERSION" ]; then
-            echo "::error::No Verus version found. Provide verus-version input or add [package.metadata.verus] release to Cargo.toml"
-            exit 1
+          if [ -n "$VERUS_VERSION" ]; then
+            echo "Auto-detected Verus version from metadata: $VERUS_VERSION"
           fi
-          echo "Auto-detected Verus version: $VERUS_VERSION"
+        fi
+        
+        # Fallback: resolve from vstd/verus_builtin git dependency rev
+        if [ -z "$VERUS_VERSION" ]; then
+          REV=$(grep -rh 'vstd\|verus_builtin' "$PROJECT_PATH" --include='Cargo.toml' \
+            | sed -n 's/.*rev\s*=\s*"\([^"]*\)".*/\1/p' | head -1) || true
+        
+          if [ -n "$REV" ]; then
+            SHORT_REV="${REV:0:7}"
+            echo "Found Verus dependency rev: $REV (matching as $SHORT_REV)"
+        
+            for PAGE in 1 2 3 4 5; do
+              RESPONSE=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" \
+                "https://api.github.com/repos/verus-lang/verus/releases?per_page=100&page=$PAGE")
+        
+              MATCH=$(echo "$RESPONSE" | jq -r --arg rev "$SHORT_REV" \
+                '[.[] | select(.prerelease == false) | .tag_name | select(endswith($rev))] | .[0] // empty')
+        
+              if [ -n "$MATCH" ]; then
+                VERUS_VERSION=$(echo "$MATCH" | sed 's|^release/||')
+                echo "Resolved rev $SHORT_REV to Verus release: $VERUS_VERSION"
+                break
+              fi
+        
+              COUNT=$(echo "$RESPONSE" | jq 'length')
+              if [ "$COUNT" -lt 100 ]; then
+                break
+              fi
+            done
+        
+            if [ -z "$VERUS_VERSION" ]; then
+              echo "::warning::Found dependency rev $REV but could not match it to a Verus release"
+            fi
+          fi
+        fi
+        
+        if [ -z "$VERUS_VERSION" ]; then
+          echo "::error::No Verus version found. Provide verus-version input, add [package.metadata.verus] release to Cargo.toml, or use a vstd/verus_builtin dep with a rev matching a Verus release tag"
+          exit 1
         fi
         
         # Get Rust version (from input or Cargo.toml)

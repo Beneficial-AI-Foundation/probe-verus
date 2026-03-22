@@ -390,13 +390,15 @@ fn print_summary(result: &ExtractPipelineResult) {
 // Unified output merge
 // =============================================================================
 
-/// Deserialization target for specs entries (only the text fields we need).
+/// Deserialization target for specs entries (text fields + taxonomy labels).
 #[derive(Deserialize)]
 struct SpecsEntry {
     #[serde(default)]
     requires_text: Option<String>,
     #[serde(default)]
     ensures_text: Option<String>,
+    #[serde(rename = "spec-labels", default)]
+    spec_labels: Vec<String>,
 }
 
 /// Minimal deserialization target for proofs entries (only the `status` field).
@@ -492,6 +494,12 @@ pub fn merge_into_unified(
             .and_then(|p| p.get(&code_name))
             .map(|e| map_verification_status(&e.status).to_string());
 
+        let spec_labels: Vec<String> = specs
+            .as_ref()
+            .and_then(|s| s.get(&code_name))
+            .map(|e| e.spec_labels.clone())
+            .unwrap_or_default();
+
         unified.insert(
             code_name,
             UnifiedAtom {
@@ -502,6 +510,7 @@ pub fn merge_into_unified(
                 primary_spec: spec_text,
                 is_disabled,
                 verification_status,
+                spec_labels,
             },
         );
     }
@@ -677,7 +686,8 @@ mod tests {
                     "requires_text": "requires\n    x > 0",
                     "ensures_text": "ensures\n    result > x",
                     "requires-calls": ["is_valid"],
-                    "ensures-calls": ["helper"]
+                    "ensures-calls": ["helper"],
+                    "spec-labels": ["label-A", "label-B"]
                 },
                 "probe:test/0.1.0/module/bar()": {
                     "spec-text": {"lines-start": 30, "lines-end": 40},
@@ -736,6 +746,7 @@ mod tests {
             assert!(entry.verification_status.is_none());
             assert!(entry.primary_spec.is_none());
             assert!(entry.is_disabled.is_none());
+            assert!(entry.spec_labels.is_empty());
         }
         assert_eq!(
             result["probe:test/0.1.0/module/foo()"].atom.display_name,
@@ -759,15 +770,18 @@ mod tests {
             Some("requires\n    x > 0\nensures\n    result > x")
         );
         assert_eq!(foo.is_disabled, Some(false));
+        assert_eq!(foo.spec_labels, vec!["label-A", "label-B"]);
 
         let bar = &result["probe:test/0.1.0/module/bar()"];
         assert_eq!(bar.primary_spec.as_deref(), Some(""));
         assert_eq!(bar.is_disabled, Some(true));
+        assert!(bar.spec_labels.is_empty());
 
         // External stub has no spec match
         let ext = &result["probe:external/1.0.0/lib/ext()"];
         assert!(ext.primary_spec.is_none());
         assert!(ext.is_disabled.is_none());
+        assert!(ext.spec_labels.is_empty());
 
         // No proofs -> no verification-status
         for entry in result.values() {
@@ -802,6 +816,7 @@ mod tests {
         for entry in result.values() {
             assert!(entry.primary_spec.is_none());
             assert!(entry.is_disabled.is_none());
+            assert!(entry.spec_labels.is_empty());
         }
     }
 
@@ -822,16 +837,19 @@ mod tests {
         assert_eq!(foo.is_disabled, Some(false));
         assert_eq!(foo.verification_status.as_deref(), Some("verified"));
         assert_eq!(foo.atom.display_name, "foo");
+        assert_eq!(foo.spec_labels, vec!["label-A", "label-B"]);
 
         let bar = &result["probe:test/0.1.0/module/bar()"];
         assert_eq!(bar.primary_spec.as_deref(), Some(""));
         assert_eq!(bar.is_disabled, Some(true));
         assert_eq!(bar.verification_status.as_deref(), Some("failed"));
+        assert!(bar.spec_labels.is_empty());
 
         let ext = &result["probe:external/1.0.0/lib/ext()"];
         assert!(ext.primary_spec.is_none());
         assert!(ext.is_disabled.is_none());
         assert!(ext.verification_status.is_none());
+        assert!(ext.spec_labels.is_empty());
     }
 
     #[test]
@@ -862,16 +880,27 @@ mod tests {
         assert_eq!(foo_json["is-disabled"], false);
         assert_eq!(foo_json["kind"], "exec");
         assert_eq!(foo_json["language"], "verus");
+        let labels = foo_json["spec-labels"]
+            .as_array()
+            .expect("spec-labels should be an array");
+        assert_eq!(labels.len(), 2);
+        assert_eq!(labels[0], "label-A");
+        assert_eq!(labels[1], "label-B");
 
         let bar_json = &json["probe:test/0.1.0/module/bar()"];
         assert_eq!(bar_json["primary-spec"], "");
         assert_eq!(bar_json["is-disabled"], true);
         assert_eq!(bar_json["language"], "verus");
+        assert!(
+            bar_json.get("spec-labels").is_none(),
+            "Empty spec-labels should be omitted from JSON"
+        );
 
         let ext_json = &json["probe:external/1.0.0/lib/ext()"];
         assert!(ext_json.get("verification-status").is_none());
         assert!(ext_json.get("primary-spec").is_none());
         assert!(ext_json.get("is-disabled").is_none());
+        assert!(ext_json.get("spec-labels").is_none());
         assert_eq!(ext_json["language"], "rust");
     }
 

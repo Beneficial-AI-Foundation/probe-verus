@@ -24,7 +24,8 @@
       "requires_text": "requires\n    x > 0,\n    y < 100",
       "ensures_text": "ensures\n    result > x",
       "requires-calls": ["is_valid"],
-      "ensures-calls": ["helper_spec"]
+      "ensures-calls": ["helper_spec"],
+      "spec-labels": ["safety-critical", "arithmetic"]
     },
     "probe:test-crate/0.1.0/module/bar()": {
       "spec-text": { "lines-start": 30, "lines-end": 45 },

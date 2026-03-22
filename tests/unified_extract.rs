@@ -17,6 +17,8 @@ struct SpecsEntry {
     requires_text: Option<String>,
     #[serde(default)]
     ensures_text: Option<String>,
+    #[serde(rename = "spec-labels", default)]
+    spec_labels: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -94,6 +96,13 @@ fn merge_fixture_files(
             .as_ref()
             .and_then(|p| p.get(&code_name))
             .map(|e| map_verification_status(&e.status).to_string());
+
+        let spec_labels: Vec<String> = specs
+            .as_ref()
+            .and_then(|s| s.get(&code_name))
+            .map(|e| e.spec_labels.clone())
+            .unwrap_or_default();
+
         unified.insert(
             code_name,
             UnifiedAtom {
@@ -104,6 +113,7 @@ fn merge_fixture_files(
                 primary_spec: spec_text,
                 is_disabled,
                 verification_status,
+                spec_labels,
             },
         );
     }
@@ -210,12 +220,14 @@ fn test_full_merge_all_fields_populated() {
     assert!(!foo.primary_spec.as_ref().unwrap().is_empty());
     assert_eq!(foo.is_disabled, Some(false));
     assert_eq!(foo.verification_status.as_deref(), Some("verified"));
+    assert_eq!(foo.spec_labels, vec!["safety-critical", "arithmetic"]);
 
     let bar = &unified["probe:test-crate/0.1.0/module/bar()"];
     assert_eq!(bar.atom.display_name, "bar");
     assert_eq!(bar.primary_spec.as_deref(), Some(""));
     assert_eq!(bar.is_disabled, Some(true));
     assert_eq!(bar.verification_status.as_deref(), Some("failed"));
+    assert!(bar.spec_labels.is_empty());
 
     // baz has specs (ensures only) but no proofs entry
     let baz = &unified["probe:test-crate/0.1.0/module/baz()"];
@@ -223,6 +235,7 @@ fn test_full_merge_all_fields_populated() {
     assert!(!baz.primary_spec.as_ref().unwrap().is_empty());
     assert_eq!(baz.is_disabled, Some(false));
     assert!(baz.verification_status.is_none());
+    assert!(baz.spec_labels.is_empty());
 }
 
 #[test]
@@ -234,7 +247,7 @@ fn test_unified_json_serialization_format() {
 
     let json = serde_json::to_value(&unified).unwrap();
 
-    // foo: has specs, verification-status, is-disabled=false
+    // foo: has specs, verification-status, is-disabled=false, spec-labels
     let foo_json = &json["probe:test-crate/0.1.0/module/foo()"];
     assert_eq!(foo_json["display-name"], "foo");
     assert_eq!(foo_json["verification-status"], "verified");
@@ -243,13 +256,23 @@ fn test_unified_json_serialization_format() {
     assert_eq!(foo_json["is-disabled"], false);
     assert_eq!(foo_json["kind"], "exec");
     assert_eq!(foo_json["language"], "rust");
+    let labels = foo_json["spec-labels"]
+        .as_array()
+        .expect("spec-labels should be an array");
+    assert_eq!(labels.len(), 2);
+    assert_eq!(labels[0], "safety-critical");
+    assert_eq!(labels[1], "arithmetic");
 
-    // bar: analyzed but no specs -> empty string, is-disabled=true
+    // bar: analyzed but no specs -> empty string, is-disabled=true, no spec-labels
     let bar_json = &json["probe:test-crate/0.1.0/module/bar()"];
     assert_eq!(bar_json["primary-spec"], "");
     assert_eq!(bar_json["is-disabled"], true);
+    assert!(
+        bar_json.get("spec-labels").is_none(),
+        "Empty spec-labels should be omitted from JSON"
+    );
 
-    // ext: no verification-status, primary-spec, or is-disabled (skip_serializing_if)
+    // ext: no verification-status, primary-spec, is-disabled, or spec-labels (skip_serializing_if)
     let ext_json = &json["probe:external/1.0.0/lib/ext()"];
     assert_eq!(ext_json["display-name"], "ext");
     assert!(
@@ -263,6 +286,10 @@ fn test_unified_json_serialization_format() {
     assert!(
         ext_json.get("is-disabled").is_none(),
         "External stub should not have is-disabled in JSON"
+    );
+    assert!(
+        ext_json.get("spec-labels").is_none(),
+        "External stub should not have spec-labels in JSON"
     );
 }
 

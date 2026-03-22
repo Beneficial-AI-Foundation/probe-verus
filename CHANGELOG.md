@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 See the [Versioning Policy section in CLAUDE.md](CLAUDE.md#versioning-policy) for
 what constitutes a breaking change.
 
+## [Unreleased]
+
+### Added
+- **Backward compatibility test**: `tests/extract_backward_compat.rs` runs extract on `verus_micro` and compares output against a committed golden file. New additive fields are allowed; removed or changed fields fail. Use `BLESS=1` to regenerate the golden file after intentional changes.
+
+### Fixed
+- **Deterministic `dependencies-with-locations` ordering**: The array is now sorted by `(line, code_name)`. Previously, iteration order of the internal `HashSet<CalleeInfo>` could produce different orderings between runs.
+
+## [5.2.0] - 2026-03-22
+
+### Added
+- **`spec-labels` on `UnifiedAtom`**: Taxonomy classification labels from the `specify` step are now included in the unified `probe-verus/extract` output when `--taxonomy-config` is provided. The field is an array of strings, omitted when empty. ([#20](https://github.com/Beneficial-AI-Foundation/probe-verus/issues/20))
+
 ## [5.1.0] - 2026-03-17
 
 ### Changed
@@ -243,7 +256,10 @@ what constitutes a breaking change.
 
 Initial release. SCIP-based call graph generation for Rust/Verus projects.
 
-[Unreleased]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v4.0.0...HEAD
+[Unreleased]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v5.2.0...HEAD
+[5.2.0]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v5.1.0...v5.2.0
+[5.1.0]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v5.0.0...v5.1.0
+[5.0.0]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v4.0.0...v5.0.0
 [4.0.0]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v3.0.0...v4.0.0
 [3.0.0]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v2.1.0...v3.0.0
 [2.1.0]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v2.0.0...v2.1.0

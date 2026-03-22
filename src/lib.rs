@@ -138,7 +138,7 @@ pub struct CalleeInfo {
 }
 
 /// Location where a function call occurs
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CallLocation {
     /// Call in requires clause (precondition)
@@ -257,6 +257,9 @@ pub struct UnifiedAtom {
         skip_serializing_if = "Option::is_none"
     )]
     pub verification_status: Option<String>,
+    /// Taxonomy classification labels from the `specify` step (omitted when empty).
+    #[serde(rename = "spec-labels", skip_serializing_if = "Vec::is_empty", default)]
+    pub spec_labels: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1531,6 +1534,11 @@ fn convert_to_atoms_with_lines_internal(
 
             let code_module = extract_code_module(&code_name);
             let rqn = derive_rust_qualified_name(&data.node.relative_path, &data.node.display_name);
+            dependencies_with_locations.sort_by(|a, b| {
+                a.line
+                    .cmp(&b.line)
+                    .then_with(|| a.code_name.cmp(&b.code_name))
+            });
             AtomWithLines {
                 display_name: data.node.display_name.clone(),
                 code_name,

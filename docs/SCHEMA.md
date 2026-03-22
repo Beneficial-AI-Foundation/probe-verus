@@ -406,7 +406,8 @@ write the individual atoms, specs, and proofs files.
     "language": "rust",
     "primary-spec": "requires\n    x > 0,\n    y < 100\nensures\n    result > x",
     "is-disabled": false,
-    "verification-status": "verified"
+    "verification-status": "verified",
+    "spec-labels": ["safety-critical"]
   },
   "probe:my-crate/1.0.0/module/unspecified_fn()": {
     "display-name": "unspecified_fn",
@@ -445,6 +446,7 @@ optional fields are added:
 | `primary-spec` | string | no | Full spec text (requires + ensures concatenated). Empty string = analyzed, no spec. Absent = not analyzed. |
 | `is-disabled` | bool | no | `false` if the function has a spec; `true` otherwise. Absent for external stubs or when `--skip-specify`. |
 | `verification-status` | string | no | `"verified"`, `"failed"`, or `"unverified"` (absent when `--skip-verify`) |
+| `spec-labels` | array of strings | no | Taxonomy classification labels from `--taxonomy-config` (omitted when empty or when `--skip-specify`) |
 
 ### Dependency Categorization
 
@@ -474,10 +476,12 @@ the atomize step).  The three subcategory fields partition this union:
 ### Notes
 
 - External stubs (functions defined outside the workspace) will not have
-  `primary-spec`, `is-disabled`, or `verification-status` fields since they are not
-  parsed by specify or verified by run-verus.
+  `primary-spec`, `is-disabled`, `verification-status`, or `spec-labels` fields
+  since they are not parsed by specify or verified by run-verus.
 - When a pipeline step is skipped (`--skip-specify` or `--skip-verify`),
-  the corresponding field is absent from **all** entries.
+  the corresponding fields are absent from **all** entries.
+- `spec-labels` is only populated when `--taxonomy-config` is provided to
+  the `extract` command.
 
 ---
 

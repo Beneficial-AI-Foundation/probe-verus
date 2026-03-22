@@ -28,6 +28,10 @@ cargo test                     # All tests
 cargo test --lib --verbose     # Unit tests only
 cargo test --test duplicate_symbols --verbose    # Integration test
 cargo test --test function_coverage --verbose -- --nocapture
+cargo test --test extract_backward_compat -- --nocapture  # Backward compat (needs verus-analyzer, scip)
+
+# Update backward-compat golden file after intentional output changes
+BLESS=1 cargo test --test extract_backward_compat -- --nocapture
 
 # Code quality (all enforced in CI)
 cargo fmt --all                # Format code
@@ -56,7 +60,7 @@ src/
 
 ### Main Pipelines
 
-1. **Extract Pipeline** (`extract` command): Unified 3-step pipeline (atomize + specify + run-verus) producing a single unified JSON output (`probe-verus/extract` schema) where each atom includes optional `verification-status` and `specified` fields. Uses `--separate-outputs` to also write individual files. Recommended CI/Docker entrypoint.
+1. **Extract Pipeline** (`extract` command): Unified 3-step pipeline (atomize + specify + run-verus) producing a single unified JSON output (`probe-verus/extract` schema) where each atom includes optional `primary-spec`, `is-disabled`, `verification-status`, `spec-labels`, and categorized dependency fields. Uses `--separate-outputs` to also write individual files. Recommended CI/Docker entrypoint.
 2. **Atomize Pipeline** (`atomize` command): SCIP JSON → call graph parsing → spans via verus_syn → Schema 2.0 envelope → `.verilib/probes/`
 3. **List Functions Pipeline** (`list-functions` command): Source files → AST visitor → function list
 4. **Run-Verus Pipeline** (`run-verus` command): Cargo verus output → error parsing → function mapping → Schema 2.0 envelope → `.verilib/probes/`
@@ -85,7 +89,7 @@ src/
 
 - `FunctionNode`: Call graph node with callees and type context
 - `AtomWithLines`: Output format with line ranges
-- `UnifiedAtom`: `AtomWithLines` + optional `primary-spec` text, `is-disabled`, `verification-status`, and categorized dependency fields (extract pipeline output)
+- `UnifiedAtom`: `AtomWithLines` + optional `primary-spec` text, `is-disabled`, `verification-status`, `spec-labels`, and categorized dependency fields (extract pipeline output)
 - `FunctionInfo`: Function metadata with mode, specs, ensures/requires calls
 - `TaxonomyConfig`, `TaxonomyRule`, `MatchCriteria`: TOML-based spec classification rules
 - `FunctionInterval`: Interval tree entry for error→function mapping
@@ -125,6 +129,8 @@ Examples from history:
 This project follows [Semantic Versioning](https://semver.org/) (see [issue #7](https://github.com/Beneficial-AI-Foundation/probe-verus/issues/7)). Downstream tools like `verilib-cli` invoke `probe-verus` as a subprocess and depend on a stable CLI contract. The version number must accurately signal compatibility.
 
 All notable changes must be recorded in `CHANGELOG.md` using [Keep a Changelog](https://keepachangelog.com/) format.
+
+The backward compatibility test (`tests/extract_backward_compat.rs`) enforces JSON output stability by comparing extract output against a golden file. New additive fields pass; removed or changed fields fail. Update the golden file with `BLESS=1 cargo test --test extract_backward_compat -- --nocapture` when making intentional changes.
 
 ### What requires a major version bump
 

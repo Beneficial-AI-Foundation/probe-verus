@@ -1,0 +1,120 @@
+{
+  "data": {
+    "probe:verus-micro/0.1.0/checked_add()": {
+      "body-dependencies": [
+        "probe:verus-micro/0.1.0/is_positive()"
+      ],
+      "code-module": "",
+      "code-path": "src/lib.rs",
+      "code-text": {
+        "lines-end": 18,
+        "lines-start": 18
+      },
+      "dependencies": [
+        "probe:verus-micro/0.1.0/is_positive()"
+      ],
+      "dependencies-with-locations": [
+        {
+          "code-name": "probe:verus-micro/0.1.0/is_positive()",
+          "line": 20,
+          "location": "inner"
+        }
+      ],
+      "display-name": "checked_add",
+      "kind": "exec",
+      "language": "rust"
+    },
+    "probe:verus-micro/0.1.0/double_checked()": {
+      "body-dependencies": [
+        "probe:verus-micro/0.1.0/checked_add()",
+        "probe:verus-micro/0.1.0/is_positive()"
+      ],
+      "code-module": "",
+      "code-path": "src/lib.rs",
+      "code-text": {
+        "lines-end": 28,
+        "lines-start": 28
+      },
+      "dependencies": [
+        "probe:verus-micro/0.1.0/checked_add()",
+        "probe:verus-micro/0.1.0/is_positive()"
+      ],
+      "dependencies-with-locations": [
+        {
+          "code-name": "probe:verus-micro/0.1.0/is_positive()",
+          "line": 30,
+          "location": "inner"
+        },
+        {
+          "code-name": "probe:verus-micro/0.1.0/checked_add()",
+          "line": 35,
+          "location": "inner"
+        }
+      ],
+      "display-name": "double_checked",
+      "kind": "exec",
+      "language": "rust"
+    },
+    "probe:verus-micro/0.1.0/is_positive()": {
+      "code-module": "",
+      "code-path": "src/lib.rs",
+      "code-text": {
+        "lines-end": 5,
+        "lines-start": 5
+      },
+      "dependencies": [],
+      "display-name": "is_positive",
+      "kind": "exec",
+      "language": "rust"
+    },
+    "probe:verus-micro/0.1.0/positive_sum()": {
+      "body-dependencies": [
+        "probe:verus-micro/0.1.0/is_positive()"
+      ],
+      "code-module": "",
+      "code-path": "src/lib.rs",
+      "code-text": {
+        "lines-end": 9,
+        "lines-start": 9
+      },
+      "dependencies": [
+        "probe:verus-micro/0.1.0/is_positive()"
+      ],
+      "dependencies-with-locations": [
+        {
+          "code-name": "probe:verus-micro/0.1.0/is_positive()",
+          "line": 11,
+          "location": "inner"
+        },
+        {
+          "code-name": "probe:verus-micro/0.1.0/is_positive()",
+          "line": 12,
+          "location": "inner"
+        },
+        {
+          "code-name": "probe:verus-micro/0.1.0/is_positive()",
+          "line": 14,
+          "location": "inner"
+        }
+      ],
+      "display-name": "positive_sum",
+      "kind": "exec",
+      "language": "rust"
+    }
+  },
+  "schema": "probe-verus/extract",
+  "schema-version": "2.0",
+  "source": {
+    "commit": "",
+    "language": "rust",
+    "package": "verus-micro",
+    "package-version": "0.1.0",
+    "repo": ""
+  },
+  "timestamp": "2026-03-22T06:18:52Z",
+  "tool": {
+    "command": "extract",
+    "name": "probe-verus",
+    "version": "5.2.0"
+  }
+}

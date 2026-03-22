@@ -1,0 +1,347 @@
+# BAIF Verus Extract Action (Unified Pipeline)
+# Runs probe-verus extract: atomize + specify + run-verus in a single step
+#
+# Usage:
+#   - uses: beneficial-ai-foundation/probe-verus/action-extract@v5
+#     with:
+#       project-path: ./my-verus-crate
+#     # outputs: extract-file, extract-summary-file, verified-count, total-functions
+
+name: 'BAIF Verus Extract (Unified)'
+description: 'Run probe-verus extract: atomize + specify + run-verus unified pipeline with optional taxonomy'
+author: 'Beneficial AI Foundation'
+
+branding:
+  icon: 'check-circle'
+  color: 'green'
+
+inputs:
+  project-path:
+    description: 'Path to the Verus project (directory containing Cargo.toml with verus metadata)'
+    required: true
+  package:
+    description: 'Package name for workspace projects (passed to probe-verus extract -p)'
+    required: false
+    default: ''
+  verus-version:
+    description: 'Verus version to use (default: auto-detect from Cargo.toml [package.metadata.verus] release)'
+    required: false
+    default: ''
+  rust-version:
+    description: 'Rust toolchain version (default: auto-detect from Cargo.toml [package.metadata.verus] rust-version)'
+    required: false
+    default: ''
+  output-dir:
+    description: 'Directory for extract_summary.json (default: current directory)'
+    required: false
+    default: '.'
+  token:
+    description: 'GitHub token for API calls (avoids rate limiting)'
+    required: false
+    default: ${{ github.token }}
+  verus-args:
+    description: 'Extra arguments passed to Verus (e.g. --log smt --log-dir ./smt-logs -V spinoff-all)'
+    required: false
+    default: ''
+  taxonomy-config:
+    description: 'Path to spec-taxonomy.toml for spec classification labels (auto-detects at project root if absent)'
+    required: false
+    default: ''
+
+outputs:
+  extract-file:
+    description: 'Path to the unified probe-verus/extract JSON (merged atoms+specs+proofs)'
+    value: ${{ steps.extract.outputs.extract_file }}
+  extract-summary-file:
+    description: 'Path to extract_summary.json'
+    value: ${{ steps.extract.outputs.summary_file }}
+  verified-count:
+    description: 'Number of functions verified'
+    value: ${{ steps.extract.outputs.verified_count }}
+  total-functions:
+    description: 'Total number of functions'
+    value: ${{ steps.extract.outputs.total_count }}
+  verus-version:
+    description: 'Verus version used for verification'
+    value: ${{ steps.versions.outputs.verus_version }}
+  rust-version:
+    description: 'Rust toolchain version used'
+    value: ${{ steps.versions.outputs.rust_version }}
+  smt-log-dir:
+    description: 'Path to the SMT log directory (if verus-args includes --log smt)'
+    value: ${{ steps.extract.outputs.smt_log_dir }}
+
+runs:
+  using: 'composite'
+  steps:
+    # Step 1: Extract versions from Cargo.toml if not provided
+    - name: Extract versions from Cargo.toml
+      id: versions
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+      run: |
+        PROJECT_PATH="${{ inputs.project-path }}"
+        CARGO_TOML="$PROJECT_PATH/Cargo.toml"
+
+        if [ ! -f "$CARGO_TOML" ]; then
+          echo "::error::Cargo.toml not found at $CARGO_TOML"
+          exit 1
+        fi
+
+        # Extract [package.metadata.verus] section from root Cargo.toml
+        METADATA=$(awk '/^\[package\.metadata\.verus\]/{flag=1;next}/^\[/{flag=0}flag' "$CARGO_TOML")
+
+        # Workspace fallback: search member crate Cargo.toml files
+        if [ -z "$(echo "$METADATA" | tr -d '[:space:]')" ]; then
+          MEMBER_TOML=$(grep -rl '\[package\.metadata\.verus\]' "$PROJECT_PATH" --include='Cargo.toml' | head -1) || true
+          if [ -n "$MEMBER_TOML" ] && [ "$MEMBER_TOML" != "$CARGO_TOML" ]; then
+            echo "Found Verus metadata in member crate: $MEMBER_TOML"
+            METADATA=$(awk '/^\[package\.metadata\.verus\]/{flag=1;next}/^\[/{flag=0}flag' "$MEMBER_TOML")
+          fi
+        fi
+
+        echo "::debug::METADATA section: $METADATA"
+
+        # Get Verus version: (1) explicit input, (2) metadata release, (3) dep rev lookup
+        VERUS_VERSION="${{ inputs.verus-version }}"
+        if [ -z "$VERUS_VERSION" ]; then
+          VERUS_VERSION=$(echo "$METADATA" | grep -E '^\s*release\s*=' | sed 's/.*= *"\([^"]*\)".*/\1/' | head -1) || true
+          if [ -n "$VERUS_VERSION" ]; then
+            echo "Auto-detected Verus version from metadata: $VERUS_VERSION"
+          fi
+        fi
+
+        # Fallback: resolve from vstd/verus_builtin git dependency rev
+        if [ -z "$VERUS_VERSION" ]; then
+          REV=$(grep -rh 'vstd\|verus_builtin' "$PROJECT_PATH" --include='Cargo.toml' \
+            | sed -n 's/.*rev\s*=\s*"\([^"]*\)".*/\1/p' | head -1) || true
+
+          if [ -n "$REV" ]; then
+            SHORT_REV="${REV:0:7}"
+            echo "Found Verus dependency rev: $REV (matching as $SHORT_REV)"
+
+            for PAGE in 1 2 3 4 5; do
+              RESPONSE=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" \
+                "https://api.github.com/repos/verus-lang/verus/releases?per_page=100&page=$PAGE")
+
+              MATCH=$(echo "$RESPONSE" | jq -r --arg rev "$SHORT_REV" \
+                '[.[] | select(.prerelease == false) | .tag_name | select(endswith($rev))] | .[0] // empty')
+
+              if [ -n "$MATCH" ]; then
+                VERUS_VERSION=$(echo "$MATCH" | sed 's|^release/||')
+                echo "Resolved rev $SHORT_REV to Verus release: $VERUS_VERSION"
+                break
+              fi
+
+              COUNT=$(echo "$RESPONSE" | jq 'length')
+              if [ "$COUNT" -lt 100 ]; then
+                break
+              fi
+            done
+
+            if [ -z "$VERUS_VERSION" ]; then
+              echo "::warning::Found dependency rev $REV but could not match it to a Verus release"
+            fi
+          fi
+        fi
+
+        if [ -z "$VERUS_VERSION" ]; then
+          echo "::error::No Verus version found. Provide verus-version input, add [package.metadata.verus] release to Cargo.toml, or use a vstd/verus_builtin dep with a rev matching a Verus release tag"
+          exit 1
+        fi
+
+        # Get Rust version (from input or Cargo.toml)
+        RUST_VERSION="${{ inputs.rust-version }}"
+        if [ -z "$RUST_VERSION" ]; then
+          RUST_VERSION=$(echo "$METADATA" | grep -E '^\s*rust-version\s*=' | sed 's/.*= *"\([^"]*\)".*/\1/' | head -1) || true
+          if [ -z "$RUST_VERSION" ]; then
+            RUST_VERSION="stable"
+            echo "No Rust version found, using: $RUST_VERSION"
+          else
+            echo "Auto-detected Rust version: $RUST_VERSION"
+          fi
+        fi
+
+        echo "verus_version=$VERUS_VERSION" >> $GITHUB_OUTPUT
+        echo "rust_version=$RUST_VERSION" >> $GITHUB_OUTPUT
+
+    # Step 2: Install Rust toolchain
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: ${{ steps.versions.outputs.rust_version }}
+
+    # Step 3: Cache cargo registry
+    - name: Cache cargo registry
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          ~/.cargo/bin
+        key: ${{ runner.os }}-cargo-verus-${{ steps.versions.outputs.verus_version }}-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-verus-${{ steps.versions.outputs.verus_version }}-
+          ${{ runner.os }}-cargo-verus-
+          ${{ runner.os }}-cargo-
+
+    # Step 4: Install verus-analyzer
+    - name: Install verus-analyzer
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+      run: |
+        if command -v verus-analyzer &> /dev/null; then
+          echo "verus-analyzer already installed (from cache)"
+          verus-analyzer --version
+        else
+          echo "Installing verus-analyzer..."
+          VERUS_URL=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" \
+            https://api.github.com/repos/verus-lang/verus-analyzer/releases/latest | \
+            jq -r '.assets[] | select(.name == "verus-analyzer-x86_64-unknown-linux-gnu.gz") | .browser_download_url')
+          if [ -z "$VERUS_URL" ] || [ "$VERUS_URL" = "null" ]; then
+            echo "::error::Failed to determine verus-analyzer download URL from GitHub API"
+            exit 1
+          fi
+          wget -q "$VERUS_URL" -O verus-analyzer.gz
+          gunzip verus-analyzer.gz
+          chmod +x verus-analyzer
+          sudo mv verus-analyzer /usr/local/bin/
+          verus-analyzer --version
+        fi
+
+    # Step 5: Install Verus
+    - name: Install Verus
+      shell: bash
+      env:
+        VERUS_VERSION: ${{ steps.versions.outputs.verus_version }}
+      run: |
+        if [ -x ~/.cargo/bin/verus-x86-linux/verus ]; then
+          CACHED_VERSION=$(~/.cargo/bin/verus-x86-linux/verus --version 2>/dev/null | head -1 || echo "unknown")
+          if echo "$CACHED_VERSION" | grep -q "$VERUS_VERSION"; then
+            echo "Verus $VERUS_VERSION already installed (from cache)"
+            exit 0
+          else
+            echo "Cached Verus version mismatch, reinstalling..."
+            rm -rf ~/.cargo/bin/verus-x86-linux
+          fi
+        fi
+
+        echo "Installing Verus $VERUS_VERSION..."
+        VERUS_URL="https://github.com/verus-lang/verus/releases/download/release%2F${VERUS_VERSION}/verus-${VERUS_VERSION}-x86-linux.zip"
+        wget -q "$VERUS_URL" -O verus.zip
+        unzip -q verus.zip
+        mv verus-x86-linux ~/.cargo/bin/
+        cd ~/.cargo/bin
+        ln -sf verus-x86-linux/cargo-verus
+        echo "Verus $VERUS_VERSION installed"
+
+    # Step 6: Install scip CLI
+    - name: Install scip CLI
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+      run: |
+        if command -v scip &> /dev/null; then
+          echo "scip already installed (from cache)"
+          scip --version
+        else
+          echo "Installing scip..."
+          SCIP_URL=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" \
+            https://api.github.com/repos/sourcegraph/scip/releases/latest | \
+            jq -r '.assets[] | select(.name == "scip-linux-amd64.tar.gz") | .browser_download_url')
+          if [ -z "$SCIP_URL" ] || [ "$SCIP_URL" = "null" ]; then
+            echo "::error::Failed to determine SCIP download URL from GitHub API"
+            exit 1
+          fi
+          wget -q "$SCIP_URL" -O scip-linux.tar.gz
+          tar -xzf scip-linux.tar.gz
+          chmod +x scip
+          sudo mv scip /usr/local/bin/
+          scip --version
+        fi
+
+    # Step 7: Install probe-verus
+    - name: Install probe-verus
+      shell: bash
+      run: |
+        echo "Installing probe-verus..."
+        cargo install --force --git https://github.com/Beneficial-AI-Foundation/probe-verus
+        probe-verus --version || echo "probe-verus installed"
+
+    # Step 8: Run probe-verus extract (unified pipeline)
+    - name: Run probe-verus extract
+      id: extract
+      shell: bash
+      run: |
+        PROJECT_PATH="${{ inputs.project-path }}"
+        OUTPUT_DIR="${{ inputs.output-dir }}"
+        PACKAGE="${{ inputs.package }}"
+        VERUS_ARGS="${{ inputs.verus-args }}"
+        TAXONOMY_CONFIG="${{ inputs.taxonomy-config }}"
+
+        mkdir -p "$OUTPUT_DIR"
+
+        echo "=== Running probe-verus extract ==="
+        echo "Project: $PROJECT_PATH"
+        echo "Output:  $OUTPUT_DIR"
+
+        CMD="probe-verus extract $PROJECT_PATH -o $OUTPUT_DIR --separate-outputs --auto-install"
+
+        if [ -n "$PACKAGE" ]; then
+          CMD="$CMD -p $PACKAGE"
+        fi
+
+        # Auto-detect taxonomy config at project root if not provided
+        if [ -z "$TAXONOMY_CONFIG" ] && [ -f "$PROJECT_PATH/spec-taxonomy.toml" ]; then
+          TAXONOMY_CONFIG="$PROJECT_PATH/spec-taxonomy.toml"
+          echo "Auto-detected taxonomy config: $TAXONOMY_CONFIG"
+        fi
+        if [ -n "$TAXONOMY_CONFIG" ]; then
+          CMD="$CMD --taxonomy-config $TAXONOMY_CONFIG"
+        fi
+
+        if [ -n "$VERUS_ARGS" ]; then
+          CMD="$CMD --verus-args $VERUS_ARGS"
+        fi
+
+        echo "Running: $CMD"
+        $CMD
+
+        # Locate the unified extract output in .verilib/probes/
+        EXTRACT_FILE=$(find "$PROJECT_PATH/.verilib/probes" -name '*_extract.json' -type f 2>/dev/null | head -1)
+        if [ -z "$EXTRACT_FILE" ]; then
+          echo "::warning::Unified extract output not found in .verilib/probes/"
+        else
+          echo "extract_file=$(realpath "$EXTRACT_FILE")" >> $GITHUB_OUTPUT
+        fi
+
+        # Parse extract_summary.json for verification counts
+        SUMMARY_FILE="$OUTPUT_DIR/extract_summary.json"
+        if [ -f "$SUMMARY_FILE" ]; then
+          echo "summary_file=$(realpath "$SUMMARY_FILE")" >> $GITHUB_OUTPUT
+
+          VERIFIED=$(jq -r '.data.verify.summary.verified // 0' "$SUMMARY_FILE")
+          TOTAL=$(jq -r '.data.verify.summary.total_functions // 0' "$SUMMARY_FILE")
+          echo "verified_count=$VERIFIED" >> $GITHUB_OUTPUT
+          echo "total_count=$TOTAL" >> $GITHUB_OUTPUT
+
+          echo ""
+          echo "=== Extract Results ==="
+          echo "Verified: $VERIFIED / $TOTAL"
+        else
+          echo "::warning::extract_summary.json not found at $SUMMARY_FILE"
+          echo "verified_count=0" >> $GITHUB_OUTPUT
+          echo "total_count=0" >> $GITHUB_OUTPUT
+        fi
+
+        # Expose SMT log directory if verus-args included --log-dir
+        SMT_LOG_DIR=""
+        if echo "$VERUS_ARGS" | grep -q "\-\-log-dir"; then
+          SMT_LOG_DIR=$(echo "$VERUS_ARGS" | grep -oP '(?<=--log-dir\s)\S+')
+          if [ -n "$SMT_LOG_DIR" ] && [ -d "$PROJECT_PATH/$SMT_LOG_DIR" ]; then
+            SMT_LOG_DIR="$PROJECT_PATH/$SMT_LOG_DIR"
+          fi
+        fi
+        echo "smt_log_dir=$SMT_LOG_DIR" >> $GITHUB_OUTPUT

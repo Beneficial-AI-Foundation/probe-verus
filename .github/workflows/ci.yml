@@ -129,13 +129,9 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-integ-
 
-      - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
-
       - name: Install verus-analyzer
         run: |
-          VERUS_URL=$(curl -s https://api.github.com/repos/verus-lang/verus-analyzer/releases/latest | jq -r '.assets[] | select(.name == "verus-analyzer-x86_64-unknown-linux-gnu.gz") | .browser_download_url')
-          wget "$VERUS_URL" -O verus-analyzer.gz
+          wget -q "https://github.com/verus-lang/verus-analyzer/releases/latest/download/verus-analyzer-x86_64-unknown-linux-gnu.gz" -O verus-analyzer.gz
           gunzip verus-analyzer.gz
           chmod +x verus-analyzer
           sudo mv verus-analyzer /usr/local/bin/
@@ -143,8 +139,7 @@ jobs:
 
       - name: Install scip
         run: |
-          SCIP_URL=$(curl -s https://api.github.com/repos/sourcegraph/scip/releases/latest | jq -r '.assets[] | select(.name == "scip-linux-amd64.tar.gz") | .browser_download_url')
-          wget "$SCIP_URL" -O scip-linux.tar.gz
+          wget -q "https://github.com/sourcegraph/scip/releases/latest/download/scip-linux-amd64.tar.gz" -O scip-linux.tar.gz
           tar -xzf scip-linux.tar.gz
           chmod +x scip
           sudo mv scip /usr/local/bin/

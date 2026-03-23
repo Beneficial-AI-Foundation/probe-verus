@@ -124,6 +124,16 @@ Examples from history:
 - `fix(verification): update atoms.json reader for new schema`
 - `perf(verify): use interval tree for error-to-function mapping`
 
+## Probe Ecosystem Knowledge Base
+
+The **probe KB** in the sibling `probe` repo (`baif/probe/kb/`) is the source of truth for cross-cutting properties and schema definitions. Key references:
+
+- **`kb/engineering/properties.md`** -- Properties P1–P19 that all probe tools must satisfy (e.g., P14: deterministic output, P15: dependency completeness)
+- **`kb/engineering/schema.md`** -- Schema 2.0 envelope and atom field definitions
+- **`kb/tools/probe-verus.md`** -- probe-verus-specific documentation in the KB
+
+If implementation contradicts the KB, fix the code, not the KB.
+
 ## Versioning Policy
 
 This project follows [Semantic Versioning](https://semver.org/) (see [issue #7](https://github.com/Beneficial-AI-Foundation/probe-verus/issues/7)). Downstream tools like `verilib-cli` invoke `probe-verus` as a subprocess and depend on a stable CLI contract. The version number must accurately signal compatibility.

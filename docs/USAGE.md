@@ -329,16 +329,33 @@ ensures_calls_contain = ["spec_", "_to_nat"]
 |-----------|------|-------------|
 | `mode` | string list | Function mode: `exec`, `proof`, `spec` |
 | `context` | string list | Function context: `impl`, `trait`, `standalone` |
-| `ensures_calls_contain` | substring list | Match against function names called in ensures |
-| `requires_calls_contain` | substring list | Match against function names called in requires |
+| `ensures_calls_contain` | substring list | Any ensures call name contains any substring |
+| `requires_calls_contain` | substring list | Any requires call name contains any substring |
+| `ensures_calls_full_contain` | substring list | Match against full qualified paths in ensures |
+| `requires_calls_full_contain` | substring list | Match against full qualified paths in requires |
+| `ensures_fn_calls_contain` | substring list | Match only function calls (not method calls) in ensures |
+| `ensures_method_calls_contain` | substring list | Match only method calls in ensures |
+| `requires_fn_calls_contain` | substring list | Match only function calls in requires |
+| `requires_method_calls_contain` | substring list | Match only method calls in requires |
 | `name_contains` | substring list | Match against function display name |
 | `path_contains` | substring list | Match against code-path |
 | `has_ensures` | bool | Whether function has ensures clause |
 | `has_requires` | bool | Whether function has requires clause |
 | `has_decreases` | bool | Whether function has decreases clause |
 | `has_trusted_assumption` | bool | Whether function uses assume()/admit() |
+| `ensures_calls_empty` | bool | Ensures clause has zero function calls |
+| `requires_calls_empty` | bool | Requires clause has zero function calls |
 
-Example taxonomy configs are in [`spec_taxonomy_examples/`](../spec_taxonomy_examples/).
+**Stop words** (optional): Add `stop_words = ["len", "old", "unwrap", ...]` to the
+`[taxonomy]` table to filter out noisy utility call names from ensures/requires before
+rule evaluation.
+
+Use `--taxonomy-explain` to debug rule matching (prints per-function match/miss details to stderr).
+
+Starter configs are in [`spec_taxonomy_examples/`](../spec_taxonomy_examples/). For a comprehensive
+real-world example (17 rules, 14 domain categories for elliptic-curve cryptography), see the
+[dalek-lite spec-taxonomy.toml](https://github.com/Beneficial-AI-Foundation/dalek-lite/blob/main/spec-taxonomy.toml).
+See [SPEC_TAXONOMY_DESIGN.md](SPEC_TAXONOMY_DESIGN.md) for the full design analysis.
 
 ---
 

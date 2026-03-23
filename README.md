@@ -72,7 +72,7 @@ Running `probe-verus extract` produces a JSON envelope. Each entry in `data` des
 {
   "schema": "probe-verus/extract",
   "schema-version": "2.0",
-  "tool": { "name": "probe-verus", "version": "2.0.0", "command": "extract" },
+  "tool": { "name": "probe-verus", "version": "5.2.0", "command": "extract" },
   "source": {
     "repo": "https://github.com/org/project",
     "commit": "abc123...",

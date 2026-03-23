@@ -17,7 +17,7 @@ All JSON outputs follow the [Schema 2.0 envelope](https://github.com/Beneficial-
   "schema-version": "2.0",
   "tool": {
     "name": "probe-verus",
-    "version": "2.0.0",
+    "version": "5.2.0",
     "command": "atomize"
   },
   "source": {
@@ -162,9 +162,10 @@ Previously named `mode` (renamed in v2.0.0).
 
 ### `language` (string)
 
-Source language of the function. Currently always `"rust"` for probe-verus output.
+Source language of the function. `"verus"` for functions inside `verus!{}` blocks,
+`"rust"` for plain Rust functions.
 
-Added in v2.0.0.
+Added in v2.0.0. Verus/Rust distinction added in v5.1.0.
 
 ## External Function Stubs
 
@@ -182,7 +183,7 @@ external crates), it creates lightweight stub entries. Stubs can be identified b
   "schema-version": "2.0",
   "tool": {
     "name": "probe-verus",
-    "version": "2.0.0",
+    "version": "5.2.0",
     "command": "atomize"
   },
   "source": {
@@ -329,12 +330,17 @@ let atoms = envelope.data;
 
 ## Version History
 
+### v5.1.0 (2026-03-17)
+
+- `language` field is now `"verus"` for functions inside `verus!{}` blocks,
+  `"rust"` for plain Rust functions (previously always `"rust"`)
+
 ### v2.0.0 (2026-03-06)
 
 - **Breaking**: All JSON outputs wrapped in Schema 2.0 metadata envelope
 - **Breaking**: `mode` field renamed to `kind` (declaration kind)
-- Added `language` field (always `"rust"` for probe-verus)
-- Default output path changed to `.verilib/probes/verus_<pkg>_<ver>.json`
+- Added `language` field (`"rust"` for all functions)
+- Default output path changed to `.verilib/probes/verus_<pkg>_<ver>_atoms.json`
 - Consumers must unwrap the `data` field from the envelope
 
 ### v1.2.0 (2026-02-28)

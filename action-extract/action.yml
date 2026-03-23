@@ -310,7 +310,11 @@ runs:
         $CMD
 
         # Locate the unified extract output in .verilib/probes/
-        EXTRACT_FILE=$(find "$PROJECT_PATH/.verilib/probes" -name '*_extract.json' -type f 2>/dev/null | head -1)
+        # probe-verus names it verus_<crate>_<version>.json (no suffix),
+        # while separate outputs use _atoms.json, _specs.json, _proofs.json
+        EXTRACT_FILE=$(find "$PROJECT_PATH/.verilib/probes" -name 'verus_*.json' \
+          -not -name '*_atoms.json' -not -name '*_specs.json' -not -name '*_proofs.json' \
+          -type f 2>/dev/null | head -1)
         if [ -z "$EXTRACT_FILE" ]; then
           echo "::warning::Unified extract output not found in .verilib/probes/"
         else

@@ -26,30 +26,25 @@ docker build -t probe-verus -f docker/Dockerfile .
 # Or directly with docker (using pre-built image)
 docker run --rm --user root \
   -v /path/to/project:/workspace/project \
-  -v /path/to/output:/workspace/output \
   ghcr.io/beneficial-ai-foundation/probe-verus:latest \
-  /workspace/project -o /workspace/output [OPTIONS]
+  /workspace/project [OPTIONS]
 ```
 
 **Options:**
-- `-o, --output <dir>` - Output directory (default: ./output)
 - `--skip-atomize` - Skip the atomize step
 - `--skip-specify` - Skip the specify step
 - `--skip-verify` - Skip the run-verus step
-- `--separate-outputs` - Also write individual atoms, specs, and proofs files
 - `-p, --package <name>` - Package name for workspace projects
 - `--regenerate-scip` - Force regeneration of the SCIP index
 - `-v, --verbose` - Enable verbose output
 - `--taxonomy-config <PATH>` - Path to TOML file for spec classification
 
-**Output files (in the output directory):**
-- `verus_<pkg>_<ver>_extract.json` - Unified extract output (atoms + specs + verification)
-- `extract_summary.json` - Overall pipeline status
-
-**Additional output files (with `--separate-outputs`):**
-- `.verilib/probes/verus_<pkg>_<ver>_atoms.json` - Call graph atoms
-- `.verilib/probes/verus_<pkg>_<ver>_specs.json` - Function specifications
-- `.verilib/probes/verus_<pkg>_<ver>_proofs.json` - Verification results
+**Output files (in `<project>/.verilib/probes/`):**
+- `verus_<pkg>_<ver>.json` - Unified extract output (atoms + specs + verification)
+- `verus_<pkg>_<ver>_extract_summary.json` - Overall pipeline status
+- `verus_<pkg>_<ver>_atoms.json` - Call graph atoms
+- `verus_<pkg>_<ver>_specs.json` - Function specifications
+- `verus_<pkg>_<ver>_proofs.json` - Verification results
 
 All JSON outputs are wrapped in a [Schema 2.0 metadata envelope](https://github.com/Beneficial-AI-Foundation/probe/blob/main/docs/envelope-rationale.md). Use `jq '.data'` to access the payload.
 
@@ -61,9 +56,8 @@ All JSON outputs are wrapped in a [Schema 2.0 metadata envelope](https://github.
 # For a Cargo workspace, specify the package to verify
 docker run --rm --user root \
   -v ~/my-workspace:/workspace/project \
-  -v ~/output:/workspace/output \
   ghcr.io/beneficial-ai-foundation/probe-verus:latest \
-  /workspace/project -o /workspace/output --package my-crate
+  /workspace/project --package my-crate
 ```
 
 ### Atomize only (skip verification)
@@ -71,9 +65,8 @@ docker run --rm --user root \
 ```bash
 docker run --rm --user root \
   -v ~/my-project:/workspace/project \
-  -v ~/output:/workspace/output \
   ghcr.io/beneficial-ai-foundation/probe-verus:latest \
-  /workspace/project -o /workspace/output --atomize-only
+  /workspace/project --skip-verify --skip-specify
 ```
 
 ### Force SCIP regeneration
@@ -81,9 +74,8 @@ docker run --rm --user root \
 ```bash
 docker run --rm --user root \
   -v ~/my-project:/workspace/project \
-  -v ~/output:/workspace/output \
   ghcr.io/beneficial-ai-foundation/probe-verus:latest \
-  /workspace/project -o /workspace/output --regenerate-scip
+  /workspace/project --regenerate-scip
 ```
 
 ### Verbose output for debugging
@@ -91,9 +83,8 @@ docker run --rm --user root \
 ```bash
 docker run --rm --user root \
   -v ~/my-project:/workspace/project \
-  -v ~/output:/workspace/output \
   ghcr.io/beneficial-ai-foundation/probe-verus:latest \
-  /workspace/project -o /workspace/output --verbose
+  /workspace/project --verbose
 ```
 
 ## Output Files
@@ -102,11 +93,11 @@ All JSON outputs are wrapped in a [Schema 2.0 metadata envelope](https://github.
 
 | File | Location | Description |
 |------|----------|-------------|
-| `verus_<pkg>_<ver>_extract.json` | `<output-dir>/` | Unified extract output (atoms + specs + verification) |
-| `extract_summary.json` | `<output-dir>/` | Pipeline status and summary |
-| `verus_<pkg>_<ver>_atoms.json` | `<project>/.verilib/probes/` | Call graph atoms (with `--separate-outputs`) |
-| `verus_<pkg>_<ver>_specs.json` | `<project>/.verilib/probes/` | Function specifications (with `--separate-outputs`) |
-| `verus_<pkg>_<ver>_proofs.json` | `<project>/.verilib/probes/` | Verification results (with `--separate-outputs`) |
+| `verus_<pkg>_<ver>.json` | `<project>/.verilib/probes/` | Unified extract output (atoms + specs + verification) |
+| `verus_<pkg>_<ver>_extract_summary.json` | `<project>/.verilib/probes/` | Pipeline status and summary |
+| `verus_<pkg>_<ver>_atoms.json` | `<project>/.verilib/probes/` | Call graph atoms |
+| `verus_<pkg>_<ver>_specs.json` | `<project>/.verilib/probes/` | Function specifications |
+| `verus_<pkg>_<ver>_proofs.json` | `<project>/.verilib/probes/` | Verification results |
 
 ### Extract format (`probe-verus/extract`)
 
@@ -232,19 +223,15 @@ docker run --rm --user root -v ... probe-verus ...
 
 ### Permission denied on output directory
 
-The container runs as UID 1000 by default. Make sure your output directory is writable:
-
-```bash
-mkdir -p ./output
-chmod 777 ./output  # Or use matching UID
-```
+The container runs as UID 1000 by default. Make sure the project directory is writable
+(outputs are written to `<project>/.verilib/probes/`).
 
 ### SCIP index errors
 
 Try regenerating the SCIP index:
 
 ```bash
-docker run ... probe-verus /workspace/project -o /workspace/output --regenerate-scip
+docker run ... probe-verus /workspace/project --regenerate-scip
 ```
 
 ### Debugging issues
@@ -252,7 +239,7 @@ docker run ... probe-verus /workspace/project -o /workspace/output --regenerate-
 Use verbose mode to see detailed output:
 
 ```bash
-docker run ... probe-verus /workspace/project -o /workspace/output --verbose
+docker run ... probe-verus /workspace/project --verbose
 ```
 
 ### Verification timeout
@@ -269,9 +256,6 @@ The `run.sh` script simplifies common usage:
 
 # With options
 ./docker/run.sh ~/my-project --package my-crate --verbose
-
-# Custom output directory
-./docker/run.sh ~/my-project --output ./my-output
 
 # Use locally built image instead
 PROBE_VERUS_IMAGE=probe-verus ./docker/run.sh ~/my-project

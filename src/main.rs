@@ -12,7 +12,6 @@
 //! - `extract`: Unified pipeline - atomize + specify + run-verus
 
 use clap::{Parser, Subcommand};
-use probe_verus::constants::DEFAULT_OUTPUT_DIR;
 use std::path::PathBuf;
 
 use probe_verus::commands::{
@@ -294,10 +293,6 @@ enum Commands {
         /// Path to the Rust/Verus project
         project_path: PathBuf,
 
-        /// Output directory for the extract_summary.json (default: ./output)
-        #[arg(short, long, default_value = DEFAULT_OUTPUT_DIR)]
-        output: PathBuf,
-
         /// Skip the atomize step
         #[arg(long)]
         skip_atomize: bool,
@@ -349,10 +344,6 @@ enum Commands {
         /// Extra arguments passed to Verus (e.g. --log smt --log-dir ./smt-logs)
         #[arg(long, num_args = 1.., allow_hyphen_values = true)]
         verus_args: Vec<String>,
-
-        /// Also write separate atoms, specs, and proofs files (in addition to unified output)
-        #[arg(long)]
-        separate_outputs: bool,
     },
 }
 
@@ -520,7 +511,6 @@ fn main() {
         }
         Commands::Extract {
             project_path,
-            output,
             skip_atomize,
             skip_specify,
             skip_verify,
@@ -534,11 +524,9 @@ fn main() {
             with_spec_text,
             taxonomy_config,
             verus_args,
-            separate_outputs,
         } => {
             if let Err(e) = cmd_extract(
                 project_path,
-                output,
                 skip_atomize,
                 skip_specify,
                 skip_verify,
@@ -552,7 +540,6 @@ fn main() {
                 with_spec_text,
                 taxonomy_config,
                 verus_args,
-                separate_outputs,
             ) {
                 eprintln!("Error: {e}");
                 std::process::exit(1);

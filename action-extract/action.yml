@@ -31,10 +31,6 @@ inputs:
     description: 'Rust toolchain version (default: auto-detect from Cargo.toml [package.metadata.verus] rust-version)'
     required: false
     default: ''
-  output-dir:
-    description: 'Directory for extract_summary.json (default: current directory)'
-    required: false
-    default: '.'
   token:
     description: 'GitHub token for API calls (avoids rate limiting)'
     required: false
@@ -276,18 +272,14 @@ runs:
       shell: bash
       run: |
         PROJECT_PATH="${{ inputs.project-path }}"
-        OUTPUT_DIR="${{ inputs.output-dir }}"
         PACKAGE="${{ inputs.package }}"
         VERUS_ARGS="${{ inputs.verus-args }}"
         TAXONOMY_CONFIG="${{ inputs.taxonomy-config }}"
 
-        mkdir -p "$OUTPUT_DIR"
-
         echo "=== Running probe-verus extract ==="
         echo "Project: $PROJECT_PATH"
-        echo "Output:  $OUTPUT_DIR"
 
-        CMD="probe-verus extract $PROJECT_PATH -o $OUTPUT_DIR --separate-outputs --auto-install"
+        CMD="probe-verus extract $PROJECT_PATH --auto-install"
 
         if [ -n "$PACKAGE" ]; then
           CMD="$CMD -p $PACKAGE"
@@ -309,11 +301,14 @@ runs:
         echo "Running: $CMD"
         $CMD
 
+        PROBES_DIR="$PROJECT_PATH/.verilib/probes"
+
         # Locate the unified extract output in .verilib/probes/
         # probe-verus names it verus_<crate>_<version>.json (no suffix),
-        # while separate outputs use _atoms.json, _specs.json, _proofs.json
-        EXTRACT_FILE=$(find "$PROJECT_PATH/.verilib/probes" -name 'verus_*.json' \
+        # while step outputs use _atoms.json, _specs.json, _proofs.json, _extract_summary.json
+        EXTRACT_FILE=$(find "$PROBES_DIR" -name 'verus_*.json' \
           -not -name '*_atoms.json' -not -name '*_specs.json' -not -name '*_proofs.json' \
+          -not -name '*_extract_summary.json' \
           -type f 2>/dev/null | head -1)
         if [ -z "$EXTRACT_FILE" ]; then
           echo "::warning::Unified extract output not found in .verilib/probes/"
@@ -321,9 +316,10 @@ runs:
           echo "extract_file=$(realpath "$EXTRACT_FILE")" >> $GITHUB_OUTPUT
         fi
 
-        # Parse extract_summary.json for verification counts
-        SUMMARY_FILE="$OUTPUT_DIR/extract_summary.json"
-        if [ -f "$SUMMARY_FILE" ]; then
+        # Parse extract_summary for verification counts
+        SUMMARY_FILE=$(find "$PROBES_DIR" -name 'verus_*_extract_summary.json' \
+          -type f 2>/dev/null | head -1)
+        if [ -n "$SUMMARY_FILE" ] && [ -f "$SUMMARY_FILE" ]; then
           echo "summary_file=$(realpath "$SUMMARY_FILE")" >> $GITHUB_OUTPUT
 
           VERIFIED=$(jq -r '.data.verify.summary.verified // 0' "$SUMMARY_FILE")
@@ -335,7 +331,7 @@ runs:
           echo "=== Extract Results ==="
           echo "Verified: $VERIFIED / $TOTAL"
         else
-          echo "::warning::extract_summary.json not found at $SUMMARY_FILE"
+          echo "::warning::extract_summary not found in $PROBES_DIR"
           echo "verified_count=0" >> $GITHUB_OUTPUT
           echo "total_count=0" >> $GITHUB_OUTPUT
         fi

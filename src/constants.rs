@@ -86,13 +86,6 @@ pub const SCIP_INDEX_FILE: &str = "index.scip";
 pub const SCIP_INDEX_JSON_FILE: &str = "index.scip.json";
 
 // =============================================================================
-// Default Output Filenames
-// =============================================================================
-
-/// Default output directory for run command
-pub const DEFAULT_OUTPUT_DIR: &str = "./output";
-
-// =============================================================================
 // SCIP Symbol Prefixes
 // =============================================================================
 

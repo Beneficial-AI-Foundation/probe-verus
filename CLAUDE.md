@@ -60,7 +60,7 @@ src/
 
 ### Main Pipelines
 
-1. **Extract Pipeline** (`extract` command): Unified 3-step pipeline (atomize + specify + run-verus) producing a single unified JSON output (`probe-verus/extract` schema) where each atom includes optional `primary-spec`, `is-disabled`, `verification-status`, `spec-labels`, and categorized dependency fields. Uses `--separate-outputs` to also write individual files. Recommended CI/Docker entrypoint.
+1. **Extract Pipeline** (`extract` command): Unified 3-step pipeline (atomize + specify + run-verus) producing a single unified JSON output (`probe-verus/extract` schema) where each atom includes optional `primary-spec`, `is-disabled`, `verification-status`, `spec-labels`, and categorized dependency fields. Individual atoms/specs/proofs files are always kept alongside the unified output. All outputs go to `<project>/.verilib/probes/`. Recommended CI/Docker entrypoint.
 2. **Atomize Pipeline** (`atomize` command): SCIP JSON → call graph parsing → spans via verus_syn → Schema 2.0 envelope → `.verilib/probes/`
 3. **List Functions Pipeline** (`list-functions` command): Source files → AST visitor → function list
 4. **Run-Verus Pipeline** (`run-verus` command): Cargo verus output → error parsing → function mapping → Schema 2.0 envelope → `.verilib/probes/`
@@ -115,6 +115,21 @@ Always run fmt and clippy before committing and pushing:
 cargo fmt --all && cargo clippy --all-targets -- -D warnings
 ```
 
+## Documentation Quality Audit
+
+When making changes that affect the public contract (new commands, renamed flags, new output fields, version bumps), check these docs for stale information. The full inventory of documentation is in [`kb/index.md`](kb/index.md). Key files to audit:
+
+- **`README.md`** — command table, quick start examples, example JSON output
+- **`docs/USAGE.md`** — full command reference, flag tables, taxonomy config reference
+- **`docs/SCHEMA.md`** — version header, field reference tables, example JSON
+- **`docs/format.md`** — atoms format spec, version history, language field description
+- **`docs/HOW_IT_WORKS.md`** — example JSON output
+- **`docker/README.md`** — entrypoint command, flags, output filenames, example JSON schemas
+- **`action/README.md`** and **`action-extract/README.md`** — example JSON, action inputs/outputs
+- **`CHANGELOG.md`** — unreleased section must include the change
+
+See also the **Documentation staleness checks** section in the probe repo's code quality auditor (`probe/.claude/skills/code-quality-auditor.md`) for the full checklist and common staleness patterns.
+
 ## Commit Message Style
 
 Use conventional commits: `feat(module):`, `fix(module):`, `perf(module):`, `refactor(module):`
@@ -133,6 +148,18 @@ The **probe KB** in the sibling `probe` repo (`baif/probe/kb/`) is the source of
 - **`kb/tools/probe-verus.md`** -- probe-verus-specific documentation in the KB
 
 If implementation contradicts the KB, fix the code, not the KB.
+
+### Local KB
+
+See [`kb/index.md`](kb/index.md) for the probe-verus-specific knowledge base. It organizes local `docs/` files by category and cross-references the shared KB.
+
+### Auditor skills
+
+The probe repo provides three auditor skills (`probe/.claude/skills/`). Run them after significant changes using the **Ralph Loop**: implement → audit → fix → repeat until clean → `cargo test`.
+
+- **`code-quality-auditor.md`** -- Check implementation against KB properties, architecture constraints, and documentation staleness
+- **`test-quality-auditor.md`** -- Verify test coverage and quality
+- **`ambiguity-auditor.md`** -- Find specification ambiguities and contradictions
 
 ## Versioning Policy
 

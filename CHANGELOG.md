@@ -10,6 +10,11 @@ what constitutes a breaking change.
 
 ## [Unreleased]
 
+### Breaking
+- **Removed `--output` / `-o` flag** from `extract` command. All outputs (unified, atoms, specs, proofs, extract summary) are now written to `<project>/.verilib/probes/`. The `extract_summary.json` file is now named `verus_<pkg>_<ver>_extract_summary.json` and lives alongside the other outputs.
+- **Removed `--separate-outputs` flag** from `extract` command. Individual atoms, specs, and proofs files are now always kept (no longer cleaned up after the unified merge).
+- **Removed `output-dir` input** from the `action-extract` GitHub Action.
+
 ### Added
 - **Backward compatibility test**: `tests/extract_backward_compat.rs` runs extract on `verus_micro` and compares output against a committed golden file. New additive fields are allowed; removed or changed fields fail. Use `BLESS=1` to regenerate the golden file after intentional changes.
 

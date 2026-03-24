@@ -37,7 +37,12 @@ fn copy_dir_recursive(src: &Path, dst: &Path) {
 }
 
 fn find_unified_output(dir: &Path) -> Option<PathBuf> {
-    let suffixes = ["_atoms.json", "_specs.json", "_proofs.json"];
+    let suffixes = [
+        "_atoms.json",
+        "_specs.json",
+        "_proofs.json",
+        "_extract_summary.json",
+    ];
     std::fs::read_dir(dir)
         .ok()?
         .filter_map(|e| e.ok())
@@ -82,11 +87,9 @@ fn extract_backward_compat() {
     let project_dir = tempfile::tempdir().unwrap();
     copy_dir_recursive(fixture, project_dir.path());
 
-    let output_dir = tempfile::tempdir().unwrap();
     let project_path = project_dir.path().to_path_buf();
     probe_verus::commands::cmd_extract(
         project_path.clone(),
-        output_dir.path().to_path_buf(),
         false,  // skip_atomize
         false,  // skip_specify
         true,   // skip_verify
@@ -100,7 +103,6 @@ fn extract_backward_compat() {
         false,  // _with_spec_text
         None,   // taxonomy_config
         vec![], // verus_args
-        false,  // separate_outputs
     )
     .expect("cmd_extract failed");
 

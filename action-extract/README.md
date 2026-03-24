@@ -69,7 +69,6 @@ The existing `action/` is **not deprecated** — it continues to work for caller
 | `package` | No | | Package name for workspace projects |
 | `verus-version` | No | auto-detect | Verus version (e.g., `1.85.0`) |
 | `rust-version` | No | auto-detect | Rust toolchain version |
-| `output-dir` | No | `.` | Directory for `extract_summary.json` |
 | `token` | No | `github.token` | GitHub token for API calls (avoids rate limiting) |
 | `verus-args` | No | | Extra arguments passed to Verus |
 | `taxonomy-config` | No | auto-detect | Path to `spec-taxonomy.toml`; auto-detects at project root if absent |
@@ -79,7 +78,7 @@ The existing `action/` is **not deprecated** — it continues to work for caller
 | Output | Description |
 |--------|-------------|
 | `extract-file` | Path to the unified `probe-verus/extract` JSON (merged atoms+specs+proofs) |
-| `extract-summary-file` | Path to `extract_summary.json` |
+| `extract-summary-file` | Path to the extract summary JSON |
 | `verified-count` | Number of functions verified |
 | `total-functions` | Total number of functions |
 | `verus-version` | Verus version used |
@@ -137,7 +136,7 @@ The primary output is a dictionary keyed by code-name, where each entry is a `Un
 }
 ```
 
-### Extract summary (`extract_summary.json`)
+### Extract summary
 
 Contains pipeline status and per-step results:
 

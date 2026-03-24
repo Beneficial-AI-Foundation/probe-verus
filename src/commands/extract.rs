@@ -2,13 +2,13 @@
 
 use super::atomize::atomize_internal;
 use super::run_verus::{run_verus_internal, VerifySummary};
-use crate::verification::VerusRunner;
 use super::specify::specify_internal;
 use crate::metadata::{
     find_default_atoms_path, gather_metadata, get_default_output_path, unwrap_envelope,
     wrap_in_envelope, AtomizeInternalConfig, ExtractInternalConfig, ProjectMetadata,
     SpecifyInternalConfig,
 };
+use crate::verification::VerusRunner;
 use crate::{AtomWithLines, CallLocation, UnifiedAtom};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -64,7 +64,6 @@ impl From<VerifySummary> for ExtractSummaryOutput {
 #[allow(clippy::too_many_arguments)]
 pub fn cmd_extract(
     project_path: PathBuf,
-    output_dir: PathBuf,
     skip_atomize: bool,
     skip_specify: bool,
     skip_verify: bool,
@@ -100,10 +99,7 @@ pub fn cmd_extract(
     let specs_path = get_default_output_path(&project_path, &metadata, "specs");
     let results_path = get_default_output_path(&project_path, &metadata, "proofs");
 
-    std::fs::create_dir_all(&output_dir)
-        .map_err(|e| format!("Failed to create output directory: {e}"))?;
-
-    print_header(&project_path, &output_dir, &package);
+    print_header(&project_path, &package);
 
     let mut result = ExtractPipelineResult {
         status: "success".to_string(),
@@ -216,7 +212,7 @@ pub fn cmd_extract(
         println!();
     }
 
-    let summary_path = output_dir.join("extract_summary.json");
+    let summary_path = get_default_output_path(&project_path, &metadata, "extract_summary");
     let envelope = wrap_in_envelope("probe-verus/extract-summary", "extract", &result, &metadata);
     if let Ok(json) = serde_json::to_string_pretty(&envelope) {
         if let Err(e) = std::fs::write(&summary_path, &json) {
@@ -230,13 +226,12 @@ pub fn cmd_extract(
     }
 }
 
-fn print_header(project_path: &Path, output_dir: &Path, package: &Option<String>) {
+fn print_header(project_path: &Path, package: &Option<String>) {
     println!("═══════════════════════════════════════════════════════════════");
     println!("  probe-verus extract");
     println!("═══════════════════════════════════════════════════════════════");
     println!();
     println!("  Project: {}", project_path.display());
-    println!("  Output:  {}", output_dir.display());
     if let Some(ref pkg) = package {
         println!("  Package: {}", pkg);
     }

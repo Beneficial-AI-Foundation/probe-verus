@@ -373,8 +373,8 @@ Dependencies are categorized into three subsets (analogous to probe-lean's
 
 The existing `dependencies` field is the union of all three.
 
-By default, only this file is produced.  Pass `--separate-outputs` to also
-write the individual atoms, specs, and proofs files.
+In addition to this unified file, the individual atoms, specs, and proofs files
+are always written alongside it in `<project>/.verilib/probes/`.
 
 ### Data Shape
 

@@ -6,8 +6,9 @@
 
 Run the unified 3-step pipeline: `atomize` + `specify` + `run-verus`. Produces
 a single unified JSON file (`probe-verus/extract` schema) where each atom entry
-includes optional `verification-status` and `primary-spec` fields. A pipeline
-summary (`extract_summary.json`) is also written to the output directory.
+includes optional `verification-status` and `primary-spec` fields. All output
+files (unified, atoms, specs, proofs, and extract summary) are written to
+`<project>/.verilib/probes/`.
 
 ```
 probe-verus extract <PROJECT_PATH> [OPTIONS]
@@ -17,12 +18,10 @@ probe-verus extract <PROJECT_PATH> [OPTIONS]
 
 | Flag | Short | Description |
 |------|-------|-------------|
-| `--output <DIR>` | `-o` | Output directory (default: `./output`) |
 | `--package <NAME>` | `-p` | Package to verify (for workspaces) |
 | `--skip-atomize` | | Skip the atomize step |
 | `--skip-specify` | | Skip the specify step |
 | `--skip-verify` | | Skip the run-verus step |
-| `--separate-outputs` | | Also write individual atoms, specs, and proofs files |
 | `--regenerate-scip` | | Force regeneration of the SCIP index |
 | `--verbose` | `-v` | Verbose output |
 | `--rust-analyzer` | | Use rust-analyzer instead of verus-analyzer for SCIP |
@@ -41,9 +40,6 @@ probe-verus extract ./my-verus-project -p my-crate
 
 # CI-friendly with auto-install
 probe-verus extract ./my-verus-project --auto-install
-
-# Also write individual atoms/specs/proofs files
-probe-verus extract ./my-verus-project --separate-outputs
 
 # Skip atomize, use existing atoms
 probe-verus extract ./my-verus-project --skip-atomize -a path/to/atoms.json

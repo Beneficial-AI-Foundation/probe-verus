@@ -68,9 +68,6 @@ fn fixture_atoms_have_valid_kinds() {
 #[test]
 #[ignore]
 fn live_extract_structural_check() {
-    let dir = tempfile::tempdir().unwrap();
-    let output_dir = dir.path().to_path_buf();
-
     let fixture = Path::new("../probe/probe-extract-check/tests/fixtures/verus_micro");
     if !fixture.exists() {
         panic!("verus_micro fixture not found at {}", fixture.display());
@@ -78,7 +75,6 @@ fn live_extract_structural_check() {
 
     probe_verus::commands::cmd_extract(
         fixture.to_path_buf(),
-        output_dir.clone(),
         false,
         false,
         false,
@@ -92,21 +88,23 @@ fn live_extract_structural_check() {
         false,
         None,
         vec![],
-        false,
     )
     .expect("probe-verus extract failed");
 
-    // Find the unified output file in the output directory.
-    let unified = std::fs::read_dir(&output_dir)
+    let probes_dir = fixture.join(".verilib").join("probes");
+    let unified = std::fs::read_dir(&probes_dir)
         .unwrap()
         .filter_map(|e| e.ok())
         .find(|e| {
-            e.path()
-                .file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with("verus_") && n.ends_with(".json"))
+            let name = e.path().file_name().unwrap().to_string_lossy().to_string();
+            name.starts_with("verus_")
+                && name.ends_with(".json")
+                && !name.contains("_atoms")
+                && !name.contains("_specs")
+                && !name.contains("_proofs")
+                && !name.contains("_extract_summary")
         })
-        .unwrap_or_else(|| panic!("no unified output found in {}", output_dir.display()));
+        .unwrap_or_else(|| panic!("no unified output found in {}", probes_dir.display()));
 
     let envelope = load_extract_json(&unified.path()).unwrap();
     let report = check_all(&envelope, Some(fixture));

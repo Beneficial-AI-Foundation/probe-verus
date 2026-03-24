@@ -392,8 +392,7 @@ fn enrich_with_code_names_if_available(result: &mut AnalysisResult, atoms_path: 
 pub fn run_verus_internal(config: &ExtractInternalConfig) -> Result<VerifySummary, String> {
     if !VerusRunner::is_available() {
         return Err(
-            "cargo verus not found; install Verus: https://github.com/verus-lang/verus"
-                .to_string(),
+            "cargo verus not found; install Verus: https://github.com/verus-lang/verus".to_string(),
         );
     }
 

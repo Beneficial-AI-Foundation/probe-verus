@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 See the [Versioning Policy section in CLAUDE.md](CLAUDE.md#versioning-policy) for
 what constitutes a breaking change.
 
-## [Unreleased]
+## [6.1.0] - 2026-03-24
 
 ### Added
 - **`setup --from-project`**: New flag reads the target project's `Cargo.toml` to detect the correct Verus version (from `[package.metadata.verus]` or `vstd`/`verus_builtin` dependency `rev`) and installs it alongside verus-analyzer and scip. Replaces ~100 lines of fragile bash in the GitHub Actions.

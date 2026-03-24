@@ -270,17 +270,26 @@ enum Commands {
         exclude_crates: Vec<String>,
     },
 
-    /// Install or check status of external tools (verus-analyzer, scip)
+    /// Install or check status of external tools (verus-analyzer, scip, verus)
     ///
-    /// Resolves and installs verus-analyzer and scip into ~/.probe-verus/tools/.
+    /// Resolves and installs verus-analyzer, scip, and verus into ~/.probe-verus/tools/.
     /// Version resolution uses, in order: environment variable overrides
-    /// (PROBE_VERUS_ANALYZER_VERSION, PROBE_SCIP_VERSION), the latest GitHub
+    /// (PROBE_VERUS_ANALYZER_VERSION, PROBE_SCIP_VERSION, PROBE_VERUS_VERSION),
+    /// project Cargo.toml detection (with --from-project), the latest GitHub
     /// release, and a compiled-in fallback version. Use --status to see which
     /// tools are installed and where they are located.
     Setup {
         /// Show installation status instead of installing
         #[arg(long)]
         status: bool,
+
+        /// Read target project Cargo.toml to determine correct Verus version
+        #[arg(long)]
+        from_project: Option<PathBuf>,
+
+        /// Print detected Verus version without installing (requires --from-project)
+        #[arg(long)]
+        detect_version: bool,
     },
 
     /// Unified pipeline: atomize + specify + run-verus
@@ -506,8 +515,12 @@ fn main() {
                 std::process::exit(1);
             }
         }
-        Commands::Setup { status } => {
-            cmd_setup(status);
+        Commands::Setup {
+            status,
+            from_project,
+            detect_version,
+        } => {
+            cmd_setup(status, from_project, detect_version);
         }
         Commands::Extract {
             project_path,

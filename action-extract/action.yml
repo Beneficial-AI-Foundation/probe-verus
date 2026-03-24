@@ -70,12 +70,20 @@ outputs:
 runs:
   using: 'composite'
   steps:
-    # Step 1: Extract versions from Cargo.toml if not provided
-    - name: Extract versions from Cargo.toml
+    # Step 1: Install probe-verus (needed before --detect-version)
+    - name: Install probe-verus
+      shell: bash
+      run: |
+        echo "Installing probe-verus..."
+        cargo install --force --git https://github.com/Beneficial-AI-Foundation/probe-verus
+        probe-verus --version || echo "probe-verus installed"
+
+    # Step 2: Detect versions (Verus from Cargo.toml, Rust from metadata)
+    - name: Detect versions
       id: versions
       shell: bash
       env:
-        GH_TOKEN: ${{ inputs.token }}
+        GITHUB_TOKEN: ${{ inputs.token }}
       run: |
         PROJECT_PATH="${{ inputs.project-path }}"
         CARGO_TOML="$PROJECT_PATH/Cargo.toml"
@@ -85,71 +93,28 @@ runs:
           exit 1
         fi
 
-        # Extract [package.metadata.verus] section from root Cargo.toml
-        METADATA=$(awk '/^\[package\.metadata\.verus\]/{flag=1;next}/^\[/{flag=0}flag' "$CARGO_TOML")
-
-        # Workspace fallback: search member crate Cargo.toml files
-        if [ -z "$(echo "$METADATA" | tr -d '[:space:]')" ]; then
-          MEMBER_TOML=$(grep -rl '\[package\.metadata\.verus\]' "$PROJECT_PATH" --include='Cargo.toml' | head -1) || true
-          if [ -n "$MEMBER_TOML" ] && [ "$MEMBER_TOML" != "$CARGO_TOML" ]; then
-            echo "Found Verus metadata in member crate: $MEMBER_TOML"
-            METADATA=$(awk '/^\[package\.metadata\.verus\]/{flag=1;next}/^\[/{flag=0}flag' "$MEMBER_TOML")
-          fi
-        fi
-
-        echo "::debug::METADATA section: $METADATA"
-
-        # Get Verus version: (1) explicit input, (2) metadata release, (3) dep rev lookup
+        # Detect Verus version: explicit input or probe-verus auto-detection
         VERUS_VERSION="${{ inputs.verus-version }}"
         if [ -z "$VERUS_VERSION" ]; then
-          VERUS_VERSION=$(echo "$METADATA" | grep -E '^\s*release\s*=' | sed 's/.*= *"\([^"]*\)".*/\1/' | head -1) || true
+          VERUS_VERSION=$(PROBE_VERUS_VERSION="" probe-verus setup --from-project "$PROJECT_PATH" --detect-version 2>/dev/null) || true
           if [ -n "$VERUS_VERSION" ]; then
-            echo "Auto-detected Verus version from metadata: $VERUS_VERSION"
+            echo "Auto-detected Verus version: $VERUS_VERSION"
+          else
+            echo "::error::No Verus version found. Provide verus-version input, add [package.metadata.verus] release to Cargo.toml, or use a vstd/verus_builtin dep with a rev matching a Verus release tag"
+            exit 1
           fi
         fi
 
-        # Fallback: resolve from vstd/verus_builtin git dependency rev
-        if [ -z "$VERUS_VERSION" ]; then
-          REV=$(grep -rh 'vstd\|verus_builtin' "$PROJECT_PATH" --include='Cargo.toml' \
-            | sed -n 's/.*rev\s*=\s*"\([^"]*\)".*/\1/p' | head -1) || true
-
-          if [ -n "$REV" ]; then
-            SHORT_REV="${REV:0:7}"
-            echo "Found Verus dependency rev: $REV (matching as $SHORT_REV)"
-
-            for PAGE in 1 2 3 4 5; do
-              RESPONSE=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" \
-                "https://api.github.com/repos/verus-lang/verus/releases?per_page=100&page=$PAGE")
-
-              MATCH=$(echo "$RESPONSE" | jq -r --arg rev "$SHORT_REV" \
-                '[.[] | select(.prerelease == false) | .tag_name | select(endswith($rev))] | .[0] // empty')
-
-              if [ -n "$MATCH" ]; then
-                VERUS_VERSION=$(echo "$MATCH" | sed 's|^release/||')
-                echo "Resolved rev $SHORT_REV to Verus release: $VERUS_VERSION"
-                break
-              fi
-
-              COUNT=$(echo "$RESPONSE" | jq 'length')
-              if [ "$COUNT" -lt 100 ]; then
-                break
-              fi
-            done
-
-            if [ -z "$VERUS_VERSION" ]; then
-              echo "::warning::Found dependency rev $REV but could not match it to a Verus release"
-            fi
-          fi
-        fi
-
-        if [ -z "$VERUS_VERSION" ]; then
-          echo "::error::No Verus version found. Provide verus-version input, add [package.metadata.verus] release to Cargo.toml, or use a vstd/verus_builtin dep with a rev matching a Verus release tag"
-          exit 1
-        fi
-
-        # Get Rust version (from input or Cargo.toml)
+        # Detect Rust version from Cargo.toml metadata
         RUST_VERSION="${{ inputs.rust-version }}"
         if [ -z "$RUST_VERSION" ]; then
+          METADATA=$(awk '/^\[package\.metadata\.verus\]/{flag=1;next}/^\[/{flag=0}flag' "$CARGO_TOML")
+          if [ -z "$(echo "$METADATA" | tr -d '[:space:]')" ]; then
+            MEMBER_TOML=$(grep -rl '\[package\.metadata\.verus\]' "$PROJECT_PATH" --include='Cargo.toml' | head -1) || true
+            if [ -n "$MEMBER_TOML" ] && [ "$MEMBER_TOML" != "$CARGO_TOML" ]; then
+              METADATA=$(awk '/^\[package\.metadata\.verus\]/{flag=1;next}/^\[/{flag=0}flag' "$MEMBER_TOML")
+            fi
+          fi
           RUST_VERSION=$(echo "$METADATA" | grep -E '^\s*rust-version\s*=' | sed 's/.*= *"\([^"]*\)".*/\1/' | head -1) || true
           if [ -z "$RUST_VERSION" ]; then
             RUST_VERSION="stable"
@@ -162,111 +127,37 @@ runs:
         echo "verus_version=$VERUS_VERSION" >> $GITHUB_OUTPUT
         echo "rust_version=$RUST_VERSION" >> $GITHUB_OUTPUT
 
-    # Step 2: Install Rust toolchain
+    # Step 3: Install Rust toolchain
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@master
       with:
         toolchain: ${{ steps.versions.outputs.rust_version }}
 
-    # Step 3: Cache cargo registry
-    - name: Cache cargo registry
+    # Step 4: Cache tools and cargo registry
+    - name: Cache cargo registry and tools
       uses: actions/cache@v4
       with:
         path: |
           ~/.cargo/registry
           ~/.cargo/git
           ~/.cargo/bin
+          ~/.probe-verus/tools
         key: ${{ runner.os }}-cargo-verus-${{ steps.versions.outputs.verus_version }}-${{ hashFiles('**/Cargo.lock') }}
         restore-keys: |
           ${{ runner.os }}-cargo-verus-${{ steps.versions.outputs.verus_version }}-
           ${{ runner.os }}-cargo-verus-
           ${{ runner.os }}-cargo-
 
-    # Step 4: Install verus-analyzer
-    - name: Install verus-analyzer
+    # Step 5: Install all tools (verus-analyzer, scip, verus)
+    - name: Install tools
       shell: bash
       env:
-        GH_TOKEN: ${{ inputs.token }}
+        GITHUB_TOKEN: ${{ inputs.token }}
+        PROBE_VERUS_VERSION: ${{ steps.versions.outputs.verus_version }}
       run: |
-        if command -v verus-analyzer &> /dev/null; then
-          echo "verus-analyzer already installed (from cache)"
-          verus-analyzer --version
-        else
-          echo "Installing verus-analyzer..."
-          VERUS_URL=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" \
-            https://api.github.com/repos/verus-lang/verus-analyzer/releases/latest | \
-            jq -r '.assets[] | select(.name == "verus-analyzer-x86_64-unknown-linux-gnu.gz") | .browser_download_url')
-          if [ -z "$VERUS_URL" ] || [ "$VERUS_URL" = "null" ]; then
-            echo "::error::Failed to determine verus-analyzer download URL from GitHub API"
-            exit 1
-          fi
-          wget -q "$VERUS_URL" -O verus-analyzer.gz
-          gunzip verus-analyzer.gz
-          chmod +x verus-analyzer
-          sudo mv verus-analyzer /usr/local/bin/
-          verus-analyzer --version
-        fi
+        probe-verus setup --from-project "${{ inputs.project-path }}"
 
-    # Step 5: Install Verus
-    - name: Install Verus
-      shell: bash
-      env:
-        VERUS_VERSION: ${{ steps.versions.outputs.verus_version }}
-      run: |
-        if [ -x ~/.cargo/bin/verus-x86-linux/verus ]; then
-          CACHED_VERSION=$(~/.cargo/bin/verus-x86-linux/verus --version 2>/dev/null | head -1 || echo "unknown")
-          if echo "$CACHED_VERSION" | grep -q "$VERUS_VERSION"; then
-            echo "Verus $VERUS_VERSION already installed (from cache)"
-            exit 0
-          else
-            echo "Cached Verus version mismatch, reinstalling..."
-            rm -rf ~/.cargo/bin/verus-x86-linux
-          fi
-        fi
-
-        echo "Installing Verus $VERUS_VERSION..."
-        VERUS_URL="https://github.com/verus-lang/verus/releases/download/release%2F${VERUS_VERSION}/verus-${VERUS_VERSION}-x86-linux.zip"
-        wget -q "$VERUS_URL" -O verus.zip
-        unzip -q verus.zip
-        mv verus-x86-linux ~/.cargo/bin/
-        cd ~/.cargo/bin
-        ln -sf verus-x86-linux/cargo-verus
-        echo "Verus $VERUS_VERSION installed"
-
-    # Step 6: Install scip CLI
-    - name: Install scip CLI
-      shell: bash
-      env:
-        GH_TOKEN: ${{ inputs.token }}
-      run: |
-        if command -v scip &> /dev/null; then
-          echo "scip already installed (from cache)"
-          scip --version
-        else
-          echo "Installing scip..."
-          SCIP_URL=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" \
-            https://api.github.com/repos/sourcegraph/scip/releases/latest | \
-            jq -r '.assets[] | select(.name == "scip-linux-amd64.tar.gz") | .browser_download_url')
-          if [ -z "$SCIP_URL" ] || [ "$SCIP_URL" = "null" ]; then
-            echo "::error::Failed to determine SCIP download URL from GitHub API"
-            exit 1
-          fi
-          wget -q "$SCIP_URL" -O scip-linux.tar.gz
-          tar -xzf scip-linux.tar.gz
-          chmod +x scip
-          sudo mv scip /usr/local/bin/
-          scip --version
-        fi
-
-    # Step 7: Install probe-verus
-    - name: Install probe-verus
-      shell: bash
-      run: |
-        echo "Installing probe-verus..."
-        cargo install --force --git https://github.com/Beneficial-AI-Foundation/probe-verus
-        probe-verus --version || echo "probe-verus installed"
-
-    # Step 8: Run probe-verus extract (unified pipeline)
+    # Step 6: Run probe-verus extract (unified pipeline)
     - name: Run probe-verus extract
       id: extract
       shell: bash
@@ -279,7 +170,7 @@ runs:
         echo "=== Running probe-verus extract ==="
         echo "Project: $PROJECT_PATH"
 
-        CMD="probe-verus extract $PROJECT_PATH --auto-install"
+        CMD="probe-verus extract $PROJECT_PATH"
 
         if [ -n "$PACKAGE" ]; then
           CMD="$CMD -p $PACKAGE"
@@ -304,8 +195,6 @@ runs:
         PROBES_DIR="$PROJECT_PATH/.verilib/probes"
 
         # Locate the unified extract output in .verilib/probes/
-        # probe-verus names it verus_<crate>_<version>.json (no suffix),
-        # while step outputs use _atoms.json, _specs.json, _proofs.json, _extract_summary.json
         EXTRACT_FILE=$(find "$PROBES_DIR" -name 'verus_*.json' \
           -not -name '*_atoms.json' -not -name '*_specs.json' -not -name '*_proofs.json' \
           -not -name '*_extract_summary.json' \

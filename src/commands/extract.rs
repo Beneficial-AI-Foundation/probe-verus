@@ -78,6 +78,14 @@ pub fn cmd_extract(
     taxonomy_config: Option<PathBuf>,
     verus_args: Vec<String>,
 ) -> Result<(), String> {
+    if auto_install {
+        eprintln!(
+            "Warning: --auto-install is deprecated and will be removed in a future major version."
+        );
+        eprintln!("  Use instead: probe-verus setup --from-project <project-path>");
+        eprintln!();
+    }
+
     if !project_path.exists() {
         return Err(format!(
             "Project path does not exist: {}",
@@ -310,10 +318,14 @@ fn run_verify_step(config: &ExtractInternalConfig, result: &mut ExtractPipelineR
 
     if !VerusRunner::is_available() {
         eprintln!("  Warning: 'cargo verus' not found; skipping verification.");
-        eprintln!("    Install Verus to get verification-status in output:");
-        eprintln!("    https://github.com/verus-lang/verus");
+        eprintln!("    Install with: probe-verus setup --from-project <project-path>");
+        eprintln!("    Or manually: https://github.com/verus-lang/verus");
         println!();
         return;
+    }
+
+    if let Some(binary) = VerusRunner::resolve_binary() {
+        println!("  Using cargo-verus: {}", binary.display());
     }
 
     match run_verus_internal(config) {

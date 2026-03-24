@@ -11,7 +11,7 @@ probe-verus is a Rust CLI tool that generates compact function call graph data f
 - **list-functions**: List all functions in a Rust/Verus project (no external tools needed)
 - **merge-atoms**: Combine independently-indexed atoms.json files
 - **run-verus**: Run Verus verification and analyze results (standalone)
-- **setup**: Install or check status of external tools (verus-analyzer, scip) via auto-download
+- **setup**: Install or check status of external tools (verus-analyzer, scip, verus) via auto-download; `--from-project` detects Verus version from Cargo.toml
 - **specify**: Extract function specifications from atoms.json, with optional taxonomy classification
 - **stubify**: Convert .md files with YAML frontmatter to JSON
 
@@ -77,7 +77,7 @@ src/
 
 **SCIP Data Caching**: Generated SCIP data is cached in `<project>/data/` to avoid re-running slow external tools.
 
-**Auto-download Tool Manager**: External tools (verus-analyzer, scip) can be auto-downloaded to `~/.probe-verus/tools/`. Version resolution: env var override → GitHub `/releases/latest` API → compiled-in fallback. Supports `--auto-install` flag for non-interactive CI usage.
+**Auto-download Tool Manager**: External tools (verus-analyzer, scip, verus) are auto-downloaded to `~/.probe-verus/tools/` via `probe-verus setup`. Version resolution: env var override (`PROBE_VERUS_ANALYZER_VERSION`, `PROBE_SCIP_VERSION`, `PROBE_VERUS_VERSION`) → project Cargo.toml detection (for Verus, via `--from-project`) → GitHub `/releases/latest` API → compiled-in fallback. Verus is installed to versioned directories (`verus-{version}/`) supporting multiple versions side-by-side. `VerusRunner` resolves `cargo-verus` via `tool_manager` by absolute path. The `--auto-install` flag on `extract`/`atomize` is deprecated in favor of `setup --from-project`.
 
 **AST-based Spec Taxonomy**: The `specify` command can classify specs using taxonomy rules defined in TOML. Classification uses structured AST data (function mode, called function names extracted via `verus_syn` visitor) rather than regex on text. A `CallNameCollector` visitor walks `ExprCall`/`ExprMethodCall` nodes in ensures/requires clauses to extract called function names.
 
@@ -101,11 +101,11 @@ src/
 ## External Tool Dependencies
 
 - **extract command**: Same as atomize + specify + run-verus (unified pipeline)
-- **atomize command**: Requires `verus-analyzer` and `scip` CLI (auto-downloadable via `setup` or `--auto-install`)
+- **atomize command**: Requires `verus-analyzer` and `scip` CLI (auto-downloadable via `setup`)
 - **list-functions command**: None (uses verus_syn only)
-- **run-verus command**: Requires `cargo verus`
+- **run-verus command**: Requires `cargo verus` (auto-downloadable via `setup`)
 - **specify command**: None (uses verus_syn only; optional TOML config for taxonomy)
-- **setup command**: None (downloads tools itself)
+- **setup command**: None (downloads verus-analyzer, scip, and verus)
 
 ## Before Committing
 

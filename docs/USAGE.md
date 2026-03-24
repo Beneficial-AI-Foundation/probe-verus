@@ -26,7 +26,7 @@ probe-verus extract <PROJECT_PATH> [OPTIONS]
 | `--verbose` | `-v` | Verbose output |
 | `--rust-analyzer` | | Use rust-analyzer instead of verus-analyzer for SCIP |
 | `--allow-duplicates` | | Allow duplicate probe-names (normally fatal) |
-| `--auto-install` | | Automatically download missing tools without prompting |
+| `--auto-install` | | **Deprecated.** Use `probe-verus setup --from-project` instead |
 | `--with-atoms <PATH>` | `-a` | Path to atoms.json (for use with `--skip-atomize`) |
 | `--with-spec-text` | | Include raw specification text in specify output |
 | `--taxonomy-config <PATH>` | | Path to TOML file for spec classification |
@@ -38,8 +38,9 @@ probe-verus extract <PROJECT_PATH> [OPTIONS]
 # Full pipeline on a workspace member
 probe-verus extract ./my-verus-project -p my-crate
 
-# CI-friendly with auto-install
-probe-verus extract ./my-verus-project --auto-install
+# Install tools first, then extract
+probe-verus setup --from-project ./my-verus-project
+probe-verus extract ./my-verus-project
 
 # Skip atomize, use existing atoms
 probe-verus extract ./my-verus-project --skip-atomize -a path/to/atoms.json
@@ -62,14 +63,13 @@ probe-verus atomize <PROJECT_PATH> [OPTIONS]
 | `--output <FILE>` | `-o` | Output file path (default: `.verilib/probes/verus_<pkg>_<ver>_atoms.json`) |
 | `--regenerate-scip` | `-r` | Force regeneration of the SCIP index |
 | `--with-locations` | | Include detailed per-call location info (precondition/postcondition/inner) |
-| `--auto-install` | | Automatically download missing tools without prompting |
+| `--auto-install` | | **Deprecated.** Use `probe-verus setup --from-project` instead |
 
 ### Examples
 
 ```bash
 probe-verus atomize ./my-rust-project
 probe-verus atomize ./my-rust-project --with-locations
-probe-verus atomize ./my-rust-project --auto-install
 ```
 
 **Extended output (`--with-locations`):**
@@ -258,7 +258,7 @@ probe-verus list-functions <PATH> [OPTIONS]
 
 ### `setup`
 
-Install or check status of external tool dependencies (verus-analyzer, scip).
+Install or check status of external tool dependencies (verus-analyzer, scip, verus).
 
 ```
 probe-verus setup [OPTIONS]
@@ -267,13 +267,39 @@ probe-verus setup [OPTIONS]
 | Flag | Description |
 |------|-------------|
 | `--status` | Show installation status instead of installing |
+| `--from-project <PATH>` | Read target project's Cargo.toml to determine correct Verus version |
+| `--detect-version` | Print detected Verus version without installing (requires `--from-project`) |
 
 Version resolution uses, in order:
-1. Environment variable overrides (`PROBE_VERUS_ANALYZER_VERSION`, `PROBE_SCIP_VERSION`)
-2. Latest stable release from GitHub
-3. Compiled-in fallback version
+1. Environment variable overrides (`PROBE_VERUS_ANALYZER_VERSION`, `PROBE_SCIP_VERSION`, `PROBE_VERUS_VERSION`)
+2. For Verus: project Cargo.toml detection (with `--from-project`)
+3. Latest stable release from GitHub
+4. Compiled-in fallback version
 
-Tools are installed to `~/.probe-verus/tools/`.
+Verus version auto-detection looks for:
+1. `[package.metadata.verus]` section with `release = "..."` in `Cargo.toml`
+2. Workspace member fallback: searches member crate `Cargo.toml` files
+3. Dependency fallback: `vstd` or `verus_builtin` dependency `rev` matched against GitHub releases
+
+Tools are installed to `~/.probe-verus/tools/`. Verus is installed to versioned
+directories (`~/.probe-verus/tools/verus-{version}/`), supporting multiple
+versions side-by-side.
+
+### Examples
+
+```bash
+# Install all tools with project-aware Verus version
+probe-verus setup --from-project ./my-verus-project
+
+# Just detect the version (useful for CI cache keys)
+probe-verus setup --from-project ./my-verus-project --detect-version
+
+# Install all tools (latest versions)
+probe-verus setup
+
+# Check what's installed
+probe-verus setup --status
+```
 
 ---
 

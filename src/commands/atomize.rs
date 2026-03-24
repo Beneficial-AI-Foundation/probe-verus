@@ -23,6 +23,14 @@ pub fn cmd_atomize(
     allow_duplicates: bool,
     auto_install: bool,
 ) -> Result<(), String> {
+    if auto_install {
+        eprintln!(
+            "Warning: --auto-install is deprecated and will be removed in a future major version."
+        );
+        eprintln!("  Use instead: probe-verus setup --from-project <project-path>");
+        eprintln!();
+    }
+
     println!("═══════════════════════════════════════════════════════════");
     println!("  Probe Verus - Atomize: Generate Call Graph Data");
     println!("═══════════════════════════════════════════════════════════");

@@ -7,19 +7,16 @@ Probe Verus projects: generate call graph atoms, extract specifications, and ana
 ## Prerequisites
 
 - **Rust toolchain** (`cargo`) -- install via [rustup.rs](https://rustup.rs/)
-- **verus-analyzer & scip** -- auto-downloadable via `probe-verus setup --install` or the `--auto-install` flag on `extract`/`atomize`. See [tools/INSTALL.md](tools/INSTALL.md) for manual options.
-- **Verus** (`cargo verus`) -- required for the verification step. Must be installed separately; `probe-verus setup` does **not** install Verus. Install the **same Verus version your project targets** (check the project's `rust-toolchain.toml` or documentation); a mismatched version may cause verification failures. If Verus is not installed, `extract` still runs the atomize and specify steps and prints a warning that verification was skipped. Install options:
-  - Official guide: [verus-lang.github.io/verus/guide/getting_started.html](https://verus-lang.github.io/verus/guide/getting_started.html)
-  - Convenience scripts in this repo (pre-built binary download, specific versions, build from source): see [tools/INSTALL.md](tools/INSTALL.md#install-verus)
+- **verus-analyzer, scip & Verus** -- all auto-downloadable via `probe-verus setup`. Use `--from-project` to detect the correct Verus version from a project's `Cargo.toml`. See [tools/INSTALL.md](tools/INSTALL.md) for manual options.
 
 | Command | Required Tools | Notes |
 |---------|----------------|-------|
 | `extract` | verus-analyzer, scip, cargo verus | Gracefully skips verification if Verus is missing |
-| `atomize` | verus-analyzer, scip | Auto-downloadable via `--auto-install` |
+| `atomize` | verus-analyzer, scip | |
 | `specify` | None | |
-| `run-verus` | cargo verus | Requires Verus to be installed |
+| `run-verus` | cargo verus | |
 | `list-functions` | None | |
-| `setup` | None | Downloads verus-analyzer & scip only |
+| `setup` | None | Downloads verus-analyzer, scip & Verus |
 
 ## Installation
 
@@ -44,12 +41,14 @@ cargo install --path .
 ## Quick Start
 
 ```bash
+# Install all tools (verus-analyzer, scip, verus) using your project's Cargo.toml
+probe-verus setup --from-project ./my-verus-project
+
 # Unified pipeline: atomize + specify + verify (recommended)
-# --auto-install downloads verus-analyzer and scip; Verus must be installed separately
-probe-verus extract ./my-verus-project -p my-crate --auto-install
+probe-verus extract ./my-verus-project -p my-crate
 
 # Or run individual steps
-probe-verus atomize ./my-verus-project --auto-install
+probe-verus atomize ./my-verus-project
 probe-verus specify ./src -a .verilib/probes/verus_*_atoms.json --with-spec-text
 probe-verus run-verus ./my-verus-project -p my-crate
 ```

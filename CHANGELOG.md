@@ -8,6 +8,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 See the [Versioning Policy section in CLAUDE.md](CLAUDE.md#versioning-policy) for
 what constitutes a breaking change.
 
+## [Unreleased]
+
+### Added
+- **`setup --from-project`**: New flag reads the target project's `Cargo.toml` to detect the correct Verus version (from `[package.metadata.verus]` or `vstd`/`verus_builtin` dependency `rev`) and installs it alongside verus-analyzer and scip. Replaces ~100 lines of fragile bash in the GitHub Actions.
+- **`setup --detect-version`**: Print detected Verus version without installing (useful for CI cache keys). Requires `--from-project`.
+- **`Tool::Verus` in tool manager**: `probe-verus setup` now manages Verus alongside verus-analyzer and scip. Downloads prebuilt binaries from GitHub releases into versioned directories (`~/.probe-verus/tools/verus-{version}/`), supporting multiple versions side-by-side.
+- **`PROBE_VERUS_VERSION` environment variable**: Override the Verus version used by `setup`.
+- **VerusRunner managed-path resolution**: `run-verus` and `extract` now find `cargo-verus` from the managed tools directory (no PATH manipulation needed).
+
+### Deprecated
+- **`--auto-install` on `extract` and `atomize`**: Emits a deprecation warning pointing to `probe-verus setup --from-project`. The flag still works for backward compatibility.
+
+### Changed
+- **GitHub Actions simplified**: `action-extract` and `action` actions replaced ~80 lines of bash tool installation with `probe-verus setup --from-project`.
+- **`setup` installs all three tools by default**: Bare `probe-verus setup` (no flags) now installs verus-analyzer, scip, and Verus (latest version).
+
+### Tests
+- `test_platform_mapping_verus`: Verus platform target mapping for linux/macos/windows
+- `test_download_url_verus_linux`, `test_download_url_verus_mac_arm`: Download URL construction with `release%2F` encoding
+- `test_resolve_verus_version_env_override`: `PROBE_VERUS_VERSION` env var resolution
+- `test_verus_display_name`: `Tool::Verus` displays as `"verus"` (not `"cargo-verus"`)
+- `test_extract_verus_release_from_table`, `test_extract_verus_release_missing`: `[package.metadata.verus]` parsing
+- `test_extract_verus_dep_rev_vstd`, `test_extract_verus_dep_rev_builtin`, `test_extract_verus_dep_rev_none`: `vstd`/`builtin` dependency `rev` extraction
+- `test_detect_verus_version_from_metadata`, `test_detect_verus_version_workspace_fallback`, `test_detect_verus_version_no_version`: End-to-end `detect_verus_version` with tempdir fixtures
+- `test_verus_runner_resolve_binary_uses_tool_manager`: `VerusRunner::resolve_binary()` delegates to tool manager
+
 ## [6.0.0] - 2026-03-24
 
 ### Breaking

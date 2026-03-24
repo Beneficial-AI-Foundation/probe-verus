@@ -1,9 +1,8 @@
 # Installation Scripts
 
-> **Quick alternative:** If you only need verus-analyzer and scip (for `probe-verus atomize`),
-> you can skip these scripts and run `probe-verus setup` instead. It auto-downloads
-> the latest versions to `~/.probe-verus/tools/`. See the main
-> [README](../README.md#setup---manage-external-tools) for details.
+> **Quick alternative:** `probe-verus setup` auto-downloads verus-analyzer, scip, and verus
+> to `~/.probe-verus/tools/`. Use `--from-project ./my-project` to detect the correct Verus
+> version from the project's Cargo.toml. See the main [README](../README.md) for details.
 
 Scripts for downloading and installing Verus development tools from GitHub releases. Available in both Python (`.py`) and shell script (`.sh`) versions.
 

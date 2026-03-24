@@ -14,7 +14,7 @@ use rust_lapper::{Interval, Lapper};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 /// Function metadata stored in the interval tree
@@ -633,12 +633,22 @@ impl VerusRunner {
         Self
     }
 
-    /// Check whether `cargo verus` is available on PATH.
+    /// Resolve the `cargo-verus` binary path.
     ///
-    /// Cargo subcommands are resolved by looking for a `cargo-<name>` binary, so
-    /// we probe for `cargo-verus`.  Only the ability to *spawn* the process is
-    /// tested — the exit code is ignored.
+    /// Checks the managed tools directory first (via `tool_manager`), then falls
+    /// back to finding `cargo-verus` on PATH.
+    pub fn resolve_binary() -> Option<PathBuf> {
+        use crate::tool_manager::{resolve_tool, Tool};
+        resolve_tool(Tool::Verus).ok()
+    }
+
+    /// Check whether `cargo verus` is available (managed or on PATH).
     pub fn is_available() -> bool {
+        if Self::resolve_binary().is_some() {
+            return true;
+        }
+        // Final fallback: try spawning directly (handles edge cases like
+        // cargo-verus being a script or alias not discoverable by `which`)
         Command::new("cargo-verus")
             .arg("--help")
             .stdout(Stdio::null())
@@ -660,7 +670,10 @@ impl VerusRunner {
         std::env::set_var("DOCS_RS", "1");
     }
 
-    /// Run cargo verus verification and return output and exit code
+    /// Run cargo verus verification and return output and exit code.
+    ///
+    /// If a managed `cargo-verus` binary is available, it is invoked directly.
+    /// Otherwise falls back to `cargo verus` (which requires `cargo-verus` on PATH).
     pub fn run_verification(
         &self,
         work_dir: &Path,
@@ -671,8 +684,15 @@ impl VerusRunner {
     ) -> Result<(String, i32), std::io::Error> {
         self.setup_environment();
 
-        let mut cmd = Command::new("cargo");
-        cmd.arg("verus").arg("verify");
+        let mut cmd = if let Some(binary) = Self::resolve_binary() {
+            let mut c = Command::new(binary);
+            c.arg("verus").arg("verify");
+            c
+        } else {
+            let mut c = Command::new("cargo");
+            c.arg("verus").arg("verify");
+            c
+        };
 
         if let Some(pkg) = package {
             cmd.arg("-p").arg(pkg);
@@ -1434,6 +1454,24 @@ mod tests {
                 "C5 NOTE: filename-only match resolved to {:?} — \
                  could be wrong if multiple files share the name",
                 result
+            );
+        }
+    }
+
+    #[test]
+    fn test_verus_runner_resolve_binary_uses_tool_manager() {
+        // resolve_binary delegates to tool_manager::resolve_tool(Tool::Verus).
+        // Without a managed install, it should return None (or a PATH-discovered binary).
+        // This test verifies the function doesn't panic and returns a valid Option.
+        let result = VerusRunner::resolve_binary();
+        // On dev machines cargo-verus may or may not be installed;
+        // we just verify the function runs without error.
+        if let Some(ref path) = result {
+            assert!(
+                path.to_string_lossy().contains("cargo-verus")
+                    || path.to_string_lossy().contains("cargo_verus"),
+                "resolved binary path should contain cargo-verus: {:?}",
+                path
             );
         }
     }

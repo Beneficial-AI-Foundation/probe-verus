@@ -227,14 +227,16 @@ fn run_verification(
 ) -> (String, i32) {
     if !VerusRunner::is_available() {
         eprintln!("Error: 'cargo verus' not found.");
-        eprintln!(
-            "Install Verus to use the run-verus command: https://github.com/verus-lang/verus"
-        );
+        eprintln!("Install with: probe-verus setup --from-project <project-path>");
+        eprintln!("Or manually: https://github.com/verus-lang/verus");
         std::process::exit(1);
     }
 
     println!("════════════════════════════════════════════════════════════");
     println!("  Running Verus verification...");
+    if let Some(binary) = VerusRunner::resolve_binary() {
+        println!("  Using cargo-verus: {}", binary.display());
+    }
     if !verus_args.is_empty() {
         println!("  Extra Verus args: {:?}", verus_args);
     }
@@ -392,7 +394,8 @@ fn enrich_with_code_names_if_available(result: &mut AnalysisResult, atoms_path: 
 pub fn run_verus_internal(config: &ExtractInternalConfig) -> Result<VerifySummary, String> {
     if !VerusRunner::is_available() {
         return Err(
-            "cargo verus not found; install Verus: https://github.com/verus-lang/verus".to_string(),
+            "cargo verus not found. Install with: probe-verus setup --from-project <project-path>"
+                .to_string(),
         );
     }
 

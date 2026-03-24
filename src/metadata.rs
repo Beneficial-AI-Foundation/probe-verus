@@ -455,6 +455,133 @@ fn read_cargo_package_info(project_path: &Path, commit: &str) -> (String, String
     (name, version)
 }
 
+// =============================================================================
+// Verus version detection from target project Cargo.toml
+// =============================================================================
+
+/// Detect the Verus version from a project's Cargo.toml.
+///
+/// Resolution order:
+/// 1. `[package.metadata.verus]` section's `release` field in root Cargo.toml
+/// 2. Workspace fallback: search member crate Cargo.toml files for the same section
+/// 3. Dependency fallback: `vstd` or `verus_builtin` dependency with `rev = "..."`
+///    matched against GitHub release tags
+///
+/// Returns `None` if no version can be determined.
+pub fn detect_verus_version(project_path: &Path) -> Option<String> {
+    let cargo_toml_path = project_path.join("Cargo.toml");
+    let content = std::fs::read_to_string(&cargo_toml_path).ok()?;
+    let table: toml::Table = content.parse().ok()?;
+
+    // 1. Check [package.metadata.verus] release
+    if let Some(version) = extract_verus_release_from_table(&table) {
+        return Some(version);
+    }
+
+    // 2. Workspace fallback: search member crate Cargo.toml files
+    if let Some(version) = search_workspace_members_for_verus(project_path, &table) {
+        return Some(version);
+    }
+
+    // 3. Dependency fallback: vstd/verus_builtin rev
+    if let Some(version) = resolve_verus_from_deps(project_path) {
+        return Some(version);
+    }
+
+    None
+}
+
+/// Extract `release` from `[package.metadata.verus]` in a parsed Cargo.toml table.
+fn extract_verus_release_from_table(table: &toml::Table) -> Option<String> {
+    table
+        .get("package")?
+        .as_table()?
+        .get("metadata")?
+        .as_table()?
+        .get("verus")?
+        .as_table()?
+        .get("release")?
+        .as_str()
+        .map(|s| s.to_string())
+}
+
+/// Search workspace member Cargo.toml files for `[package.metadata.verus]`.
+fn search_workspace_members_for_verus(
+    project_path: &Path,
+    root_table: &toml::Table,
+) -> Option<String> {
+    let members = root_table
+        .get("workspace")?
+        .as_table()?
+        .get("members")?
+        .as_array()?;
+
+    for member in members {
+        let member_str = member.as_str()?;
+        // Handle glob patterns by checking if the literal path exists
+        let member_toml = project_path.join(member_str).join("Cargo.toml");
+        if !member_toml.exists() {
+            continue;
+        }
+        if let Ok(content) = std::fs::read_to_string(&member_toml) {
+            if let Ok(table) = content.parse::<toml::Table>() {
+                if let Some(version) = extract_verus_release_from_table(&table) {
+                    return Some(version);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Try to find a `vstd` or `verus_builtin` dependency with a git `rev` field,
+/// then match it against Verus GitHub release tags.
+fn resolve_verus_from_deps(project_path: &Path) -> Option<String> {
+    let rev = find_verus_dep_rev(project_path)?;
+    eprintln!("Found Verus dependency rev: {rev} (matching against GitHub releases...)");
+    crate::tool_manager::fetch_verus_release_by_rev(&rev)
+}
+
+/// Walk Cargo.toml files in the project looking for `vstd` or `verus_builtin` deps with a `rev`.
+fn find_verus_dep_rev(project_path: &Path) -> Option<String> {
+    for entry in walkdir::WalkDir::new(project_path)
+        .max_depth(3)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        if entry.file_name() != "Cargo.toml" {
+            continue;
+        }
+        if let Ok(content) = std::fs::read_to_string(entry.path()) {
+            if let Ok(table) = content.parse::<toml::Table>() {
+                if let Some(rev) = extract_verus_dep_rev(&table) {
+                    return Some(rev);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Extract `rev` from a `vstd` or `verus_builtin` dependency in any dependency section.
+fn extract_verus_dep_rev(table: &toml::Table) -> Option<String> {
+    let dep_sections = ["dependencies", "dev-dependencies", "build-dependencies"];
+    let dep_names = ["vstd", "verus_builtin", "builtin", "builtin_macros"];
+
+    for section in &dep_sections {
+        if let Some(deps) = table.get(*section).and_then(|v| v.as_table()) {
+            for dep_name in &dep_names {
+                if let Some(dep) = deps.get(*dep_name).and_then(|v| v.as_table()) {
+                    if let Some(rev) = dep.get("rev").and_then(|v| v.as_str()) {
+                        return Some(rev.to_string());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -870,5 +997,133 @@ mod tests {
         let expected_dir = root.file_name().unwrap().to_str().unwrap().to_string();
         assert_eq!(name, expected_dir);
         assert_eq!(version, "abcdef1");
+    }
+
+    // =========================================================================
+    // Tests for detect_verus_version and helpers
+    // =========================================================================
+
+    #[test]
+    fn test_extract_verus_release_from_table() {
+        let toml_str = r#"
+[package]
+name = "my-crate"
+version = "1.0.0"
+
+[package.metadata.verus]
+release = "0.2026.03.22.5e66329"
+rust-version = "nightly-2026-03-01"
+"#;
+        let table: toml::Table = toml_str.parse().unwrap();
+        let version = extract_verus_release_from_table(&table);
+        assert_eq!(version, Some("0.2026.03.22.5e66329".to_string()));
+    }
+
+    #[test]
+    fn test_extract_verus_release_missing() {
+        let toml_str = r#"
+[package]
+name = "my-crate"
+version = "1.0.0"
+"#;
+        let table: toml::Table = toml_str.parse().unwrap();
+        assert_eq!(extract_verus_release_from_table(&table), None);
+    }
+
+    #[test]
+    fn test_extract_verus_dep_rev_vstd() {
+        let toml_str = r#"
+[dependencies]
+vstd = { git = "https://github.com/verus-lang/verus", rev = "5e66329abc" }
+"#;
+        let table: toml::Table = toml_str.parse().unwrap();
+        let rev = extract_verus_dep_rev(&table);
+        assert_eq!(rev, Some("5e66329abc".to_string()));
+    }
+
+    #[test]
+    fn test_extract_verus_dep_rev_builtin() {
+        let toml_str = r#"
+[dependencies]
+builtin = { git = "https://github.com/verus-lang/verus", rev = "abc1234" }
+"#;
+        let table: toml::Table = toml_str.parse().unwrap();
+        let rev = extract_verus_dep_rev(&table);
+        assert_eq!(rev, Some("abc1234".to_string()));
+    }
+
+    #[test]
+    fn test_extract_verus_dep_rev_none() {
+        let toml_str = r#"
+[dependencies]
+serde = "1.0"
+"#;
+        let table: toml::Table = toml_str.parse().unwrap();
+        assert_eq!(extract_verus_dep_rev(&table), None);
+    }
+
+    #[test]
+    fn test_detect_verus_version_from_metadata() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            r#"
+[package]
+name = "test-project"
+version = "0.1.0"
+
+[package.metadata.verus]
+release = "0.2026.03.22.5e66329"
+"#,
+        )
+        .unwrap();
+
+        let version = detect_verus_version(root);
+        assert_eq!(version, Some("0.2026.03.22.5e66329".to_string()));
+    }
+
+    #[test]
+    fn test_detect_verus_version_workspace_fallback() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"my-crate\"]\n",
+        )
+        .unwrap();
+
+        let member = root.join("my-crate");
+        std::fs::create_dir_all(&member).unwrap();
+        std::fs::write(
+            member.join("Cargo.toml"),
+            r#"
+[package]
+name = "my-crate"
+version = "0.1.0"
+
+[package.metadata.verus]
+release = "0.2026.01.01.abc1234"
+"#,
+        )
+        .unwrap();
+
+        let version = detect_verus_version(root);
+        assert_eq!(version, Some("0.2026.01.01.abc1234".to_string()));
+    }
+
+    #[test]
+    fn test_detect_verus_version_no_version() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"no-verus\"\nversion = \"1.0.0\"\n",
+        )
+        .unwrap();
+
+        let version = detect_verus_version(root);
+        assert_eq!(version, None);
     }
 }

@@ -7,16 +7,19 @@ Probe Verus projects: generate call graph atoms, extract specifications, and ana
 ## Prerequisites
 
 - **Rust toolchain** (`cargo`) -- install via [rustup.rs](https://rustup.rs/)
-- **External tools** -- some commands require `verus-analyzer`, `scip`, or `cargo verus`. Run `probe-verus setup` to auto-download them, or see [tools/INSTALL.md](tools/INSTALL.md) for manual options.
+- **verus-analyzer & scip** -- auto-downloadable via `probe-verus setup --install` or the `--auto-install` flag on `extract`/`atomize`. See [tools/INSTALL.md](tools/INSTALL.md) for manual options.
+- **Verus** (`cargo verus`) -- required for the verification step. Must be installed separately; `probe-verus setup` does **not** install Verus. If Verus is not installed, `extract` will still run the atomize and specify steps and print a warning that verification was skipped. Install options:
+  - Official guide: [verus-lang.github.io/verus/guide/getting_started.html](https://verus-lang.github.io/verus/guide/getting_started.html)
+  - Convenience scripts in this repo (pre-built binary download, specific versions, build from source): see [tools/INSTALL.md](tools/INSTALL.md#install-verus)
 
-| Command | Required Tools |
-|---------|----------------|
-| `extract` | verus-analyzer, scip, cargo verus |
-| `atomize` | verus-analyzer, scip |
-| `specify` | None |
-| `run-verus` | cargo verus |
-| `list-functions` | None |
-| `setup` | None |
+| Command | Required Tools | Notes |
+|---------|----------------|-------|
+| `extract` | verus-analyzer, scip, cargo verus | Gracefully skips verification if Verus is missing |
+| `atomize` | verus-analyzer, scip | Auto-downloadable via `--auto-install` |
+| `specify` | None | |
+| `run-verus` | cargo verus | Requires Verus to be installed |
+| `list-functions` | None | |
+| `setup` | None | Downloads verus-analyzer & scip only |
 
 ## Installation
 

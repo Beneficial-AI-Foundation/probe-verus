@@ -633,6 +633,21 @@ impl VerusRunner {
         Self
     }
 
+    /// Check whether `cargo verus` is available on PATH.
+    ///
+    /// Cargo subcommands are resolved by looking for a `cargo-<name>` binary, so
+    /// we probe for `cargo-verus`.  Only the ability to *spawn* the process is
+    /// tested — the exit code is ignored.
+    pub fn is_available() -> bool {
+        Command::new("cargo-verus")
+            .arg("--help")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .stdin(Stdio::null())
+            .output()
+            .is_ok()
+    }
+
     /// Set up environment variables for Verus verification
     fn setup_environment(&self) {
         let boring_stub = "/tmp/boring-stub";

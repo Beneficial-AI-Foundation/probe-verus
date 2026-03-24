@@ -2,6 +2,7 @@
 
 use super::atomize::atomize_internal;
 use super::run_verus::{run_verus_internal, VerifySummary};
+use crate::verification::VerusRunner;
 use super::specify::specify_internal;
 use crate::metadata::{
     find_default_atoms_path, gather_metadata, get_default_output_path, unwrap_envelope,
@@ -77,7 +78,6 @@ pub fn cmd_extract(
     _with_spec_text: bool,
     taxonomy_config: Option<PathBuf>,
     verus_args: Vec<String>,
-    separate_outputs: bool,
 ) -> Result<(), String> {
     if !project_path.exists() {
         return Err(format!(
@@ -207,8 +207,6 @@ pub fn cmd_extract(
         merge_proofs,
         &project_path,
         &metadata,
-        separate_outputs,
-        &result,
     );
 
     // === Summary ===
@@ -314,6 +312,14 @@ fn run_verify_step(config: &ExtractInternalConfig, result: &mut ExtractPipelineR
     println!("  Step 3/3: Run-Verus (cargo verus verification)");
     println!("───────────────────────────────────────────────────────────────");
     println!();
+
+    if !VerusRunner::is_available() {
+        eprintln!("  Warning: 'cargo verus' not found; skipping verification.");
+        eprintln!("    Install Verus to get verification-status in output:");
+        eprintln!("    https://github.com/verus-lang/verus");
+        println!();
+        return;
+    }
 
     match run_verus_internal(config) {
         Ok(summary) => {
@@ -538,15 +544,13 @@ fn load_enveloped_data<T: serde::de::DeserializeOwned>(
     })
 }
 
-/// Run the merge step: produce unified output, optionally clean up individual files.
+/// Run the merge step: produce unified output.
 fn run_unified_merge(
     atoms_path: &Path,
     specs_path: Option<&Path>,
     proofs_path: Option<&Path>,
     project_path: &Path,
     metadata: &ProjectMetadata,
-    separate_outputs: bool,
-    result: &ExtractPipelineResult,
 ) -> Option<PathBuf> {
     if !atoms_path.exists() {
         eprintln!("  Warning: skipping unified output (no atoms file)");
@@ -579,10 +583,6 @@ fn run_unified_merge(
                         unified_path.display()
                     );
 
-                    if !separate_outputs {
-                        cleanup_individual_files(atoms_path, specs_opt, proofs_opt, result);
-                    }
-
                     Some(unified_path)
                 }
                 Err(e) => {
@@ -594,29 +594,6 @@ fn run_unified_merge(
         Err(e) => {
             eprintln!("  Warning: Could not merge outputs: {}", e);
             None
-        }
-    }
-}
-
-/// Remove individual output files that were produced during the pipeline.
-/// Only removes files for steps that actually succeeded (have a StepResult with success).
-fn cleanup_individual_files(
-    atoms_path: &Path,
-    specs_path: Option<&Path>,
-    proofs_path: Option<&Path>,
-    result: &ExtractPipelineResult,
-) {
-    if result.atomize.as_ref().is_some_and(|a| a.success) && atoms_path.exists() {
-        let _ = std::fs::remove_file(atoms_path);
-    }
-    if let Some(sp) = specs_path {
-        if result.specify.as_ref().is_some_and(|s| s.success) && sp.exists() {
-            let _ = std::fs::remove_file(sp);
-        }
-    }
-    if let Some(pp) = proofs_path {
-        if result.verify.as_ref().is_some_and(|v| v.success) && pp.exists() {
-            let _ = std::fs::remove_file(pp);
         }
     }
 }

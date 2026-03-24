@@ -225,6 +225,14 @@ fn run_verification(
     package_for_cache: &Option<String>,
     verus_args: &[String],
 ) -> (String, i32) {
+    if !VerusRunner::is_available() {
+        eprintln!("Error: 'cargo verus' not found.");
+        eprintln!(
+            "Install Verus to use the run-verus command: https://github.com/verus-lang/verus"
+        );
+        std::process::exit(1);
+    }
+
     println!("════════════════════════════════════════════════════════════");
     println!("  Running Verus verification...");
     if !verus_args.is_empty() {
@@ -382,6 +390,13 @@ fn enrich_with_code_names_if_available(result: &mut AnalysisResult, atoms_path: 
 /// Internal run-verus implementation that returns Result for better error handling.
 /// Used by the unified `extract` command (which pre-gathers metadata to share a timestamp).
 pub fn run_verus_internal(config: &ExtractInternalConfig) -> Result<VerifySummary, String> {
+    if !VerusRunner::is_available() {
+        return Err(
+            "cargo verus not found; install Verus: https://github.com/verus-lang/verus"
+                .to_string(),
+        );
+    }
+
     let runner = VerusRunner::new();
 
     let extra = if config.verus_args.is_empty() {

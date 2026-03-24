@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 See the [Versioning Policy section in CLAUDE.md](CLAUDE.md#versioning-policy) for
 what constitutes a breaking change.
 
-## [Unreleased]
+## [6.0.0] - 2026-03-24
 
 ### Breaking
 - **Removed `--output` / `-o` flag** from `extract` command. All outputs (unified, atoms, specs, proofs, extract summary) are now written to `<project>/.verilib/probes/`. The `extract_summary.json` file is now named `verus_<pkg>_<ver>_extract_summary.json` and lives alongside the other outputs.

@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 See the [Versioning Policy section in CLAUDE.md](CLAUDE.md#versioning-policy) for
 what constitutes a breaking change.
 
-## [Unreleased]
+## [6.2.0] - 2026-03-25
 
 ### Added
 - **Automatic Rust toolchain installation**: `setup` now reads `rust-toolchain.toml` from the Verus release tag and installs the matching Rust toolchain (and components) via `rustup`. This fixes verification failures caused by toolchain version mismatches.

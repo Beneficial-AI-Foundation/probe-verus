@@ -89,15 +89,16 @@ The existing `action/` is **not deprecated** — it continues to work for caller
 
 ### Versions
 
-If `verus-version` or `rust-version` are not provided, the action looks for them in your project's `Cargo.toml`:
+If `verus-version` is not provided, the action auto-detects it from your project's `Cargo.toml`:
 
 ```toml
 [package.metadata.verus]
 release = "1.85.0"
-rust-version = "nightly-2025-01-01"
 ```
 
 If no explicit release is found, the action falls back to resolving the version from `vstd`/`verus_builtin` git dependency `rev` fields against GitHub release tags.
+
+If `rust-version` is not provided, the action reads the Verus release's `rust-toolchain.toml` to determine the exact Rust toolchain required (e.g. `1.94.0`). This ensures the compiler version always matches what Verus was built against.
 
 ### Taxonomy config
 

@@ -78,8 +78,8 @@ runs:
         cargo install --force --git https://github.com/Beneficial-AI-Foundation/probe-verus
         probe-verus --version || echo "probe-verus installed"
 
-    # Step 2: Detect versions (Verus from Cargo.toml, Rust from metadata)
-    - name: Detect versions
+    # Step 2: Detect Verus version (from explicit input or Cargo.toml)
+    - name: Detect Verus version
       id: versions
       shell: bash
       env:
@@ -105,30 +105,23 @@ runs:
           fi
         fi
 
-        # Detect Rust version from Cargo.toml metadata
+        # Detect Rust toolchain: explicit input or from Verus release's rust-toolchain.toml
         RUST_VERSION="${{ inputs.rust-version }}"
         if [ -z "$RUST_VERSION" ]; then
-          METADATA=$(awk '/^\[package\.metadata\.verus\]/{flag=1;next}/^\[/{flag=0}flag' "$CARGO_TOML")
-          if [ -z "$(echo "$METADATA" | tr -d '[:space:]')" ]; then
-            MEMBER_TOML=$(grep -rl '\[package\.metadata\.verus\]' "$PROJECT_PATH" --include='Cargo.toml' | head -1) || true
-            if [ -n "$MEMBER_TOML" ] && [ "$MEMBER_TOML" != "$CARGO_TOML" ]; then
-              METADATA=$(awk '/^\[package\.metadata\.verus\]/{flag=1;next}/^\[/{flag=0}flag' "$MEMBER_TOML")
-            fi
-          fi
-          RUST_VERSION=$(echo "$METADATA" | grep -E '^\s*rust-version\s*=' | sed 's/.*= *"\([^"]*\)".*/\1/' | head -1) || true
-          if [ -z "$RUST_VERSION" ]; then
-            RUST_VERSION="stable"
-            echo "No Rust version found, using: $RUST_VERSION"
+          RUST_VERSION=$(PROBE_VERUS_VERSION="$VERUS_VERSION" probe-verus setup --detect-toolchain 2>/dev/null) || true
+          if [ -n "$RUST_VERSION" ]; then
+            echo "Auto-detected Rust toolchain from Verus release: $RUST_VERSION"
           else
-            echo "Auto-detected Rust version: $RUST_VERSION"
+            echo "::warning::Could not detect Rust toolchain from Verus release, probe-verus setup will attempt installation"
           fi
         fi
 
         echo "verus_version=$VERUS_VERSION" >> $GITHUB_OUTPUT
         echo "rust_version=$RUST_VERSION" >> $GITHUB_OUTPUT
 
-    # Step 3: Install Rust toolchain
+    # Step 3: Install Rust toolchain (explicit or auto-detected from Verus release)
     - name: Install Rust toolchain
+      if: steps.versions.outputs.rust_version != ''
       uses: dtolnay/rust-toolchain@master
       with:
         toolchain: ${{ steps.versions.outputs.rust_version }}
@@ -148,14 +141,19 @@ runs:
           ${{ runner.os }}-cargo-verus-
           ${{ runner.os }}-cargo-
 
-    # Step 5: Install all tools (verus-analyzer, scip, verus)
+    # Step 5: Install all tools (verus-analyzer, scip, verus + Rust toolchain)
     - name: Install tools
       shell: bash
       env:
         GITHUB_TOKEN: ${{ inputs.token }}
         PROBE_VERUS_VERSION: ${{ steps.versions.outputs.verus_version }}
       run: |
-        probe-verus setup --from-project "${{ inputs.project-path }}"
+        # If toolchain was already installed by dtolnay/rust-toolchain, skip rustup step
+        SKIP_TC=""
+        if [ -n "${{ steps.versions.outputs.rust_version }}" ]; then
+          SKIP_TC="--skip-toolchain"
+        fi
+        probe-verus setup --from-project "${{ inputs.project-path }}" $SKIP_TC
 
     # Step 6: Run probe-verus extract (unified pipeline)
     - name: Run probe-verus extract

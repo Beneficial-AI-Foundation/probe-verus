@@ -278,6 +278,10 @@ enum Commands {
     /// project Cargo.toml detection (with --from-project), the latest GitHub
     /// release, and a compiled-in fallback version. Use --status to see which
     /// tools are installed and where they are located.
+    ///
+    /// After installing Verus, the matching Rust toolchain is automatically
+    /// installed via rustup (read from the Verus release's rust-toolchain.toml).
+    /// Use --skip-toolchain to disable this.
     Setup {
         /// Show installation status instead of installing
         #[arg(long)]
@@ -290,6 +294,14 @@ enum Commands {
         /// Print detected Verus version without installing (requires --from-project)
         #[arg(long)]
         detect_version: bool,
+
+        /// Print the Rust toolchain channel required by the resolved Verus version
+        #[arg(long)]
+        detect_toolchain: bool,
+
+        /// Skip automatic Rust toolchain installation via rustup
+        #[arg(long)]
+        skip_toolchain: bool,
     },
 
     /// Unified pipeline: atomize + specify + run-verus
@@ -519,8 +531,16 @@ fn main() {
             status,
             from_project,
             detect_version,
+            detect_toolchain,
+            skip_toolchain,
         } => {
-            cmd_setup(status, from_project, detect_version);
+            cmd_setup(
+                status,
+                from_project,
+                detect_version,
+                detect_toolchain,
+                skip_toolchain,
+            );
         }
         Commands::Extract {
             project_path,

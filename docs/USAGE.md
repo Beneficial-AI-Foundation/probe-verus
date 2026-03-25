@@ -269,6 +269,8 @@ probe-verus setup [OPTIONS]
 | `--status` | Show installation status instead of installing |
 | `--from-project <PATH>` | Read target project's Cargo.toml to determine correct Verus version |
 | `--detect-version` | Print detected Verus version without installing (requires `--from-project`) |
+| `--detect-toolchain` | Print the Rust toolchain channel required by the resolved Verus version |
+| `--skip-toolchain` | Skip automatic Rust toolchain installation via rustup |
 
 Version resolution uses, in order:
 1. Environment variable overrides (`PROBE_VERUS_ANALYZER_VERSION`, `PROBE_SCIP_VERSION`, `PROBE_VERUS_VERSION`)
@@ -284,6 +286,12 @@ Verus version auto-detection looks for:
 Tools are installed to `~/.probe-verus/tools/`. Verus is installed to versioned
 directories (`~/.probe-verus/tools/verus-{version}/`), supporting multiple
 versions side-by-side.
+
+**Rust toolchain**: After installing Verus, setup automatically fetches the
+`rust-toolchain.toml` from the Verus release tag and installs the matching Rust
+toolchain and components via `rustup`. This ensures verification runs with the
+correct compiler version. Use `--skip-toolchain` to disable this (e.g., in
+Docker images that manage their own toolchain).
 
 ### Examples
 

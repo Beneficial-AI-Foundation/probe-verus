@@ -51,7 +51,7 @@ src/
 ├── commands/         # Subcommand implementations (extract, atomize, run_verus, specify, setup, etc.)
 ├── scip_cache.rs     # SCIP index generation, caching, and tool resolution
 ├── taxonomy.rs       # Spec taxonomy classification from TOML rules
-├── tool_manager.rs   # Auto-download manager for external tools (verus-analyzer, scip)
+├── tool_manager.rs   # Auto-download manager for external tools (verus-analyzer, scip, verus)
 ├── verification.rs   # Verification output parsing & analysis
 └── verus_parser.rs   # AST parsing using verus_syn for function spans
 ```
@@ -65,7 +65,7 @@ src/
 3. **List Functions Pipeline** (`list-functions` command): Source files → AST visitor → function list
 4. **Run-Verus Pipeline** (`run-verus` command): Cargo verus output → error parsing → function mapping → Schema 2.0 envelope → `.verilib/probes/`
 5. **Specify Pipeline** (`specify` command): Source files + atoms.json → spec extraction → optional taxonomy classification via TOML rules → Schema 2.0 envelope → `.verilib/probes/`
-6. **Setup Pipeline** (`setup` command): Resolve versions → download from GitHub → decompress to `~/.probe-verus/tools/`
+6. **Setup Pipeline** (`setup` command): Resolve versions → download from GitHub → decompress to `~/.probe-verus/tools/` → install matching Rust toolchain via rustup
 
 ### Key Architectural Patterns
 
@@ -77,7 +77,7 @@ src/
 
 **SCIP Data Caching**: Generated SCIP data is cached in `<project>/data/` to avoid re-running slow external tools.
 
-**Auto-download Tool Manager**: External tools (verus-analyzer, scip, verus) are auto-downloaded to `~/.probe-verus/tools/` via `probe-verus setup`. Version resolution: env var override (`PROBE_VERUS_ANALYZER_VERSION`, `PROBE_SCIP_VERSION`, `PROBE_VERUS_VERSION`) → project Cargo.toml detection (for Verus, via `--from-project`) → GitHub `/releases/latest` API → compiled-in fallback. Verus is installed to versioned directories (`verus-{version}/`) supporting multiple versions side-by-side. `VerusRunner` resolves `cargo-verus` via `tool_manager` by absolute path. The `--auto-install` flag on `extract`/`atomize` is deprecated in favor of `setup --from-project`.
+**Auto-download Tool Manager**: External tools (verus-analyzer, scip, verus) are auto-downloaded to `~/.probe-verus/tools/` via `probe-verus setup`. Version resolution: env var override (`PROBE_VERUS_ANALYZER_VERSION`, `PROBE_SCIP_VERSION`, `PROBE_VERUS_VERSION`) → project Cargo.toml detection (for Verus, via `--from-project`) → GitHub `/releases/latest` API → compiled-in fallback. Verus is installed to versioned directories (`verus-{version}/`) supporting multiple versions side-by-side. `VerusRunner` resolves `cargo-verus` via `tool_manager` by absolute path. The `--auto-install` flag on `extract`/`atomize` is deprecated in favor of `setup --from-project`. After installing Verus, setup fetches `rust-toolchain.toml` from the Verus release tag and installs the matching Rust toolchain via `rustup` (`--skip-toolchain` disables this).
 
 **AST-based Spec Taxonomy**: The `specify` command can classify specs using taxonomy rules defined in TOML. Classification uses structured AST data (function mode, called function names extracted via `verus_syn` visitor) rather than regex on text. A `CallNameCollector` visitor walks `ExprCall`/`ExprMethodCall` nodes in ensures/requires clauses to extract called function names.
 

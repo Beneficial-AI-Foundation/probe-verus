@@ -810,6 +810,111 @@ fn extract_verus_zip(data: &[u8], dest_dir: &Path, tool: Tool) -> Result<(), Too
 }
 
 // ---------------------------------------------------------------------------
+// Rust toolchain management
+// ---------------------------------------------------------------------------
+
+/// Parsed contents of Verus's `rust-toolchain.toml`.
+#[derive(Debug, Clone)]
+pub struct RustToolchainInfo {
+    pub channel: String,
+    pub components: Vec<String>,
+}
+
+/// Fetch the `rust-toolchain.toml` for a Verus release from GitHub.
+///
+/// Uses the raw content URL at the release tag
+/// (`release/{version}/rust-toolchain.toml`).
+pub fn fetch_verus_rust_toolchain(verus_version: &str) -> Option<RustToolchainInfo> {
+    let url = format!(
+        "https://raw.githubusercontent.com/{VERUS_REPO}/release/{verus_version}/rust-toolchain.toml"
+    );
+    let response = ureq::get(&url)
+        .set("User-Agent", "probe-verus")
+        .call()
+        .ok()?;
+    let body = response.into_string().ok()?;
+    parse_rust_toolchain_toml(&body)
+}
+
+fn parse_rust_toolchain_toml(content: &str) -> Option<RustToolchainInfo> {
+    let table: toml::Table = content.parse().ok()?;
+    let toolchain = table.get("toolchain")?.as_table()?;
+    let channel = toolchain.get("channel")?.as_str()?.to_string();
+    let components = toolchain
+        .get("components")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(RustToolchainInfo {
+        channel,
+        components,
+    })
+}
+
+/// Ensure the Rust toolchain required by a Verus release is installed.
+///
+/// Fetches the `rust-toolchain.toml` from the Verus release tag, then runs
+/// `rustup toolchain install` and `rustup component add` as needed.
+pub fn ensure_rust_toolchain(verus_version: &str) -> Result<RustToolchainInfo, String> {
+    let info = fetch_verus_rust_toolchain(verus_version)
+        .ok_or_else(|| format!("could not fetch rust-toolchain.toml for Verus {verus_version}"))?;
+
+    eprintln!(
+        "Verus {verus_version} requires Rust toolchain: {}",
+        info.channel
+    );
+
+    let rustup_ok = Command::new("rustup")
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    if !rustup_ok {
+        return Err("rustup not found; cannot install required Rust toolchain. \
+             Install rustup from https://rustup.rs/"
+            .into());
+    }
+
+    eprintln!("Installing Rust toolchain {} via rustup...", info.channel);
+    let status = Command::new("rustup")
+        .args(["toolchain", "install", &info.channel])
+        .status()
+        .map_err(|e| format!("failed to run rustup: {e}"))?;
+
+    if !status.success() {
+        return Err(format!("rustup toolchain install {} failed", info.channel));
+    }
+
+    if !info.components.is_empty() {
+        eprintln!("Installing components: {}", info.components.join(", "));
+        let mut cmd = Command::new("rustup");
+        cmd.args(["component", "add", "--toolchain", &info.channel]);
+        for c in &info.components {
+            cmd.arg(c);
+        }
+        let status = cmd
+            .status()
+            .map_err(|e| format!("failed to run rustup component add: {e}"))?;
+        if !status.success() {
+            return Err(format!(
+                "rustup component add failed for toolchain {}",
+                info.channel
+            ));
+        }
+    }
+
+    eprintln!("Rust toolchain {} is ready.", info.channel);
+    Ok(info)
+}
+
+// ---------------------------------------------------------------------------
 // Status reporting
 // ---------------------------------------------------------------------------
 
@@ -878,7 +983,32 @@ pub fn print_status() {
         );
     }
 
-    println!();
+    // Show required Rust toolchain for the resolved Verus version
+    let verus_resolved = resolve_verus_version(None);
+    if let Some(tc) = fetch_verus_rust_toolchain(&verus_resolved.tag) {
+        println!(
+            "Rust toolchain required by Verus {}: {}",
+            verus_resolved.tag, tc.channel
+        );
+        let rustup_has = Command::new("rustup")
+            .args(["run", &tc.channel, "rustc", "--version"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output()
+            .ok()
+            .filter(|o| o.status.success());
+        match rustup_has {
+            Some(output) => {
+                let ver = String::from_utf8_lossy(&output.stdout);
+                println!("  Installed: {}", ver.trim());
+            }
+            None => {
+                println!("  Status: NOT INSTALLED (run `probe-verus setup` to install)");
+            }
+        }
+        println!();
+    }
+
     println!("Override versions with environment variables:");
     println!("  {VERUS_ANALYZER_VERSION_ENV}=<tag>  (e.g. 2026-02-03)");
     println!("  {SCIP_VERSION_ENV}=<tag>             (e.g. v0.6.1)");
@@ -1176,5 +1306,57 @@ mod tests {
     fn test_verus_display_name() {
         assert_eq!(format!("{}", Tool::Verus), "verus");
         assert_eq!(format!("{}", Tool::VerusAnalyzer), "verus-analyzer");
+    }
+
+    #[test]
+    fn test_parse_rust_toolchain_toml_stable() {
+        let content = r#"
+[toolchain]
+channel = "1.94.0"
+components = [ "rustc", "rust-std", "cargo", "rustfmt", "rustc-dev", "llvm-tools" ]
+"#;
+        let info = parse_rust_toolchain_toml(content).unwrap();
+        assert_eq!(info.channel, "1.94.0");
+        assert_eq!(
+            info.components,
+            vec![
+                "rustc",
+                "rust-std",
+                "cargo",
+                "rustfmt",
+                "rustc-dev",
+                "llvm-tools"
+            ]
+        );
+    }
+
+    #[test]
+    fn test_parse_rust_toolchain_toml_nightly() {
+        let content = r#"
+[toolchain]
+channel = "nightly-2025-01-30"
+components = [ "rustc", "rust-std", "cargo", "rustfmt", "rustc-dev" ]
+"#;
+        let info = parse_rust_toolchain_toml(content).unwrap();
+        assert_eq!(info.channel, "nightly-2025-01-30");
+        assert_eq!(info.components.len(), 5);
+    }
+
+    #[test]
+    fn test_parse_rust_toolchain_toml_no_components() {
+        let content = r#"
+[toolchain]
+channel = "1.94.0"
+"#;
+        let info = parse_rust_toolchain_toml(content).unwrap();
+        assert_eq!(info.channel, "1.94.0");
+        assert!(info.components.is_empty());
+    }
+
+    #[test]
+    fn test_parse_rust_toolchain_toml_invalid() {
+        assert!(parse_rust_toolchain_toml("not valid toml {{{").is_none());
+        assert!(parse_rust_toolchain_toml("[toolchain]\n").is_none());
+        assert!(parse_rust_toolchain_toml("").is_none());
     }
 }

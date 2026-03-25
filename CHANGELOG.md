@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 See the [Versioning Policy section in CLAUDE.md](CLAUDE.md#versioning-policy) for
 what constitutes a breaking change.
 
+## [Unreleased]
+
+### Added
+- **Automatic Rust toolchain installation**: `setup` now reads `rust-toolchain.toml` from the Verus release tag and installs the matching Rust toolchain (and components) via `rustup`. This fixes verification failures caused by toolchain version mismatches.
+- **`setup --detect-toolchain`**: Print the Rust toolchain channel required by the resolved Verus version (e.g. `1.94.0`). Useful for CI cache keys and action outputs.
+- **`setup --skip-toolchain`**: Skip automatic Rust toolchain installation via `rustup` (for environments that manage their own toolchain).
+- **`setup --status` shows required toolchain**: The status table now displays the Rust toolchain version required by the resolved Verus release.
+
+### Changed
+- **GitHub Actions use Verus release toolchain**: Both `action/` and `action-extract/` now auto-detect the Rust toolchain from the Verus release's `rust-toolchain.toml` instead of parsing `rust-version` from Cargo.toml metadata. The `rust-version` input remains for explicit overrides.
+
+### Tests
+- `test_parse_rust_toolchain_toml_stable`, `test_parse_rust_toolchain_toml_nightly`, `test_parse_rust_toolchain_toml_no_components`, `test_parse_rust_toolchain_toml_invalid`: TOML parsing for Verus `rust-toolchain.toml`
+
 ## [6.1.0] - 2026-03-24
 
 ### Added

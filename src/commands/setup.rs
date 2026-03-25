@@ -5,10 +5,18 @@ use std::path::PathBuf;
 use crate::metadata;
 use crate::tool_manager;
 
-pub fn cmd_setup(status: bool, from_project: Option<PathBuf>, detect_version: bool) {
+pub fn cmd_setup(
+    status: bool,
+    from_project: Option<PathBuf>,
+    detect_version: bool,
+    detect_toolchain: bool,
+    skip_toolchain: bool,
+) {
     // Validate mutually exclusive flags
-    if status && (from_project.is_some() || detect_version) {
-        eprintln!("Error: --status cannot be combined with --from-project or --detect-version");
+    if status && (from_project.is_some() || detect_version || detect_toolchain) {
+        eprintln!(
+            "Error: --status cannot be combined with --from-project, --detect-version, or --detect-toolchain"
+        );
         std::process::exit(1);
     }
     if detect_version && from_project.is_none() {
@@ -18,6 +26,34 @@ pub fn cmd_setup(status: bool, from_project: Option<PathBuf>, detect_version: bo
 
     if status {
         tool_manager::print_status();
+        return;
+    }
+
+    // --detect-toolchain: resolve Verus version, fetch its rust-toolchain.toml, print channel
+    if detect_toolchain {
+        let verus_version = if let Some(ref project_path) = from_project {
+            let env_version = std::env::var(tool_manager::VERUS_VERSION_ENV)
+                .ok()
+                .filter(|v| !v.is_empty());
+            env_version
+                .or_else(|| metadata::detect_verus_version(project_path))
+                .unwrap_or_else(|| {
+                    eprintln!("Error: no Verus version found");
+                    std::process::exit(1);
+                })
+        } else {
+            tool_manager::resolve_verus_version(None).tag
+        };
+
+        match tool_manager::fetch_verus_rust_toolchain(&verus_version) {
+            Some(info) => {
+                println!("{}", info.channel);
+            }
+            None => {
+                eprintln!("Error: could not fetch rust-toolchain.toml for Verus {verus_version}");
+                std::process::exit(1);
+            }
+        }
         return;
     }
 
@@ -90,11 +126,7 @@ pub fn cmd_setup(status: bool, from_project: Option<PathBuf>, detect_version: bo
 
     let errors = tool_manager::install_all();
 
-    if errors.is_empty() {
-        eprintln!("\nAll tools installed successfully.");
-        println!();
-        tool_manager::print_status();
-    } else {
+    if !errors.is_empty() {
         for e in &errors {
             eprintln!("Error: {e}");
         }
@@ -104,4 +136,24 @@ pub fn cmd_setup(status: bool, from_project: Option<PathBuf>, detect_version: bo
         );
         std::process::exit(1);
     }
+
+    // After tools are installed, ensure the matching Rust toolchain is present.
+    if !skip_toolchain {
+        let verus_version = tool_manager::resolve_verus_version(None).tag;
+        eprintln!();
+        match tool_manager::ensure_rust_toolchain(&verus_version) {
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("Warning: Rust toolchain setup failed: {e}");
+                eprintln!(
+                    "  Verus verification may fail if the correct toolchain is not installed."
+                );
+                eprintln!("  Use --skip-toolchain to suppress this step.");
+            }
+        }
+    }
+
+    eprintln!("\nAll tools installed successfully.");
+    println!();
+    tool_manager::print_status();
 }

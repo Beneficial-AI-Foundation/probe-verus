@@ -1716,21 +1716,30 @@ impl Bar {{
         let functions =
             parse_file_for_functions(file.path(), true, true, true, true, false).unwrap();
 
-        let trait_method = functions.iter().find(|f| f.name == "trait_method" && f.context == Some("impl".to_string())).unwrap();
+        let trait_method = functions
+            .iter()
+            .find(|f| f.name == "trait_method" && f.context == Some("impl".to_string()))
+            .unwrap();
         assert_eq!(
             trait_method.visibility,
             Some("pub".to_string()),
             "trait impl methods should be marked public"
         );
 
-        let inherent_private = functions.iter().find(|f| f.name == "inherent_private").unwrap();
+        let inherent_private = functions
+            .iter()
+            .find(|f| f.name == "inherent_private")
+            .unwrap();
         assert_eq!(
             inherent_private.visibility,
             Some("private".to_string()),
             "inherent impl methods without pub should be private"
         );
 
-        let inherent_public = functions.iter().find(|f| f.name == "inherent_public").unwrap();
+        let inherent_public = functions
+            .iter()
+            .find(|f| f.name == "inherent_public")
+            .unwrap();
         assert_eq!(
             inherent_public.visibility,
             Some("pub".to_string()),

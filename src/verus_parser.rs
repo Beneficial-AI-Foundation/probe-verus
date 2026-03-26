@@ -819,6 +819,9 @@ struct FunctionInfoVisitor {
     include_extended_info: bool,
     /// Current impl block type name (set while visiting an impl block)
     current_impl_type: Option<String>,
+    /// Whether we are currently inside an `impl Trait for Type` block.
+    /// Trait impl methods are inherently public even without an explicit `pub` keyword.
+    in_trait_impl: bool,
 }
 
 impl FunctionInfoVisitor {
@@ -842,6 +845,7 @@ impl FunctionInfoVisitor {
             include_spec_text,
             include_extended_info: false,
             current_impl_type: None,
+            in_trait_impl: false,
         }
     }
 
@@ -1239,11 +1243,18 @@ impl<'ast> Visit<'ast> for FunctionInfoVisitor {
 
         let name = node.sig.ident.to_string();
         let span = node.span();
+        // Trait impl methods are inherently public even without an explicit `pub` keyword.
+        let vis_public = Visibility::Public(verus_syn::token::Pub::default());
+        let vis = if self.in_trait_impl {
+            &vis_public
+        } else {
+            &node.vis
+        };
         self.add_function(
             name,
             span,
             &node.sig,
-            &node.vis,
+            vis,
             &node.attrs,
             Some("impl".to_string()),
         );
@@ -1272,6 +1283,8 @@ impl<'ast> Visit<'ast> for FunctionInfoVisitor {
     fn visit_item_impl(&mut self, node: &'ast verus_syn::ItemImpl) {
         // Extract the Self type name for display_name enrichment
         let prev_impl_type = self.current_impl_type.take();
+        let prev_in_trait_impl = self.in_trait_impl;
+        self.in_trait_impl = node.trait_.is_some();
         if self.include_extended_info {
             let ty = &node.self_ty;
             let type_str = quote::quote! { #ty }.to_string();
@@ -1295,6 +1308,7 @@ impl<'ast> Visit<'ast> for FunctionInfoVisitor {
         }
         verus_syn::visit::visit_item_impl(self, node);
         self.current_impl_type = prev_impl_type;
+        self.in_trait_impl = prev_in_trait_impl;
     }
 
     fn visit_item_trait(&mut self, node: &'ast verus_syn::ItemTrait) {
@@ -1673,6 +1687,55 @@ impl Foo {{
 
         let private_func = functions.iter().find(|f| f.name == "private_func").unwrap();
         assert_eq!(private_func.visibility, Some("private".to_string()));
+    }
+
+    #[test]
+    fn test_trait_impl_methods_are_public() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"
+trait MyTrait {{
+    fn trait_method(&self);
+}}
+
+struct Bar;
+
+impl MyTrait for Bar {{
+    fn trait_method(&self) {{}}
+}}
+
+impl Bar {{
+    fn inherent_private(&self) {{}}
+    pub fn inherent_public(&self) {{}}
+}}
+"#
+        )
+        .unwrap();
+
+        let functions =
+            parse_file_for_functions(file.path(), true, true, true, true, false).unwrap();
+
+        let trait_method = functions.iter().find(|f| f.name == "trait_method" && f.context == Some("impl".to_string())).unwrap();
+        assert_eq!(
+            trait_method.visibility,
+            Some("pub".to_string()),
+            "trait impl methods should be marked public"
+        );
+
+        let inherent_private = functions.iter().find(|f| f.name == "inherent_private").unwrap();
+        assert_eq!(
+            inherent_private.visibility,
+            Some("private".to_string()),
+            "inherent impl methods without pub should be private"
+        );
+
+        let inherent_public = functions.iter().find(|f| f.name == "inherent_public").unwrap();
+        assert_eq!(
+            inherent_public.visibility,
+            Some("pub".to_string()),
+            "inherent impl methods with pub should be public"
+        );
     }
 
     // =========================================================================

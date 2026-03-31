@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 See the [Versioning Policy section in CLAUDE.md](CLAUDE.md#versioning-policy) for
 what constitutes a breaking change.
 
+## [6.3.1] - 2026-03-31
+
+### Fixed
+- **Backfill prefers spec-bearing cfg variant**: When verus-syn encounters both `#[cfg(not(verus_keep_ghost))]` and `#[cfg(verus_keep_ghost)]` versions of a function, the backfill now picks the variant with `requires`/`ensures` so its line numbers match the verification step. Fixes the last unmatched `fill_bytes` function.
+
 ## [6.3.0] - 2026-03-31
 
 ### Fixed
@@ -315,7 +320,8 @@ what constitutes a breaking change.
 
 Initial release. SCIP-based call graph generation for Rust/Verus projects.
 
-[Unreleased]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v6.3.0...HEAD
+[Unreleased]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v6.3.1...HEAD
+[6.3.1]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v6.3.0...v6.3.1
 [6.3.0]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v6.2.1...v6.3.0
 [6.2.1]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v6.2.0...v6.2.1
 [6.2.0]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v6.1.0...v6.2.0

@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 See the [Versioning Policy section in CLAUDE.md](CLAUDE.md#versioning-policy) for
 what constitutes a breaking change.
 
+## [6.3.0] - 2026-03-31
+
+### Fixed
+- **Verification data no longer silently dropped**: `convert_to_proofs_output` previously discarded functions that could not be matched to a SCIP-derived atom. Unmatched functions now receive a synthetic `probe:_unmatched/…` code-name and a stderr warning, ensuring the proofs JSON count matches the analysis summary.
+- **SCIP indexing with `verus_keep_ghost`**: verus-analyzer is now invoked with `--config-path` setting `{"cargo":{"cfgs":{"verus_keep_ghost":null}}}`, so it indexes the specification-bearing `#[cfg(verus_keep_ghost)]` variants of functions. This fixes line-number mismatches between verus-syn and verus-analyzer for cfg-gated functions.
+
+### Added
+- **Atom backfill from verus_parser**: After SCIP-based atomization, `backfill_atoms_from_parser` runs verus-syn over the source tree and creates atoms for functions that SCIP missed (e.g. inside `#[cfg(verus_keep_ghost)] verus! { … }` blocks that verus-analyzer cannot expand). Adds ~50ms to the pipeline.
+
+## [6.2.1] - 2026-03-26
+
+### Fixed
+- **Parser**: Mark trait impl methods as public (rustfmt follow-up).
+
 ## [6.2.0] - 2026-03-25
 
 ### Added
@@ -301,7 +315,12 @@ what constitutes a breaking change.
 
 Initial release. SCIP-based call graph generation for Rust/Verus projects.
 
-[Unreleased]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v5.2.0...HEAD
+[Unreleased]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v6.3.0...HEAD
+[6.3.0]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v6.2.1...v6.3.0
+[6.2.1]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v6.2.0...v6.2.1
+[6.2.0]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v6.1.0...v6.2.0
+[6.1.0]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v6.0.0...v6.1.0
+[6.0.0]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v5.2.0...v6.0.0
 [5.2.0]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v5.1.0...v5.2.0
 [5.1.0]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v5.0.0...v5.1.0
 [5.0.0]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v4.0.0...v5.0.0

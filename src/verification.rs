@@ -1182,9 +1182,26 @@ pub fn enrich_with_code_names(
     Ok(enriched_count)
 }
 
+/// Generate a synthetic code-name for a function that could not be matched to any atom.
+///
+/// Format: `probe:_unmatched/<module-path>/<display-name>()`
+/// where `<module-path>` is derived from the code-path by stripping the package/src prefix
+/// and `.rs` extension (e.g. `core_assumes`, `lemmas/common_lemmas/bit_lemmas`).
+fn synthetic_code_name(loc: &FunctionLocation) -> String {
+    let module_path = loc
+        .code_path
+        .find("/src/")
+        .map(|pos| &loc.code_path[pos + 5..])
+        .unwrap_or(&loc.code_path)
+        .trim_end_matches(".rs");
+    format!("probe:_unmatched/{}/{}()", module_path, loc.display_name)
+}
+
 /// Convert an AnalysisResult to the new ProofsOutput format (dictionary keyed by code-name)
 ///
 /// Matches functions by (code-path suffix, display name, lines-start) to find the corresponding code-name.
+/// Functions that cannot be matched to an atom receive a synthetic `probe:_unmatched/…` code-name
+/// so that verification data is never silently dropped.
 /// Returns a HashMap where keys are code-names and values are FunctionVerificationEntry.
 pub fn convert_to_proofs_output(
     result: &AnalysisResult,
@@ -1206,45 +1223,66 @@ pub fn convert_to_proofs_output(
     })?;
 
     let mut output = ProofsOutput::new();
+    let mut unmatched: Vec<(&FunctionLocation, &str)> = Vec::new();
 
     for func in &result.verification.verified_functions {
-        if let Some(code_name) = find_code_name_in_atoms(func, &atoms) {
-            output.insert(
-                code_name,
-                FunctionVerificationEntry {
-                    code_path: func.code_path.clone(),
-                    code_line: func.code_text.lines_start,
-                    verified: true,
-                    status: VerificationStatus::Success,
-                },
-            );
-        }
+        let code_name = find_code_name_in_atoms(func, &atoms).unwrap_or_else(|| {
+            unmatched.push((func, "verified"));
+            synthetic_code_name(func)
+        });
+        output.insert(
+            code_name,
+            FunctionVerificationEntry {
+                code_path: func.code_path.clone(),
+                code_line: func.code_text.lines_start,
+                verified: true,
+                status: VerificationStatus::Success,
+            },
+        );
     }
 
     for func in &result.verification.failed_functions {
-        if let Some(code_name) = find_code_name_in_atoms(func, &atoms) {
-            output.insert(
-                code_name,
-                FunctionVerificationEntry {
-                    code_path: func.code_path.clone(),
-                    code_line: func.code_text.lines_start,
-                    verified: false,
-                    status: VerificationStatus::Failure,
-                },
-            );
-        }
+        let code_name = find_code_name_in_atoms(func, &atoms).unwrap_or_else(|| {
+            unmatched.push((func, "failed"));
+            synthetic_code_name(func)
+        });
+        output.insert(
+            code_name,
+            FunctionVerificationEntry {
+                code_path: func.code_path.clone(),
+                code_line: func.code_text.lines_start,
+                verified: false,
+                status: VerificationStatus::Failure,
+            },
+        );
     }
 
     for func in &result.verification.unverified_functions {
-        if let Some(code_name) = find_code_name_in_atoms(func, &atoms) {
-            output.insert(
-                code_name,
-                FunctionVerificationEntry {
-                    code_path: func.code_path.clone(),
-                    code_line: func.code_text.lines_start,
-                    verified: false,
-                    status: VerificationStatus::Sorries,
-                },
+        let code_name = find_code_name_in_atoms(func, &atoms).unwrap_or_else(|| {
+            unmatched.push((func, "unverified"));
+            synthetic_code_name(func)
+        });
+        output.insert(
+            code_name,
+            FunctionVerificationEntry {
+                code_path: func.code_path.clone(),
+                code_line: func.code_text.lines_start,
+                verified: false,
+                status: VerificationStatus::Sorries,
+            },
+        );
+    }
+
+    if !unmatched.is_empty() {
+        eprintln!(
+            "Warning: {} function(s) could not be matched to atoms (using synthetic code-names):",
+            unmatched.len()
+        );
+        for (func, category) in &unmatched {
+            eprintln!(
+                "  [{}] {} @ {}:{}-{}",
+                category, func.display_name, func.code_path,
+                func.code_text.lines_start, func.code_text.lines_end
             );
         }
     }

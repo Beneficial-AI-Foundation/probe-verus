@@ -17,9 +17,10 @@ pub mod verus_parser;
 pub use error::{ProbeError, ProbeResult};
 
 use constants::{
-    is_definition, is_external_function_symbol, is_function_like_kind, PROBE_URI_PREFIX,
-    SCIP_SYMBOL_PREFIX, TYPE_CONTEXT_LOOKBACK_LINES,
+    is_definition, is_external_function_symbol, is_function_like_kind, LINE_TOLERANCE,
+    PROBE_URI_PREFIX, SCIP_SYMBOL_PREFIX, TYPE_CONTEXT_LOOKBACK_LINES,
 };
+use path_utils::{extract_src_suffix, paths_match_by_suffix};
 
 // =============================================================================
 // Declaration Kind Enum
@@ -1633,6 +1634,125 @@ fn extract_display_name_from_code_name(code_name: &str) -> String {
 /// This function ensures consistent code_names for merging atoms from different sources.
 pub fn normalize_code_name(code_name: &str) -> String {
     code_name.strip_suffix('.').unwrap_or(code_name).to_string()
+}
+
+/// Backfill atoms from `verus_parser` for functions that SCIP missed.
+///
+/// Runs the verus source parser over the project, identifies functions that are not yet
+/// present in `atoms_dict`, and inserts minimal atoms for them.  This closes the gap
+/// for code inside `#[cfg(verus_keep_ghost)] verus! { … }` blocks that verus-analyzer's
+/// SCIP mode cannot expand.
+///
+/// Returns the number of atoms added.
+pub fn backfill_atoms_from_parser(
+    project_path: &Path,
+    atoms_dict: &mut BTreeMap<String, AtomWithLines>,
+    pkg_name: &str,
+    pkg_version: &str,
+) -> usize {
+    let src_dir = project_path.join("src");
+    let parse_root: &Path = if src_dir.is_dir() {
+        &src_dir
+    } else {
+        project_path
+    };
+
+    let parsed = verus_parser::parse_all_functions(
+        parse_root,
+        true,  // include_verus_constructs
+        true,  // include_methods
+        false, // show_visibility
+        true,  // show_kind
+        false, // include_spec_text
+    );
+
+    let mut added = 0usize;
+
+    for fi in &parsed.functions {
+        let code_path = match &fi.file {
+            Some(p) => p.clone(),
+            None => continue,
+        };
+
+        let already_present = atoms_dict.values().any(|atom| {
+            if atom.display_name != fi.name
+                && !atom
+                    .display_name
+                    .ends_with(&format!("::{}", fi.name))
+            {
+                return false;
+            }
+            let path_ok = paths_match_by_suffix(&code_path, &atom.code_path)
+                || extract_src_suffix(&code_path) == extract_src_suffix(&atom.code_path);
+            if !path_ok {
+                return false;
+            }
+            let diff = (fi.spec_text.lines_start as isize - atom.code_text.lines_start as isize)
+                .unsigned_abs();
+            diff <= LINE_TOLERANCE
+                || (atom.code_text.lines_start >= fi.spec_text.lines_start
+                    && atom.code_text.lines_start <= fi.spec_text.lines_end)
+        });
+
+        if already_present {
+            continue;
+        }
+
+        let module_path = derive_module_path_from_code_path(&code_path);
+
+        let code_name = format!(
+            "{}{}{}/{}/{}()",
+            PROBE_URI_PREFIX, pkg_name, pkg_version_segment(pkg_version), module_path, fi.name
+        );
+
+        if atoms_dict.contains_key(&code_name) {
+            continue;
+        }
+
+        let code_module = if module_path.is_empty() {
+            String::new()
+        } else {
+            module_path.replace('/', "::")
+        };
+
+        atoms_dict.insert(
+            code_name.clone(),
+            AtomWithLines {
+                display_name: fi.name.clone(),
+                code_name,
+                dependencies: BTreeSet::new(),
+                dependencies_with_locations: Vec::new(),
+                code_module,
+                code_path,
+                code_text: CodeTextInfo {
+                    lines_start: fi.spec_text.lines_start,
+                    lines_end: fi.spec_text.lines_end,
+                },
+                kind: fi.kind,
+                language: "rust".to_string(),
+                rust_qualified_name: None,
+            },
+        );
+        added += 1;
+    }
+
+    added
+}
+
+fn derive_module_path_from_code_path(code_path: &str) -> String {
+    let after_src = code_path
+        .find("/src/")
+        .map(|pos| &code_path[pos + 5..])
+        .unwrap_or(code_path);
+    after_src.trim_end_matches(".rs").to_string()
+}
+
+fn pkg_version_segment(v: &str) -> String {
+    if v.is_empty() {
+        String::new()
+    } else {
+        format!("/{}", v)
+    }
 }
 
 /// Add stub atoms for external function dependencies that don't have their own atom entry.

@@ -1,8 +1,8 @@
 //! Atomize command - Generate call graph atoms from SCIP indexes.
 
 use crate::{
-    add_external_stubs, build_call_graph, convert_to_atoms_with_parsed_spans,
-    find_duplicate_code_names,
+    add_external_stubs, backfill_atoms_from_parser, build_call_graph,
+    convert_to_atoms_with_parsed_spans, find_duplicate_code_names,
     metadata::{gather_metadata, get_default_output_path, wrap_in_envelope, AtomizeInternalConfig},
     parse_scip_json,
     scip_cache::{Analyzer, ScipCache},
@@ -107,6 +107,20 @@ pub fn cmd_atomize(
 
     // Gather metadata and resolve output path
     let metadata = gather_metadata(&project_path);
+
+    // Backfill atoms for functions that SCIP missed (e.g. cfg-gated verus! blocks)
+    let backfill_count = backfill_atoms_from_parser(
+        &project_path,
+        &mut atoms_dict,
+        &metadata.pkg_name,
+        &metadata.pkg_version,
+    );
+    if backfill_count > 0 {
+        println!(
+            "  ✓ Backfilled {} atom(s) from verus_parser (not found in SCIP index)",
+            backfill_count
+        );
+    }
     let output =
         output.unwrap_or_else(|| get_default_output_path(&project_path, &metadata, "atoms"));
 
@@ -258,6 +272,13 @@ pub fn atomize_internal(config: &AtomizeInternalConfig) -> Result<usize, String>
     }
 
     add_external_stubs(&mut atoms_dict);
+
+    backfill_atoms_from_parser(
+        config.project_path,
+        &mut atoms_dict,
+        &config.metadata.pkg_name,
+        &config.metadata.pkg_version,
+    );
 
     let count = atoms_dict.len();
 

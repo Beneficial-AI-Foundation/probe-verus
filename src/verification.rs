@@ -1281,8 +1281,11 @@ pub fn convert_to_proofs_output(
         for (func, category) in &unmatched {
             eprintln!(
                 "  [{}] {} @ {}:{}-{}",
-                category, func.display_name, func.code_path,
-                func.code_text.lines_start, func.code_text.lines_end
+                category,
+                func.display_name,
+                func.code_path,
+                func.code_text.lines_start,
+                func.code_text.lines_end
             );
         }
     }

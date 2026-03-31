@@ -1658,8 +1658,7 @@ pub fn backfill_atoms_from_parser(
     };
 
     let parsed = verus_parser::parse_all_functions(
-        parse_root,
-        true,  // include_verus_constructs
+        parse_root, true,  // include_verus_constructs
         true,  // include_methods
         false, // show_visibility
         true,  // show_kind
@@ -1676,9 +1675,7 @@ pub fn backfill_atoms_from_parser(
 
         let already_present = atoms_dict.values().any(|atom| {
             if atom.display_name != fi.name
-                && !atom
-                    .display_name
-                    .ends_with(&format!("::{}", fi.name))
+                && !atom.display_name.ends_with(&format!("::{}", fi.name))
             {
                 return false;
             }
@@ -1702,12 +1699,23 @@ pub fn backfill_atoms_from_parser(
 
         let code_name = format!(
             "{}{}{}/{}/{}()",
-            PROBE_URI_PREFIX, pkg_name, pkg_version_segment(pkg_version), module_path, fi.name
+            PROBE_URI_PREFIX,
+            pkg_name,
+            pkg_version_segment(pkg_version),
+            module_path,
+            fi.name
         );
 
-        if atoms_dict.contains_key(&code_name) {
-            continue;
-        }
+        let has_spec = fi.has_requires || fi.has_ensures;
+        let is_replacement = if let Some(existing) = atoms_dict.get(&code_name) {
+            if has_spec && existing.code_text.lines_start != fi.spec_text.lines_start {
+                true
+            } else {
+                continue;
+            }
+        } else {
+            false
+        };
 
         let code_module = if module_path.is_empty() {
             String::new()
@@ -1733,7 +1741,9 @@ pub fn backfill_atoms_from_parser(
                 rust_qualified_name: None,
             },
         );
-        added += 1;
+        if !is_replacement {
+            added += 1;
+        }
     }
 
     added

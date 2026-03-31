@@ -209,11 +209,7 @@ impl ScipCache {
         }
         let path = self.data_dir().join(".va_scip_config.json");
         std::fs::create_dir_all(self.data_dir()).ok()?;
-        std::fs::write(
-            &path,
-            r#"{"cargo":{"cfgs":{"verus_keep_ghost":null}}}"#,
-        )
-        .ok()?;
+        std::fs::write(&path, r#"{"cargo":{"cfgs":{"verus_keep_ghost":null}}}"#).ok()?;
         Some(path)
     }
 

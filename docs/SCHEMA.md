@@ -1,7 +1,7 @@
 # probe-verus Data Schemas
 
-Version: 5.2
-Date: 2026-03-23
+Version: 6.3.2
+Date: 2026-04-03
 
 This document specifies the concrete JSON `data` payloads produced by each
 probe-verus subcommand.  It complements the language-agnostic
@@ -108,7 +108,7 @@ probe:core/https://github.com/rust-lang/rust/library/core/option/impl#map()
 | `code-path` | string | yes | Relative source file path (empty string for external stubs) |
 | `code-text` | CodeTextInfo | yes | Line range of the function body |
 | `kind` | DeclKind | yes | `"exec"`, `"proof"`, or `"spec"` |
-| `language` | string | yes | Source language; always `"rust"` for probe-verus (defaults to `"rust"` if absent for backward compat) |
+| `language` | string | yes | `"rust"` for `exec` atoms, `"verus"` for `proof`/`spec` atoms (derived from `kind`, not lexical scope; see [P20]) |
 
 ### DependencyWithLocation
 

@@ -621,7 +621,7 @@ dependencies = [
 
 [[package]]
 name = "probe-verus"
-version = "6.3.1"
+version = "6.3.2"
 dependencies = [
  "chrono",
  "clap",

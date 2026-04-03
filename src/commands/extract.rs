@@ -625,7 +625,7 @@ mod tests {
                     "code-path": "src/module.rs",
                     "code-text": {"lines-start": 10, "lines-end": 20},
                     "kind": "exec",
-                    "language": "verus"
+                    "language": "rust"
                 },
                 "probe:test/0.1.0/module/bar()": {
                     "display-name": "bar",
@@ -863,7 +863,7 @@ mod tests {
         assert!(!foo_json["primary-spec"].as_str().unwrap().is_empty());
         assert_eq!(foo_json["is-disabled"], false);
         assert_eq!(foo_json["kind"], "exec");
-        assert_eq!(foo_json["language"], "verus");
+        assert_eq!(foo_json["language"], "rust");
         let labels = foo_json["spec-labels"]
             .as_array()
             .expect("spec-labels should be an array");
@@ -913,7 +913,7 @@ mod tests {
                     "code-path": "src/module.rs",
                     "code-text": {"lines-start": 10, "lines-end": 20},
                     "kind": "exec",
-                    "language": "verus"
+                    "language": "rust"
                 }
             }
         });

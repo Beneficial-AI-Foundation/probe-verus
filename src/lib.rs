@@ -1198,8 +1198,9 @@ fn convert_to_atoms_with_lines_internal(
             };
 
             // Get kind from span_map (defaults to Exec if not found).
-            // Derive language from is_verus: true for functions inside `verus!{}`
-            // blocks, false for plain Rust functions.
+            // Language is derived from kind: exec functions are Rust (even
+            // when inside `verus!{}` blocks with specs), while spec and proof
+            // functions are Verus-only constructs.
             let (kind, language) = if let Some(map) = span_map {
                 match verus_parser::get_function_kind(
                     map,
@@ -1207,8 +1208,10 @@ fn convert_to_atoms_with_lines_internal(
                     &node.display_name,
                     lines_start,
                 ) {
-                    Some((k, true)) => (k, "verus".to_string()),
-                    Some((k, false)) => (k, "rust".to_string()),
+                    Some((k, _)) => {
+                        let lang = if k == DeclKind::Exec { "rust" } else { "verus" };
+                        (k, lang.to_string())
+                    }
                     None => (DeclKind::Exec, "rust".to_string()),
                 }
             } else {

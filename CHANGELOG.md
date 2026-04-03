@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 See the [Versioning Policy section in CLAUDE.md](CLAUDE.md#versioning-policy) for
 what constitutes a breaking change.
 
+## [6.3.2] - 2026-04-03
+
+### Fixed
+- **Language derived from kind, not lexical scope**: `exec` atoms now always get `language: "rust"`, even inside `verus!{}` blocks. `proof` and `spec` atoms get `language: "verus"`. Previously, language was derived from whether the function appeared inside a `verus!{}` block, which incorrectly tagged verified Rust functions (e.g. `compress`, `decompress`, `mul`) as `"verus"`. See [P20](https://github.com/Beneficial-AI-Foundation/probe/blob/main/kb/engineering/properties.md#p20-language-is-derived-from-kind-not-lexical-scope).
+
 ## [6.3.1] - 2026-03-31
 
 ### Fixed
@@ -320,7 +325,8 @@ what constitutes a breaking change.
 
 Initial release. SCIP-based call graph generation for Rust/Verus projects.
 
-[Unreleased]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v6.3.1...HEAD
+[Unreleased]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v6.3.2...HEAD
+[6.3.2]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v6.3.1...v6.3.2
 [6.3.1]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v6.3.0...v6.3.1
 [6.3.0]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v6.2.1...v6.3.0
 [6.2.1]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v6.2.0...v6.2.1

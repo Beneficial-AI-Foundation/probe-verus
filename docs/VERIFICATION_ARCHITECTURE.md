@@ -59,6 +59,12 @@ to `"trusted"` for atoms in the **trust base**. As of **v6.5.0**, there are thre
 independent reasons for that override (any one is sufficient). Earlier releases
 only treated `admit()` this way (v6.4.0).
 
+Since **v6.5.1**, every trusted atom also carries a `trusted-reason` field
+(`"admit"`, `"external-body"`, or `"assume-specification"`) so downstream tools
+can classify the trust base directly from the extract JSON. Additionally,
+external stub atoms matched by an `assume_specification` declaration receive the
+declared requires/ensures text in their `primary-spec` field.
+
 | Unified `verification-status` | When merge sets it | Meaning |
 |-------------------------------|--------------------|---------|
 | **trusted** | Trust-base override (see below) | Correctness is not established by the normal proof path for that atom; merge replaces whatever the proofs step reported (including `"success"`). |

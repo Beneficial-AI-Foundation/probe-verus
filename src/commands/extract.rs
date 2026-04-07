@@ -479,11 +479,17 @@ fn map_verification_status(status: &str) -> &'static str {
 /// For each declaration, take the last 2 path segments (e.g. `["ConditionallySelectable",
 /// "conditional_swap"]`) and search atoms with empty `code-path` for code-names where
 /// both segments appear separated by `#`.  Returns the set of matched atom code-names.
+/// Result of matching an `assume_specification` to an atom: the spec text to
+/// propagate onto the external stub.
+struct AssumeSpecMatch {
+    spec_text: String,
+}
+
 fn match_assume_specs_to_atoms(
     assume_specs: &[AssumeSpecInfo],
     atoms: &BTreeMap<String, AtomWithLines>,
-) -> BTreeSet<String> {
-    let mut trusted_names = BTreeSet::new();
+) -> BTreeMap<String, AssumeSpecMatch> {
+    let mut matched = BTreeMap::new();
 
     for aspec in assume_specs {
         if aspec.path_segments.len() < 2 {
@@ -501,9 +507,6 @@ fn match_assume_specs_to_atoms(
             .iter()
             .filter(|(_, atom)| atom.code_path.is_empty())
             .filter(|(name, _)| {
-                // Match: code-name contains Type#...method where segments are
-                // separated by # (SCIP symbol format).  We check that both
-                // the type and method segments appear, with method right before `()`.
                 name.contains(&format!("{}#", type_seg))
                     && name.contains(&format!("{}()", method_seg))
             })
@@ -512,7 +515,19 @@ fn match_assume_specs_to_atoms(
 
         match candidates.len() {
             1 => {
-                trusted_names.insert(candidates[0].clone());
+                let mut parts = Vec::new();
+                if let Some(ref t) = aspec.requires_text {
+                    parts.push(t.as_str());
+                }
+                if let Some(ref t) = aspec.ensures_text {
+                    parts.push(t.as_str());
+                }
+                matched.insert(
+                    candidates[0].clone(),
+                    AssumeSpecMatch {
+                        spec_text: parts.join("\n"),
+                    },
+                );
             }
             0 => {
                 eprintln!(
@@ -529,7 +544,7 @@ fn match_assume_specs_to_atoms(
         }
     }
 
-    trusted_names
+    matched
 }
 
 /// Build the full spec text from a specs entry (requires + ensures concatenated).
@@ -569,7 +584,7 @@ pub fn merge_into_unified(
         .map(|s| s.assume_specifications.as_slice())
         .unwrap_or(&[]);
 
-    let assume_spec_trusted = match_assume_specs_to_atoms(assume_specs, &atoms);
+    let assume_spec_matched = match_assume_specs_to_atoms(assume_specs, &atoms);
 
     let proofs: Option<BTreeMap<String, ProofsEntryMinimal>> = proofs_path
         .filter(|p| p.exists())
@@ -581,7 +596,7 @@ pub fn merge_into_unified(
     for (code_name, atom) in atoms {
         let specs_entry = specs.and_then(|s| s.get(&code_name));
 
-        let spec_text: Option<String> = specs_entry.map(build_spec_text);
+        let mut spec_text: Option<String> = specs_entry.map(build_spec_text);
 
         // `is_disabled` semantics: `None` = function was not analyzed for specs;
         // `Some(true)` = function was analyzed but has no spec; `Some(false)` = function has a spec.
@@ -605,13 +620,22 @@ pub fn merge_into_unified(
             }
         }
 
-        let is_trusted = specs_entry.is_some_and(|e| e.contains_admit || e.is_external_body)
-            || assume_spec_trusted.contains(&code_name);
+        // Determine trusted status and reason
+        let has_admit = specs_entry.is_some_and(|e| e.contains_admit);
+        let has_external_body = specs_entry.is_some_and(|e| e.is_external_body);
+        let assume_spec_match = assume_spec_matched.get(&code_name);
 
-        let verification_status = if is_trusted {
-            // Trust-base atoms: admit() axioms, #[verifier::external_body]
-            // functions, or assume_specification targets. Override whatever
-            // the proofs step reported (mirrors probe-lean's isTrustedAtom).
+        let trusted_reason = if has_admit {
+            Some("admit".to_string())
+        } else if has_external_body {
+            Some("external-body".to_string())
+        } else if assume_spec_match.is_some() {
+            Some("assume-specification".to_string())
+        } else {
+            None
+        };
+
+        let verification_status = if trusted_reason.is_some() {
             Some("trusted".to_string())
         } else {
             proofs
@@ -619,6 +643,13 @@ pub fn merge_into_unified(
                 .and_then(|p| p.get(&code_name))
                 .map(|e| map_verification_status(&e.status).to_string())
         };
+
+        // For assume_specification targets, propagate the declared spec text
+        if let Some(asm) = assume_spec_match {
+            if !asm.spec_text.is_empty() {
+                spec_text = Some(asm.spec_text.clone());
+            }
+        }
 
         let spec_labels: Vec<String> = specs_entry
             .map(|e| e.spec_labels.clone())
@@ -634,6 +665,7 @@ pub fn merge_into_unified(
                 primary_spec: spec_text,
                 is_disabled,
                 verification_status,
+                trusted_reason,
                 spec_labels,
             },
         );
@@ -1039,8 +1071,13 @@ mod tests {
             "Empty spec-labels should be omitted from JSON"
         );
 
+        // trusted-reason absent for non-trusted atoms
+        assert!(foo_json.get("trusted-reason").is_none());
+        assert!(bar_json.get("trusted-reason").is_none());
+
         let ext_json = &json["probe:external/1.0.0/lib/ext()"];
         assert!(ext_json.get("verification-status").is_none());
+        assert!(ext_json.get("trusted-reason").is_none());
         assert!(ext_json.get("primary-spec").is_none());
         assert!(ext_json.get("is-disabled").is_none());
         assert!(ext_json.get("spec-labels").is_none());
@@ -1113,12 +1150,21 @@ mod tests {
             "Function with contains_admit=true should be 'trusted'"
         );
         assert_eq!(
+            result["probe:test/0.1.0/module/foo()"]
+                .trusted_reason
+                .as_deref(),
+            Some("admit"),
+        );
+        assert_eq!(
             result["probe:test/0.1.0/module/bar()"]
                 .verification_status
                 .as_deref(),
             Some("verified"),
             "Function without contains_admit should keep its proofs status"
         );
+        assert!(result["probe:test/0.1.0/module/bar()"]
+            .trusted_reason
+            .is_none());
     }
 
     #[test]
@@ -1325,6 +1371,12 @@ mod tests {
             Some("trusted"),
             "external_body should override 'success' proofs status to 'trusted'"
         );
+        assert_eq!(
+            result["probe:test/0.1.0/module/foo()"]
+                .trusted_reason
+                .as_deref(),
+            Some("external-body"),
+        );
     }
 
     #[test]
@@ -1357,6 +1409,12 @@ mod tests {
                 .as_deref(),
             Some("trusted"),
             "external_body without proofs entry should get 'trusted'"
+        );
+        assert_eq!(
+            result["probe:test/0.1.0/module/foo()"]
+                .trusted_reason
+                .as_deref(),
+            Some("external-body"),
         );
     }
 
@@ -1410,6 +1468,9 @@ mod tests {
             Some("verified"),
             "Non-external_body without admit should keep normal proofs status"
         );
+        assert!(result["probe:test/0.1.0/module/foo()"]
+            .trusted_reason
+            .is_none());
     }
 
     #[test]
@@ -1448,7 +1509,9 @@ mod tests {
 
         let result = match_assume_specs_to_atoms(&assume_specs, &atoms_data);
         assert_eq!(result.len(), 1);
-        assert!(result.contains("probe:subtle/2.6.1/Choice#From#from()"));
+        assert!(result.contains_key("probe:subtle/2.6.1/Choice#From#from()"));
+        let m = &result["probe:subtle/2.6.1/Choice#From#from()"];
+        assert_eq!(m.spec_text, "ensures (u == 1) == choice_is_true(c)");
     }
 
     #[test]
@@ -1554,20 +1617,25 @@ mod tests {
 
         let result = merge_into_unified(&atoms_path, Some(&specs_path), None).unwrap();
 
+        let stub = &result["probe:subtle/2.6.1/Choice#unwrap_u8()"];
         assert_eq!(
-            result["probe:subtle/2.6.1/Choice#unwrap_u8()"]
-                .verification_status
-                .as_deref(),
+            stub.verification_status.as_deref(),
             Some("trusted"),
             "External stub matched by assume_specification should be 'trusted'"
         );
+        assert_eq!(stub.trusted_reason.as_deref(), Some("assume-specification"),);
+        assert_eq!(
+            stub.primary_spec.as_deref(),
+            Some("ensures choice_is_true(*c) ==> u == 1u8"),
+            "Spec text from assume_specification should be propagated"
+        );
 
+        let foo = &result["probe:test/0.1.0/module/foo()"];
         assert!(
-            result["probe:test/0.1.0/module/foo()"]
-                .verification_status
-                .is_none(),
+            foo.verification_status.is_none(),
             "Non-matched atom without proofs should have no status"
         );
+        assert!(foo.trusted_reason.is_none());
     }
 
     #[test]

@@ -258,6 +258,10 @@ pub struct UnifiedAtom {
         skip_serializing_if = "Option::is_none"
     )]
     pub verification_status: Option<String>,
+    /// Why this atom is trusted. Present only when `verification-status` is `"trusted"`.
+    /// Values: `"admit"`, `"external-body"`, `"assume-specification"`.
+    #[serde(rename = "trusted-reason", skip_serializing_if = "Option::is_none")]
+    pub trusted_reason: Option<String>,
     /// Taxonomy classification labels from the `specify` step (omitted when empty).
     #[serde(rename = "spec-labels", skip_serializing_if = "Vec::is_empty", default)]
     pub spec_labels: Vec<String>,

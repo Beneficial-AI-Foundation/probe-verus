@@ -113,6 +113,7 @@ fn merge_fixture_files(
                 primary_spec: spec_text,
                 is_disabled,
                 verification_status,
+                trusted_reason: None,
                 spec_labels,
             },
         );

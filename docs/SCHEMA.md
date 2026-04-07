@@ -454,6 +454,19 @@ are always written alongside it in `<project>/.verilib/probes/`.
     "primary-spec": "",
     "is-disabled": true
   },
+  "probe:my-crate/1.0.0/module/axiom_foo()": {
+    "display-name": "axiom_foo",
+    "dependencies": [],
+    "code-module": "module",
+    "code-path": "src/module.rs",
+    "code-text": { "lines-start": 100, "lines-end": 110 },
+    "kind": "proof",
+    "language": "verus",
+    "primary-spec": "ensures\n    foo_property(x)",
+    "is-disabled": false,
+    "verification-status": "trusted",
+    "trusted-reason": "admit"
+  },
   "probe:external/1.0.0/other/func()": {
     "display-name": "func",
     "dependencies": [],
@@ -461,7 +474,10 @@ are always written alongside it in `<project>/.verilib/probes/`.
     "code-path": "",
     "code-text": { "lines-start": 0, "lines-end": 0 },
     "kind": "exec",
-    "language": "rust"
+    "language": "rust",
+    "verification-status": "trusted",
+    "trusted-reason": "assume-specification",
+    "primary-spec": "ensures\n    result == expected"
   }
 }
 ```
@@ -479,6 +495,7 @@ optional fields are added:
 | `primary-spec` | string | no | Full spec text (requires + ensures concatenated). Empty string = analyzed, no spec. Absent = not analyzed. |
 | `is-disabled` | bool | no | `false` if the function has a spec; `true` otherwise. Absent for external stubs or when `--skip-specify`. |
 | `verification-status` | string | no | `"verified"`, `"failed"`, `"unverified"`, or `"trusted"`.  Proofs-derived values are absent when `--skip-verify` or when there is no proofs entry for the atom.  `"trusted"` is set by the merge step when a trust-base trigger applies (can appear even without proofs); see Verification Status Mapping. |
+| `trusted-reason` | string | no | Present only when `verification-status` is `"trusted"`.  Values: `"admit"` (function uses `admit()`), `"external-body"` (has `#[verifier::external_body]`), or `"assume-specification"` (matched by an `assume_specification` declaration).  Enables automated trust-base classification without consulting specs.json. (v6.5.1) |
 | `spec-labels` | array of strings | no | Taxonomy classification labels from `--taxonomy-config` (omitted when empty or when `--skip-specify`) |
 
 ### Dependency Categorization

@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 See the [Versioning Policy section in CLAUDE.md](CLAUDE.md#versioning-policy) for
 what constitutes a breaking change.
 
+## [6.5.1] - 2026-04-07
+
+### Added
+- **`trusted-reason` field in extract output**: New optional string field on each atom that explains *why* the atom is trusted: `"admit"`, `"external-body"`, or `"assume-specification"`.  Present only when `verification-status` is `"trusted"`. Enables automated trust-base classification from the extract JSON alone.
+- **`primary-spec` propagation for `assume_specification` targets**: External stub atoms matched by an `assume_specification` declaration now receive the declared requires/ensures text as their `primary-spec`, making the trust assumptions visible without consulting specs.json.
+
 ## [6.5.0] - 2026-04-07
 
 ### Added

@@ -1,0 +1,246 @@
+# Trust Base Classification: curve25519-dalek 4.1.3
+
+Generated from `probe-verus extract` v6.5.1, 2026-04-07T16:49:51Z.
+
+## Summary
+
+| Category | Count |
+|----------|-------|
+| Total atoms | 10959 |
+| Trusted | 119 |
+| — admit | 48 |
+| — external-body | 66 |
+| — assume-specification | 5 |
+
+## admit (48 atoms)
+
+- `axiom_elligator_in_even_subgroup` — `probe:curve25519-dalek/4.1.3/axioms/ristretto_lemmas/lemmas/axiom_elligator_in_even_subgroup()` (curve25519-dalek/src/lemmas/ristretto_lemmas/axioms.rs:168–175)
+  - spec: `ensures ...`
+- `axiom_elligator_nonzero_intermediates` — `probe:curve25519-dalek/4.1.3/axioms/ristretto_lemmas/lemmas/axiom_elligator_nonzero_intermediates()` (curve25519-dalek/src/lemmas/ristretto_lemmas/axioms.rs:143–157)
+  - spec: `requires ...`
+- `axiom_elligator_on_curve` — `probe:curve25519-dalek/4.1.3/axioms/ristretto_lemmas/lemmas/axiom_elligator_on_curve()` (curve25519-dalek/src/lemmas/ristretto_lemmas/axioms.rs:123–131)
+  - spec: `ensures ...`
+- `axiom_even_subgroup_closed_under_add` — `probe:curve25519-dalek/4.1.3/axioms/ristretto_lemmas/lemmas/axiom_even_subgroup_closed_under_add()` (curve25519-dalek/src/lemmas/ristretto_lemmas/axioms.rs:184–200)
+  - spec: `requires ...`
+- `axiom_invsqrt_a_minus_d` — `probe:curve25519-dalek/4.1.3/axioms/ristretto_lemmas/lemmas/axiom_invsqrt_a_minus_d()` (curve25519-dalek/src/lemmas/ristretto_lemmas/axioms.rs:219–230)
+  - spec: `ensures ...`
+- `axiom_ristretto_cross_mul_iff_equivalent` — `probe:curve25519-dalek/4.1.3/axioms/ristretto_lemmas/lemmas/axiom_ristretto_cross_mul_iff_equivalent()` (curve25519-dalek/src/lemmas/ristretto_lemmas/axioms.rs:94–112)
+  - spec: `requires ...`
+- `axiom_ristretto_decode_in_even_subgroup` — `probe:curve25519-dalek/4.1.3/axioms/ristretto_lemmas/lemmas/axiom_ristretto_decode_in_even_subgroup()` (curve25519-dalek/src/lemmas/ristretto_lemmas/axioms.rs:46–60)
+  - spec: `requires ...`
+- `axiom_ristretto_decode_on_curve` — `probe:curve25519-dalek/4.1.3/axioms/ristretto_lemmas/lemmas/axiom_ristretto_decode_on_curve()` (curve25519-dalek/src/lemmas/ristretto_lemmas/axioms.rs:27–35)
+  - spec: `requires ...`
+- `axiom_hash_is_canonical` — `probe:curve25519-dalek/4.1.3/core_assumes/axiom_hash_is_canonical()` (curve25519-dalek/src/core_assumes.rs:316–335)
+  - spec: `requires ...`
+- `axiom_sha256_output_length` — `probe:curve25519-dalek/4.1.3/core_assumes/axiom_sha256_output_length()` (curve25519-dalek/src/core_assumes.rs:497–504)
+  - spec: `ensures ...`
+- `axiom_sha512_output_length` — `probe:curve25519-dalek/4.1.3/core_assumes/axiom_sha512_output_length()` (curve25519-dalek/src/core_assumes.rs:457–464)
+  - spec: `ensures ...`
+- `axiom_edwards_add_associative` — `probe:curve25519-dalek/4.1.3/curve_equation_lemmas/edwards_lemmas/lemmas/axiom_edwards_add_associative()` (curve25519-dalek/src/lemmas/edwards_lemmas/curve_equation_lemmas.rs:770–781)
+  - spec: `ensures ...`
+- `axiom_edwards_add_complete` — `probe:curve25519-dalek/4.1.3/curve_equation_lemmas/edwards_lemmas/lemmas/axiom_edwards_add_complete()` (curve25519-dalek/src/lemmas/edwards_lemmas/curve_equation_lemmas.rs:2858–2871)
+  - spec: `requires ...`
+- `axiom_edwards_scalar_mul_distributive` — `probe:curve25519-dalek/4.1.3/curve_equation_lemmas/edwards_lemmas/lemmas/axiom_edwards_scalar_mul_distributive()` (curve25519-dalek/src/lemmas/edwards_lemmas/curve_equation_lemmas.rs:3225–3234)
+  - spec: `ensures ...`
+- `axiom_edwards_scalar_mul_signed_additive` — `probe:curve25519-dalek/4.1.3/curve_equation_lemmas/edwards_lemmas/lemmas/axiom_edwards_scalar_mul_signed_additive()` (curve25519-dalek/src/lemmas/edwards_lemmas/curve_equation_lemmas.rs:1315–1324)
+  - spec: `ensures ...`
+- `axiom_ed25519_basepoint_table_valid` — `probe:curve25519-dalek/4.1.3/edwards_specs/specs/axiom_ed25519_basepoint_table_valid()` (curve25519-dalek/src/specs/edwards_specs.rs:159–165)
+  - spec: `ensures ...`
+- `axiom_invsqrt_factors_over_square` — `probe:curve25519-dalek/4.1.3/field_specs/specs/axiom_invsqrt_factors_over_square()` (curve25519-dalek/src/specs/field_specs.rs:639–649)
+  - spec: `requires ...`
+- `axiom_decode_from_point` — `probe:curve25519-dalek/4.1.3/lizard_lemmas/lemmas/axiom_decode_from_point()` (curve25519-dalek/src/lemmas/lizard_lemmas.rs:1295–1318)
+  - spec: `requires ...`
+- `axiom_elligator_fiber_complete` — `probe:curve25519-dalek/4.1.3/lizard_lemmas/lemmas/axiom_elligator_fiber_complete()` (curve25519-dalek/src/lemmas/lizard_lemmas.rs:1101–1119)
+  - spec: `requires ...`
+- `axiom_elligator_forward_sqrt_id` — `probe:curve25519-dalek/4.1.3/lizard_lemmas/lemmas/axiom_elligator_forward_sqrt_id()` (curve25519-dalek/src/lemmas/lizard_lemmas.rs:1011–1016)
+  - spec: `ensures ...`
+- `axiom_elligator_forward_zero` — `probe:curve25519-dalek/4.1.3/lizard_lemmas/lemmas/axiom_elligator_forward_zero()` (curve25519-dalek/src/lemmas/lizard_lemmas.rs:998–1003)
+  - spec: `ensures ...`
+- `axiom_elligator_inv_square_case` — `probe:curve25519-dalek/4.1.3/lizard_lemmas/lemmas/axiom_elligator_inv_square_case()` (curve25519-dalek/src/lemmas/lizard_lemmas.rs:1031–1063)
+  - spec: `requires ...`
+- `axiom_jacobi_quartic_birational_pair01` — `probe:curve25519-dalek/4.1.3/lizard_lemmas/lemmas/axiom_jacobi_quartic_birational_pair01()` (curve25519-dalek/src/lemmas/lizard_lemmas.rs:541–554)
+  - spec: `requires ...`
+- `axiom_jacobi_quartic_torsion_pair23` — `probe:curve25519-dalek/4.1.3/lizard_lemmas/lemmas/axiom_jacobi_quartic_torsion_pair23()` (curve25519-dalek/src/lemmas/lizard_lemmas.rs:574–587)
+  - spec: `requires ...`
+- `axiom_mc_times_sqrt_ad_m1` — `probe:curve25519-dalek/4.1.3/lizard_lemmas/lemmas/axiom_mc_times_sqrt_ad_m1()` (curve25519-dalek/src/lemmas/lizard_lemmas.rs:449–457)
+  - spec: `ensures ...`
+- `axiom_2_times_486661_not_qr` — `probe:curve25519-dalek/4.1.3/montgomery_curve_lemmas/lemmas/axiom_2_times_486661_not_qr()` (curve25519-dalek/src/lemmas/montgomery_curve_lemmas.rs:742–747)
+  - spec: `ensures ...`
+- `axiom_486660_not_quadratic_residue` — `probe:curve25519-dalek/4.1.3/montgomery_curve_lemmas/lemmas/axiom_486660_not_quadratic_residue()` (curve25519-dalek/src/lemmas/montgomery_curve_lemmas.rs:732–737)
+  - spec: `ensures ...`
+- `axiom_edwards_to_montgomery_commutes_with_scalar_mul` — `probe:curve25519-dalek/4.1.3/montgomery_curve_lemmas/lemmas/axiom_edwards_to_montgomery_commutes_with_scalar_mul()` (curve25519-dalek/src/lemmas/montgomery_curve_lemmas.rs:1422–1436)
+  - spec: `requires ...`
+- `axiom_edwards_to_montgomery_preserves_validity` — `probe:curve25519-dalek/4.1.3/montgomery_curve_lemmas/lemmas/axiom_edwards_to_montgomery_preserves_validity()` (curve25519-dalek/src/lemmas/montgomery_curve_lemmas.rs:1175–1182)
+  - spec: `requires ...`
+- `axiom_elligator_encode_outputs_valid_u` — `probe:curve25519-dalek/4.1.3/montgomery_curve_lemmas/lemmas/axiom_elligator_encode_outputs_valid_u()` (curve25519-dalek/src/lemmas/montgomery_curve_lemmas.rs:1185–1190)
+  - spec: `ensures ...`
+- `axiom_montgomery_add_associative` — `probe:curve25519-dalek/4.1.3/montgomery_curve_lemmas/lemmas/axiom_montgomery_add_associative()` (curve25519-dalek/src/lemmas/montgomery_curve_lemmas.rs:43–52)
+  - spec: `ensures ...`
+- `axiom_montgomery_valid_u_implies_edwards_y_valid` — `probe:curve25519-dalek/4.1.3/montgomery_curve_lemmas/lemmas/axiom_montgomery_valid_u_implies_edwards_y_valid()` (curve25519-dalek/src/lemmas/montgomery_curve_lemmas.rs:1196–1204)
+  - spec: `requires ...`
+- `axiom_xadd_projective_correct` — `probe:curve25519-dalek/4.1.3/montgomery_curve_lemmas/lemmas/axiom_xadd_projective_correct()` (curve25519-dalek/src/lemmas/montgomery_curve_lemmas.rs:252–279)
+  - spec: `requires ...`
+- `axiom_xdbl_projective_correct` — `probe:curve25519-dalek/4.1.3/montgomery_curve_lemmas/lemmas/axiom_xdbl_projective_correct()` (curve25519-dalek/src/lemmas/montgomery_curve_lemmas.rs:134–146)
+  - spec: `requires ...`
+- `axiom_group_order_is_prime` — `probe:curve25519-dalek/4.1.3/primality_specs/specs/axiom_group_order_is_prime()` (curve25519-dalek/src/specs/primality_specs.rs:40–45)
+  - spec: `ensures ...`
+- `axiom_p_is_prime` — `probe:curve25519-dalek/4.1.3/primality_specs/specs/axiom_p_is_prime()` (curve25519-dalek/src/specs/primality_specs.rs:26–31)
+  - spec: `ensures ...`
+- `axiom_from_bytes_independent` — `probe:curve25519-dalek/4.1.3/proba_specs/specs/axiom_from_bytes_independent()` (curve25519-dalek/src/specs/proba_specs.rs:157–171)
+  - spec: `requires ...`
+- `axiom_uniform_bytes_split` — `probe:curve25519-dalek/4.1.3/proba_specs/specs/axiom_uniform_bytes_split()` (curve25519-dalek/src/specs/proba_specs.rs:119–130)
+  - spec: `requires ...`
+- `axiom_uniform_elligator` — `probe:curve25519-dalek/4.1.3/proba_specs/specs/axiom_uniform_elligator()` (curve25519-dalek/src/specs/proba_specs.rs:187–197)
+  - spec: `requires ...`
+- `axiom_uniform_elligator_independent` — `probe:curve25519-dalek/4.1.3/proba_specs/specs/axiom_uniform_elligator_independent()` (curve25519-dalek/src/specs/proba_specs.rs:203–221)
+  - spec: `requires ...`
+- `axiom_uniform_elligator_sum` — `probe:curve25519-dalek/4.1.3/proba_specs/specs/axiom_uniform_elligator_sum()` (curve25519-dalek/src/specs/proba_specs.rs:235–254)
+  - spec: `requires ...`
+- `axiom_uniform_mod_reduction` — `probe:curve25519-dalek/4.1.3/proba_specs/specs/axiom_uniform_mod_reduction()` (curve25519-dalek/src/specs/proba_specs.rs:292–301)
+  - spec: `requires ...`
+- `axiom_uniform_point_add` — `probe:curve25519-dalek/4.1.3/proba_specs/specs/axiom_uniform_point_add()` (curve25519-dalek/src/specs/proba_specs.rs:265–280)
+  - spec: `requires ...`
+- `axiom_neg_sqrt_m1_not_square` — `probe:curve25519-dalek/4.1.3/sqrt_m1_lemmas/field_lemmas/lemmas/axiom_neg_sqrt_m1_not_square()` (curve25519-dalek/src/lemmas/field_lemmas/sqrt_m1_lemmas.rs:124–129)
+  - spec: `ensures ...`
+- `axiom_sqrt_m1_not_square` — `probe:curve25519-dalek/4.1.3/sqrt_m1_lemmas/field_lemmas/lemmas/axiom_sqrt_m1_not_square()` (curve25519-dalek/src/lemmas/field_lemmas/sqrt_m1_lemmas.rs:107–112)
+  - spec: `ensures ...`
+- `axiom_sqrt_m1_squared` — `probe:curve25519-dalek/4.1.3/sqrt_m1_lemmas/field_lemmas/lemmas/axiom_sqrt_m1_squared()` (curve25519-dalek/src/lemmas/field_lemmas/sqrt_m1_lemmas.rs:85–94)
+  - spec: `ensures ...`
+- `axiom_four_torsion_affine` — `probe:curve25519-dalek/4.1.3/torsion_lemmas/edwards_lemmas/lemmas/axiom_four_torsion_affine()` (curve25519-dalek/src/lemmas/edwards_lemmas/torsion_lemmas.rs:69–76)
+  - spec: `ensures ...`
+- `axiom_affine_odd_multiples_of_basepoint_valid` — `probe:curve25519-dalek/4.1.3/window_specs/specs/axiom_affine_odd_multiples_of_basepoint_valid()` (curve25519-dalek/src/specs/window_specs.rs:205–218)
+  - spec: `ensures ...`
+
+## external-body (66 atoms)
+
+- `choice_not` — `probe:curve25519-dalek/4.1.3/backend/serial/u64/subtle_assumes/choice_not()` (curve25519-dalek/src/backend/serial/u64/subtle_assumes.rs:143–152)
+  - spec: `ensures ...`
+- `choice_or` — `probe:curve25519-dalek/4.1.3/backend/serial/u64/subtle_assumes/choice_or()` (curve25519-dalek/src/backend/serial/u64/subtle_assumes.rs:154–163)
+  - spec: `ensures ...`
+- `conditional_assign_field_element` — `probe:curve25519-dalek/4.1.3/backend/serial/u64/subtle_assumes/conditional_assign_field_element()` (curve25519-dalek/src/backend/serial/u64/subtle_assumes.rs:408–426)
+  - spec: `requires ...`
+- `conditional_assign_generic` — `probe:curve25519-dalek/4.1.3/backend/serial/u64/subtle_assumes/conditional_assign_generic()` (curve25519-dalek/src/backend/serial/u64/subtle_assumes.rs:395–406)
+  - spec: `ensures ...`
+- `conditional_assign_u64` — `probe:curve25519-dalek/4.1.3/backend/serial/u64/subtle_assumes/conditional_assign_u64()` (curve25519-dalek/src/backend/serial/u64/subtle_assumes.rs:262–271)
+  - spec: `ensures ...`
+- `conditional_negate_affine_niels` — `probe:curve25519-dalek/4.1.3/backend/serial/u64/subtle_assumes/conditional_negate_affine_niels()` (curve25519-dalek/src/backend/serial/u64/subtle_assumes.rs:323–347)
+  - spec: `requires ...`
+- `conditional_negate_generic` — `probe:curve25519-dalek/4.1.3/backend/serial/u64/subtle_assumes/conditional_negate_generic()` (curve25519-dalek/src/backend/serial/u64/subtle_assumes.rs:273–285)
+  - spec: `ensures ...`
+- `conditional_negate_projective_niels` — `probe:curve25519-dalek/4.1.3/backend/serial/u64/subtle_assumes/conditional_negate_projective_niels()` (curve25519-dalek/src/backend/serial/u64/subtle_assumes.rs:349–371)
+  - spec: `requires ...`
+- `conditional_select_field_element` — `probe:curve25519-dalek/4.1.3/backend/serial/u64/subtle_assumes/conditional_select_field_element()` (curve25519-dalek/src/backend/serial/u64/subtle_assumes.rs:430–443)
+  - spec: `ensures ...`
+- `conditional_select_u64` — `probe:curve25519-dalek/4.1.3/backend/serial/u64/subtle_assumes/conditional_select_u64()` (curve25519-dalek/src/backend/serial/u64/subtle_assumes.rs:240–249)
+  - spec: `ensures ...`
+- `conditional_swap_montgomery_projective` — `probe:curve25519-dalek/4.1.3/backend/serial/u64/subtle_assumes/conditional_swap_montgomery_projective()` (curve25519-dalek/src/backend/serial/u64/subtle_assumes.rs:447–474)
+  - spec: `ensures ...`
+- `conditional_swap_u64` — `probe:curve25519-dalek/4.1.3/backend/serial/u64/subtle_assumes/conditional_swap_u64()` (curve25519-dalek/src/backend/serial/u64/subtle_assumes.rs:251–260)
+  - spec: `ensures ...`
+- `ct_option_is_none` — `probe:curve25519-dalek/4.1.3/backend/serial/u64/subtle_assumes/ct_option_is_none()` (curve25519-dalek/src/backend/serial/u64/subtle_assumes.rs:194–202)
+  - spec: `ensures ...`
+- `ct_option_is_some` — `probe:curve25519-dalek/4.1.3/backend/serial/u64/subtle_assumes/ct_option_is_some()` (curve25519-dalek/src/backend/serial/u64/subtle_assumes.rs:184–192)
+  - spec: `ensures ...`
+- `ct_option_new` — `probe:curve25519-dalek/4.1.3/backend/serial/u64/subtle_assumes/ct_option_new()` (curve25519-dalek/src/backend/serial/u64/subtle_assumes.rs:173–182)
+  - spec: `ensures ...`
+- `ct_option_unwrap` — `probe:curve25519-dalek/4.1.3/backend/serial/u64/subtle_assumes/ct_option_unwrap()` (curve25519-dalek/src/backend/serial/u64/subtle_assumes.rs:204–214)
+  - spec: `requires ...`
+- `negate_field_element` — `probe:curve25519-dalek/4.1.3/backend/serial/u64/subtle_assumes/negate_field_element()` (curve25519-dalek/src/backend/serial/u64/subtle_assumes.rs:373–393)
+  - spec: `requires ...`
+- `bytes32_8_to_24` — `probe:curve25519-dalek/4.1.3/core_assumes/bytes32_8_to_24()` (curve25519-dalek/src/core_assumes.rs:136–147)
+  - spec: `ensures ...`
+- `compressed_edwards_y_from_array_result` — `probe:curve25519-dalek/4.1.3/core_assumes/compressed_edwards_y_from_array_result()` (curve25519-dalek/src/core_assumes.rs:77–88)
+  - spec: `ensures ...`
+- `compressed_ristretto_from_array_result` — `probe:curve25519-dalek/4.1.3/core_assumes/compressed_ristretto_from_array_result()` (curve25519-dalek/src/core_assumes.rs:93–106)
+  - spec: `ensures ...`
+- `fill_bytes` — `probe:curve25519-dalek/4.1.3/core_assumes/fill_bytes()` (curve25519-dalek/src/core_assumes.rs:430–440)
+  - spec: `ensures ...`
+- `sha256_hash_bytes` — `probe:curve25519-dalek/4.1.3/core_assumes/sha256_hash_bytes()` (curve25519-dalek/src/core_assumes.rs:506–518)
+  - spec: `ensures ...`
+- `sha512_hash_bytes` — `probe:curve25519-dalek/4.1.3/core_assumes/sha512_hash_bytes()` (curve25519-dalek/src/core_assumes.rs:466–480)
+  - spec: `ensures ...`
+- `try_into_32_bytes_array` — `probe:curve25519-dalek/4.1.3/core_assumes/try_into_32_bytes_array()` (curve25519-dalek/src/core_assumes.rs:48–63)
+  - spec: `ensures ...`
+- `u128_from_le_bytes` — `probe:curve25519-dalek/4.1.3/core_assumes/u128_from_le_bytes()` (curve25519-dalek/src/core_assumes.rs:269–277)
+  - spec: `ensures ...`
+- `u128_to_le_bytes` — `probe:curve25519-dalek/4.1.3/core_assumes/u128_to_le_bytes()` (curve25519-dalek/src/core_assumes.rs:229–237)
+  - spec: `ensures ...`
+- `u16_from_le_bytes` — `probe:curve25519-dalek/4.1.3/core_assumes/u16_from_le_bytes()` (curve25519-dalek/src/core_assumes.rs:239–247)
+  - spec: `ensures ...`
+- `u16_to_le_bytes` — `probe:curve25519-dalek/4.1.3/core_assumes/u16_to_le_bytes()` (curve25519-dalek/src/core_assumes.rs:199–207)
+  - spec: `ensures ...`
+- `u32_from_le_bytes` — `probe:curve25519-dalek/4.1.3/core_assumes/u32_from_le_bytes()` (curve25519-dalek/src/core_assumes.rs:249–257)
+  - spec: `ensures ...`
+- `u32_to_le_bytes` — `probe:curve25519-dalek/4.1.3/core_assumes/u32_to_le_bytes()` (curve25519-dalek/src/core_assumes.rs:209–217)
+  - spec: `ensures ...`
+- `u64_from_le_bytes` — `probe:curve25519-dalek/4.1.3/core_assumes/u64_from_le_bytes()` (curve25519-dalek/src/core_assumes.rs:259–267)
+  - spec: `ensures ...`
+- `u64_to_le_bytes` — `probe:curve25519-dalek/4.1.3/core_assumes/u64_to_le_bytes()` (curve25519-dalek/src/core_assumes.rs:219–227)
+  - spec: `ensures ...`
+- `write_bytes32_8_to_24` — `probe:curve25519-dalek/4.1.3/core_assumes/write_bytes32_8_to_24()` (curve25519-dalek/src/core_assumes.rs:149–159)
+  - spec: `ensures ...`
+- `zeroize_bool` — `probe:curve25519-dalek/4.1.3/core_assumes/zeroize_bool()` (curve25519-dalek/src/core_assumes.rs:404–415)
+  - spec: `ensures ...`
+- `zeroize_bytes32` — `probe:curve25519-dalek/4.1.3/core_assumes/zeroize_bytes32()` (curve25519-dalek/src/core_assumes.rs:377–388)
+  - spec: `ensures ...`
+- `zeroize_limbs5` — `probe:curve25519-dalek/4.1.3/core_assumes/zeroize_limbs5()` (curve25519-dalek/src/core_assumes.rs:390–402)
+  - spec: `ensures ...`
+- `CompressedEdwardsY::fmt` — `probe:curve25519-dalek/4.1.3/edwards/CompressedEdwardsY#Debug<&core::fmt::Formatter<'_>>#fmt()` (curve25519-dalek/src/edwards.rs:250–254)
+- `EdwardsPoint::sum_original` — `probe:curve25519-dalek/4.1.3/edwards/EdwardsPoint<I>#sum_original()` (curve25519-dalek/src/edwards.rs:2362–2371)
+- `clone` — `probe:curve25519-dalek/4.1.3/edwards/clone()` (curve25519-dalek/src/edwards.rs:3109–3114)
+- `FieldElement51::fmt` — `probe:curve25519-dalek/4.1.3/field/u64/serial/backend/FieldElement51#Debug<&core::fmt::Formatter<'_>>#fmt()` (curve25519-dalek/src/backend/serial/u64/field.rs:121–125)
+- `collect_optional_points_from_iter` — `probe:curve25519-dalek/4.1.3/iterator_specs/specs/collect_optional_points_from_iter()` (curve25519-dalek/src/specs/iterator_specs.rs:89–102)
+  - spec: `ensures ...`
+- `collect_scalars_from_iter` — `probe:curve25519-dalek/4.1.3/iterator_specs/specs/collect_scalars_from_iter()` (curve25519-dalek/src/specs/iterator_specs.rs:75–87)
+  - spec: `ensures ...`
+- `RistrettoPoint::random` — `probe:curve25519-dalek/4.1.3/ristretto/RistrettoPoint<&R>#random()` (curve25519-dalek/src/ristretto.rs:2712–2717)
+- `RistrettoPoint::batch_invert_vec` — `probe:curve25519-dalek/4.1.3/ristretto/RistrettoPoint<&Vec<FieldElement>>#batch_invert_vec()` (curve25519-dalek/src/ristretto.rs:2206–2223)
+  - spec: `requires ...`
+- `multiscalar_mul` — `probe:curve25519-dalek/4.1.3/ristretto/multiscalar_mul()` (curve25519-dalek/src/ristretto.rs:3516–3527)
+- `optional_multiscalar_mul` — `probe:curve25519-dalek/4.1.3/ristretto/optional_multiscalar_mul()` (curve25519-dalek/src/ristretto.rs:3534–3545)
+- `sum_original` — `probe:curve25519-dalek/4.1.3/ristretto/sum_original()` (curve25519-dalek/src/ristretto.rs:3209–3222)
+- `Scalar::fmt` — `probe:curve25519-dalek/4.1.3/scalar/Scalar#Debug<&core::fmt::Formatter<'_>>#fmt()` (curve25519-dalek/src/scalar.rs:499–503)
+- `deserialize` — `probe:curve25519-dalek/4.1.3/scalar/deserialize()` (curve25519-dalek/src/scalar.rs:2133–2141)
+- `expecting` — `probe:curve25519-dalek/4.1.3/scalar/expecting()` (curve25519-dalek/src/scalar.rs:2083–2093)
+- `serialize` — `probe:curve25519-dalek/4.1.3/scalar/serialize()` (curve25519-dalek/src/scalar.rs:2117–2127)
+- `visit_seq` — `probe:curve25519-dalek/4.1.3/scalar/visit_seq()` (curve25519-dalek/src/scalar.rs:2095–2111)
+- `clone_optional_ristretto_iter_with_spec` — `probe:curve25519-dalek/4.1.3/specs/iterator_specs/clone_optional_ristretto_iter_with_spec()` (curve25519-dalek/src/specs/iterator_specs.rs:232–249)
+  - spec: `ensures ...`
+- `clone_ristretto_iter_with_spec` — `probe:curve25519-dalek/4.1.3/specs/iterator_specs/clone_ristretto_iter_with_spec()` (curve25519-dalek/src/specs/iterator_specs.rs:172–194)
+  - spec: `ensures ...`
+- `collect_edwards_from_ristretto_iter` — `probe:curve25519-dalek/4.1.3/specs/iterator_specs/collect_edwards_from_ristretto_iter()` (curve25519-dalek/src/specs/iterator_specs.rs:155–170)
+  - spec: `ensures ...`
+- `collect_optional_edwards_from_ristretto_iter` — `probe:curve25519-dalek/4.1.3/specs/iterator_specs/collect_optional_edwards_from_ristretto_iter()` (curve25519-dalek/src/specs/iterator_specs.rs:216–230)
+  - spec: `ensures ...`
+- `collect_ristretto_points` — `probe:curve25519-dalek/4.1.3/specs/iterator_specs/collect_ristretto_points()` (curve25519-dalek/src/specs/iterator_specs.rs:196–214)
+  - spec: `ensures ...`
+- `vec_to_edwards_iter` — `probe:curve25519-dalek/4.1.3/specs/iterator_specs/vec_to_edwards_iter()` (curve25519-dalek/src/specs/iterator_specs.rs:120–133)
+  - spec: `requires ...`
+- `vec_to_optional_edwards_iter` — `probe:curve25519-dalek/4.1.3/specs/iterator_specs/vec_to_optional_edwards_iter()` (curve25519-dalek/src/specs/iterator_specs.rs:135–153)
+  - spec: `requires ...`
+- `ct_eq_bytes32` — `probe:curve25519-dalek/4.1.3/subtle_assumes/u64/serial/backend/ct_eq_bytes32()` (curve25519-dalek/src/backend/serial/u64/subtle_assumes.rs:82–90)
+  - spec: `ensures ...`
+- `ct_eq_limbs5` — `probe:curve25519-dalek/4.1.3/subtle_assumes/u64/serial/backend/ct_eq_limbs5()` (curve25519-dalek/src/backend/serial/u64/subtle_assumes.rs:91–91)
+  - spec: `ensures ...`
+- `ct_eq_u8` — `probe:curve25519-dalek/4.1.3/subtle_assumes/u64/serial/backend/ct_eq_u8()` (curve25519-dalek/src/backend/serial/u64/subtle_assumes.rs:100–100)
+  - spec: `ensures ...`
+- `select` — `probe:curve25519-dalek/4.1.3/subtle_assumes/u64/serial/backend/select()` (curve25519-dalek/src/backend/serial/u64/subtle_assumes.rs:62–69)
+  - spec: `ensures ...`
+- `select_u8` — `probe:curve25519-dalek/4.1.3/subtle_assumes/u64/serial/backend/select_u8()` (curve25519-dalek/src/backend/serial/u64/subtle_assumes.rs:72–80)
+  - spec: `ensures ...`
+- `LookupTable::clone` — `probe:curve25519-dalek/4.1.3/window/LookupTable#Clone#clone()` (curve25519-dalek/src/window.rs:394–398)
+- `LookupTable::fmt` — `probe:curve25519-dalek/4.1.3/window/LookupTable#Debug<&core::fmt::Formatter<'_>>#fmt()` (curve25519-dalek/src/window.rs:435–435)
+
+## assume-specification (5 atoms)
+
+- `hash` — `probe:core/https://github.com/rust-lang/rust/library/core/array/Hash#hash()`
+  - spec: `ensures ...`
+- `from` — `probe:subtle/2.6.1/Choice#From#from()`
+  - spec: `ensures ...`
+- `unwrap_u8` — `probe:subtle/2.6.1/Choice#unwrap_u8()`
+  - spec: `ensures ...`
+- `conditional_assign` — `probe:subtle/2.6.1/ConditionallySelectable#conditional_assign()`
+  - spec: `ensures ...`
+- `conditional_swap` — `probe:subtle/2.6.1/ConditionallySelectable#conditional_swap()`
+  - spec: `ensures ...`
+

@@ -119,7 +119,9 @@ The `specify` command extracts function specifications (requires/ensures clauses
    - Function definitions with their spans
    - Declaration kind (`exec`, `proof`, `spec`) from the verus_syn AST
    - Whether each function has `requires`, `ensures`, or `decreases` clauses
-   - Whether each function contains `assume()` or `admit()` calls
+   - Whether each function contains `assume()` or `admit()` calls, and `admit()` specifically (`contains_admit`)
+   - Whether each function has `#[verifier::external_body]` (`is_external_body`)
+   - `assume_specification[path]` declarations (used by `extract` to mark matching external stubs as trusted)
    - Called function names in ensures/requires (via `CallNameCollector` AST visitor)
 3. **Match functions to atoms** using:
    - Path matching (by suffix comparison)
@@ -177,6 +179,8 @@ An example config for curve25519-dalek (`spec_taxonomy_examples/spec-taxonomy-cu
 - **`has_ensures`**: Whether the function has an `ensures` clause
 - **`has_decreases`**: Whether the function has a `decreases` clause
 - **`has_trusted_assumption`**: Whether the function contains `assume()` or `admit()`
+- **`contains_admit`**: Whether the function body contains `admit()` specifically (axiom; drives `"trusted"` in `extract` merge)
+- **`is_external_body`**: Whether the function has `#[verifier::external_body]` (trusted body; drives `"trusted"` in `extract` merge)
 
 With `--with-spec-text`, raw specification text is also included:
 - **`requires_text`**: Raw text of the requires clause
@@ -237,9 +241,19 @@ The tool maps errors to specific functions:
 4. Functions with `assume()`/`admit()` (detected via `has_trusted_assumption`) are marked "unverified" (proofs status: `sorries`)
 5. Remaining functions are marked as "verified"
 
-The **extract** merge step further refines "unverified" — functions whose body
-contains `admit()` specifically (`contains_admit` from the specify step) are
-overridden to `verification-status: "trusted"`, making the trust base explicit.
+The **extract** merge step sets `verification-status: "trusted"` for trust-base
+atoms, overriding whatever came from proofs. As of probe-verus 6.5.0, that
+applies when any of the following hold (from the specify step and atom matching):
+
+- The function body contains **`admit()`** (`contains_admit`). `assume()` alone
+  still maps to `"unverified"` (proofs status `sorries`); only `admit()` is
+  treated as an explicit axiom for this override.
+- The function has **`#[verifier::external_body]`** (`is_external_body`).
+- The atom is an **external stub** uniquely matched by a Verus
+  **`assume_specification[path]`** declaration collected while parsing the
+  project (ambiguous or missing matches are skipped with a warning).
+
+Together, these make the trust base explicit in unified extract output.
 
 ### Status Determination
 
@@ -266,7 +280,7 @@ The `data` payload is a dictionary keyed by code-name:
 {
   "schema": "probe-verus/atoms",
   "schema-version": "2.0",
-  "tool": { "name": "probe-verus", "version": "5.2.0", "command": "atomize" },
+  "tool": { "name": "probe-verus", "version": "6.5.0", "command": "atomize" },
   "source": { "repo": "...", "commit": "...", "language": "rust", "package": "...", "package-version": "..." },
   "timestamp": "2026-03-06T12:00:00Z",
   "data": {

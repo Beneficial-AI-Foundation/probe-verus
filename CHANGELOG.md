@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 See the [Versioning Policy section in CLAUDE.md](CLAUDE.md#versioning-policy) for
 what constitutes a breaking change.
 
+## [6.5.0] - 2026-04-07
+
+### Added
+- **`"trusted"` status for `#[verifier::external_body]` functions**: All functions with the `external_body` attribute now get `verification-status: "trusted"` in extract output, regardless of whether they have specs. These functions have bodies that Verus does not check.
+- **`"trusted"` status for `assume_specification` targets**: The specify step now parses `assume_specification[path]` declarations and outputs them as an `"assume-specifications"` list in specs.json. The extract merge matches these to external stub atoms (empty `code-path`) using path segment heuristics and marks matched atoms as `"trusted"`.
+- **Trust-base summary in extract_summary.json**: New `"trust-base"` section shows post-override verification status counts (`verified`, `trusted`, `unverified`, `failed`, `absent`), supplementing the raw Verus counts in `verify.summary`.
+- **`AssumeSpecInfo` struct in verus_parser**: New AST visitor `visit_assume_specification` extracts path segments, display path, file, line, and spec text from `assume_specification` declarations.
+
 ## [6.4.0] - 2026-04-07
 
 ### Added

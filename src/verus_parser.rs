@@ -795,11 +795,45 @@ impl FunctionInfo {
     }
 }
 
+/// Metadata for a Verus `assume_specification[path]` declaration.
+///
+/// These are axioms: the project declares a spec for an external function
+/// without providing a proof. They form part of the trust base.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssumeSpecInfo {
+    /// The last meaningful path segments for matching (e.g. `["Choice", "from"]`
+    /// or `["ConditionallySelectable", "conditional_swap"]`).
+    #[serde(rename = "path-segments")]
+    pub path_segments: Vec<String>,
+    /// Human-readable Verus path (e.g. `<u64 as ConditionallySelectable>::conditional_swap`).
+    #[serde(rename = "path-display")]
+    pub path_display: String,
+    /// Source file (project-relative).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    /// 1-based line number of the declaration.
+    pub line: usize,
+    #[serde(default)]
+    pub has_requires: bool,
+    #[serde(default)]
+    pub has_ensures: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requires_text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ensures_text: Option<String>,
+}
+
 /// Output format for function listing
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ParsedOutput {
     pub functions: Vec<FunctionInfo>,
     pub functions_by_file: HashMap<String, Vec<FunctionInfo>>,
+    #[serde(
+        rename = "assume-specifications",
+        skip_serializing_if = "Vec::is_empty",
+        default
+    )]
+    pub assume_specifications: Vec<AssumeSpecInfo>,
     pub summary: ParseSummary,
 }
 
@@ -812,6 +846,7 @@ pub struct ParseSummary {
 /// Visitor that collects detailed function information
 struct FunctionInfoVisitor {
     functions: Vec<FunctionInfo>,
+    assume_specifications: Vec<AssumeSpecInfo>,
     file_path: Option<String>,
     file_content: Option<String>,
     include_verus_constructs: bool,
@@ -840,6 +875,7 @@ impl FunctionInfoVisitor {
     ) -> Self {
         Self {
             functions: Vec::new(),
+            assume_specifications: Vec::new(),
             file_path,
             file_content,
             include_verus_constructs,
@@ -1358,6 +1394,108 @@ impl<'ast> Visit<'ast> for FunctionInfoVisitor {
         }
         verus_syn::visit::visit_item_macro(self, node);
     }
+
+    fn visit_assume_specification(&mut self, node: &'ast verus_syn::AssumeSpecification) {
+        let line = node.assume_specification.span.start().line;
+
+        let path_segments = extract_assume_spec_segments(node);
+        let path_display = format_assume_spec_path(node);
+
+        let has_requires = node.requires.is_some();
+        let has_ensures = node.ensures.is_some();
+        let requires_text = self.extract_spec_text(node.requires.as_ref());
+        let ensures_text = self.extract_spec_text(node.ensures.as_ref());
+
+        self.assume_specifications.push(AssumeSpecInfo {
+            path_segments,
+            path_display,
+            file: self.file_path.clone(),
+            line,
+            has_requires,
+            has_ensures,
+            requires_text,
+            ensures_text,
+        });
+
+        verus_syn::visit::visit_assume_specification(self, node);
+    }
+}
+
+/// Extract the matching segments from an `assume_specification` path.
+///
+/// For `<u64 as ConditionallySelectable>::conditional_swap`, returns
+/// `["ConditionallySelectable", "conditional_swap"]` (trait + method).
+///
+/// For `Choice::from`, returns `["Choice", "from"]` (type + method).
+fn extract_assume_spec_segments(node: &verus_syn::AssumeSpecification) -> Vec<String> {
+    let segments: Vec<String> = node
+        .path
+        .segments
+        .iter()
+        .map(|s| s.ident.to_string())
+        .collect();
+
+    // The path always ends with the method name.  For matching we
+    // want the last two meaningful segments:
+    // - trait impl: qself is Some → path starts with Trait::method
+    // - inherent:   qself is None → path is Type::method (or longer)
+    if segments.len() >= 2 {
+        segments[segments.len() - 2..].to_vec()
+    } else {
+        segments
+    }
+}
+
+/// Format the `assume_specification` path for human display.
+///
+/// Reconstructs `<u64 as Trait>::method` or `Choice::from` from the AST nodes.
+fn format_assume_spec_path(node: &verus_syn::AssumeSpecification) -> String {
+    let path_str = node
+        .path
+        .segments
+        .iter()
+        .map(|s| s.ident.to_string())
+        .collect::<Vec<_>>()
+        .join("::");
+
+    if let Some(ref qself) = node.qself {
+        let self_ty = &qself.ty;
+        let ty_str = quote::quote! { #self_ty }
+            .to_string()
+            .replace(" :: ", "::")
+            .replace("< ", "<")
+            .replace(" >", ">");
+        // `path_str` is the part after `as Trait>`, e.g. "ConditionallySelectable::conditional_swap"
+        // `ty_str` is the self type, e.g. "u64" or "[T ; N]"
+        // qself.position indicates how many path segments belong to the qualified part
+        let trait_segments: Vec<_> = node
+            .path
+            .segments
+            .iter()
+            .take(qself.position)
+            .map(|s| s.ident.to_string())
+            .collect();
+        let method_segments: Vec<_> = node
+            .path
+            .segments
+            .iter()
+            .skip(qself.position)
+            .map(|s| s.ident.to_string())
+            .collect();
+
+        if trait_segments.is_empty() {
+            format!("<{}>::{}", ty_str, method_segments.join("::"))
+        } else {
+            format!(
+                "<{} as {}>::{}",
+                ty_str,
+                trait_segments.join("::"),
+                method_segments.join("::")
+            )
+        }
+    } else {
+        path_str
+    }
 }
 
 /// Parse a file and extract detailed function information
@@ -1378,6 +1516,7 @@ pub fn parse_file_for_functions(
         include_spec_text,
         false,
     )
+    .map(|(funcs, _)| funcs)
 }
 
 /// Parse a file with optional extended info (doc comments, signatures, bodies, display names).
@@ -1389,7 +1528,7 @@ pub fn parse_file_for_functions_ext(
     show_kind: bool,
     include_spec_text: bool,
     include_extended_info: bool,
-) -> Result<Vec<FunctionInfo>, String> {
+) -> Result<(Vec<FunctionInfo>, Vec<AssumeSpecInfo>), String> {
     let content = fs::read_to_string(file_path)
         .map_err(|e| format!("Failed to read file {}: {}", file_path.display(), e))?;
 
@@ -1408,7 +1547,7 @@ pub fn parse_file_for_functions_ext(
     visitor.include_extended_info = include_extended_info;
     visitor.visit_file(&syntax_tree);
 
-    Ok(visitor.functions)
+    Ok((visitor.functions, visitor.assume_specifications))
 }
 
 /// Find all Rust files in a directory (sorted for deterministic output)
@@ -1453,6 +1592,7 @@ pub fn parse_all_functions_ext(
     include_extended_info: bool,
 ) -> ParsedOutput {
     let mut all_functions = Vec::new();
+    let mut all_assume_specs = Vec::new();
     let mut functions_by_file: HashMap<String, Vec<FunctionInfo>> = HashMap::new();
     let mut total_files = 0;
 
@@ -1486,7 +1626,7 @@ pub fn parse_all_functions_ext(
             include_spec_text,
             include_extended_info,
         ) {
-            Ok(mut functions) => {
+            Ok((mut functions, mut assume_specs)) => {
                 let relative_path = make_relative(path);
                 let module_path = derive_module_path(&relative_path);
                 for func in &mut functions {
@@ -1495,11 +1635,15 @@ pub fn parse_all_functions_ext(
                         func.module_path = Some(module_path.clone());
                     }
                 }
+                for aspec in &mut assume_specs {
+                    aspec.file = Some(relative_path.clone());
+                }
                 if !functions.is_empty() {
                     functions_by_file.insert(relative_path, functions.clone());
                     all_functions.extend(functions);
                     total_files = 1;
                 }
+                all_assume_specs.extend(assume_specs);
             }
             Err(e) => {
                 eprintln!("Error parsing file: {}", e);
@@ -1519,19 +1663,23 @@ pub fn parse_all_functions_ext(
                 include_spec_text,
                 include_extended_info,
             ) {
-                Ok(mut functions) => {
-                    if !functions.is_empty() {
-                        let relative_path = make_relative(&file_path);
-                        let module_path = derive_module_path(&relative_path);
-                        for func in &mut functions {
-                            func.file = Some(relative_path.clone());
-                            if include_extended_info {
-                                func.module_path = Some(module_path.clone());
-                            }
+                Ok((mut functions, mut assume_specs)) => {
+                    let relative_path = make_relative(&file_path);
+                    let module_path = derive_module_path(&relative_path);
+                    for func in &mut functions {
+                        func.file = Some(relative_path.clone());
+                        if include_extended_info {
+                            func.module_path = Some(module_path.clone());
                         }
+                    }
+                    for aspec in &mut assume_specs {
+                        aspec.file = Some(relative_path.clone());
+                    }
+                    if !functions.is_empty() {
                         functions_by_file.insert(relative_path, functions.clone());
                         all_functions.extend(functions);
                     }
+                    all_assume_specs.extend(assume_specs);
                 }
                 Err(e) => {
                     eprintln!("Warning: {}", e);
@@ -1543,6 +1691,7 @@ pub fn parse_all_functions_ext(
     ParsedOutput {
         functions: all_functions.clone(),
         functions_by_file,
+        assume_specifications: all_assume_specs,
         summary: ParseSummary {
             total_functions: all_functions.len(),
             total_files,
@@ -2012,6 +2161,89 @@ fn clean_function() {{
         assert!(
             !f.contains_admit,
             "admit() in a comment must not set contains_admit"
+        );
+    }
+
+    #[test]
+    fn test_assume_specification_parsed() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"
+verus! {{
+    pub assume_specification[ Choice::from ](u: u8) -> (c: Choice)
+        ensures
+            (u == 1) == choice_is_true(c),
+    ;
+
+    pub assume_specification[ Choice::unwrap_u8 ](c: &Choice) -> (u: u8)
+        ensures
+            choice_is_true(*c) ==> u == 1u8,
+    ;
+}}
+"#
+        )
+        .unwrap();
+
+        let (functions, assume_specs) =
+            parse_file_for_functions_ext(file.path(), true, true, true, true, true, false).unwrap();
+
+        assert!(
+            functions.is_empty(),
+            "assume_specification is not a function"
+        );
+        assert_eq!(assume_specs.len(), 2, "Should find 2 assume_specifications");
+
+        let choice_from = &assume_specs[0];
+        assert_eq!(choice_from.path_segments, vec!["Choice", "from"]);
+        assert!(choice_from.path_display.contains("Choice"));
+        assert!(choice_from.path_display.contains("from"));
+        assert!(choice_from.has_ensures);
+        assert!(!choice_from.has_requires);
+
+        let unwrap = &assume_specs[1];
+        assert_eq!(unwrap.path_segments, vec!["Choice", "unwrap_u8"]);
+        assert!(unwrap.has_ensures);
+    }
+
+    #[test]
+    fn test_assume_specification_trait_impl_path() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"
+verus! {{
+    pub assume_specification[ <u64 as ConditionallySelectable>::conditional_swap ](
+        a: &mut u64,
+        b: &mut u64,
+        choice: Choice,
+    )
+        ensures
+            choice_is_true(choice) ==> (*a == *old(b) && *b == *old(a)),
+    ;
+}}
+"#
+        )
+        .unwrap();
+
+        let (_, assume_specs) =
+            parse_file_for_functions_ext(file.path(), true, true, true, true, true, false).unwrap();
+
+        assert_eq!(assume_specs.len(), 1);
+        let aspec = &assume_specs[0];
+        assert_eq!(
+            aspec.path_segments,
+            vec!["ConditionallySelectable", "conditional_swap"]
+        );
+        assert!(
+            aspec.path_display.contains("u64"),
+            "Display should include self type: {}",
+            aspec.path_display
+        );
+        assert!(
+            aspec.path_display.contains("ConditionallySelectable"),
+            "Display should include trait: {}",
+            aspec.path_display
         );
     }
 }

@@ -7,7 +7,7 @@ use crate::metadata::{
 };
 use crate::path_utils::{extract_src_suffix, paths_match_by_suffix};
 use crate::taxonomy;
-use crate::verus_parser::{self, FunctionInfo, ParsedOutput};
+use crate::verus_parser::{self, AssumeSpecInfo, FunctionInfo, ParsedOutput};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -36,6 +36,23 @@ struct SpecifyEntry {
     info: FunctionInfo,
     #[serde(rename = "spec-labels", skip_serializing_if = "Vec::is_empty")]
     spec_labels: Vec<String>,
+}
+
+/// Top-level `data` for specs.json: function dict + assume_specification metadata.
+///
+/// Custom serialization flattens the function map into the top-level object
+/// and appends `assume-specifications` as a sibling key. This keeps backward
+/// compatibility: existing consumers see the same dict of code-name → spec entries,
+/// while new consumers can also read `assume-specifications`.
+#[derive(Serialize)]
+struct SpecsData {
+    #[serde(flatten)]
+    functions: BTreeMap<String, SpecifyEntry>,
+    #[serde(
+        rename = "assume-specifications",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    assume_specifications: Vec<AssumeSpecInfo>,
 }
 
 /// Execute the specify command (CLI entry point).
@@ -119,6 +136,7 @@ pub fn specify_internal(config: &SpecifyInternalConfig) -> Result<usize, String>
         config.with_spec_text,
     );
 
+    let assume_specifications = parsed.assume_specifications.clone();
     let (matched_map, matched_count, unmatched_count) = match_functions_to_atoms(parsed, &atoms);
 
     let output_map: BTreeMap<String, SpecifyEntry> = matched_map
@@ -167,19 +185,29 @@ pub fn specify_internal(config: &SpecifyInternalConfig) -> Result<usize, String>
             .map_err(|e| format!("Failed to create output directory: {e}"))?;
     }
 
-    let envelope = wrap_in_envelope("probe-verus/specs", "specify", &output_map, config.metadata);
+    let specs_data = SpecsData {
+        functions: output_map,
+        assume_specifications,
+    };
+    let envelope = wrap_in_envelope("probe-verus/specs", "specify", &specs_data, config.metadata);
     let json = serde_json::to_string_pretty(&envelope)
         .map_err(|e| format!("Failed to serialize JSON: {e}"))?;
     std::fs::write(config.output, &json)
         .map_err(|e| format!("Failed to write JSON output: {e}"))?;
 
     if taxonomy_config.is_some() {
-        let specified_total = output_map.values().filter(|e| e.info.specified).count();
-        let specified_labeled = output_map
+        let specified_total = specs_data
+            .functions
+            .values()
+            .filter(|e| e.info.specified)
+            .count();
+        let specified_labeled = specs_data
+            .functions
             .values()
             .filter(|e| e.info.specified && !e.spec_labels.is_empty())
             .count();
-        let labeled_total = output_map
+        let labeled_total = specs_data
+            .functions
             .values()
             .filter(|e| !e.spec_labels.is_empty())
             .count();

@@ -1,7 +1,7 @@
 # probe-verus Data Schemas
 
-Version: 6.3.2
-Date: 2026-04-03
+Version: 6.5.0
+Date: 2026-04-07
 
 This document specifies the concrete JSON `data` payloads produced by each
 probe-verus subcommand.  It complements the language-agnostic
@@ -287,8 +287,11 @@ entries with `code-path: ""` and `code-text: {"lines-start": 0, "lines-end": 0}`
 
 ### Data Shape
 
-`data` is an object keyed by code-name.  Each value is a `SpecifyEntry`
-(a `FunctionInfo` flattened with optional taxonomy labels):
+`data` is an object whose keys are probe code-names; each value is a
+`SpecifyEntry` (a `FunctionInfo` flattened with optional taxonomy labels).
+In addition, when the specify step finds Verus `assume_specification`
+declarations, an optional sibling key `assume-specifications` holds an array
+of those declarations (see below).  The key is omitted when the array is empty.
 
 ```json
 {
@@ -309,7 +312,18 @@ entries with `code-path: ""` and `code-text: {"lines-start": 0, "lines-end": 0}`
     "ensures-calls": ["helper"],
     "requires-calls": [],
     "spec-labels": ["safety-critical"]
-  }
+  },
+  "assume-specifications": [
+    {
+      "path-segments": ["MyType", "helper_spec"],
+      "path-display": "MyType::helper_spec",
+      "file": "src/module.rs",
+      "line": 120,
+      "has_requires": true,
+      "has_ensures": false,
+      "requires_text": "x > 0"
+    }
+  ]
 }
 ```
 
@@ -331,8 +345,8 @@ is **not** serialized (the code-name key serves as the identifier).
 | `has_ensures` | boolean | yes | Has an `ensures` clause |
 | `has_decreases` | boolean | yes | Has a `decreases` clause |
 | `has_trusted_assumption` | boolean | yes | Body contains `assume()` or `admit()` |
-| `contains_admit` | boolean | yes | Body contains `admit()` specifically (axiom — drives `"trusted"` status in extract) |
-| `is_external_body` | boolean | yes | Has `#[verifier::external_body]` |
+| `contains_admit` | boolean | yes | Body contains `admit()` specifically (axiom — one of the extract `"trusted"` overrides; see section 5) |
+| `is_external_body` | boolean | yes | Has `#[verifier::external_body]` (trusted without proof — one of the extract `"trusted"` overrides; see section 5) |
 | `has_no_decreases_attr` | boolean | yes | Has `#[verifier::exec_allows_no_decreases_clause]` |
 | `requires_text` | string | no | Raw text of the requires clause (only with `--with-spec-text`) |
 | `ensures_text` | string | no | Raw text of the ensures clause (only with `--with-spec-text`) |
@@ -351,6 +365,23 @@ is **not** serialized (the code-name key serves as the identifier).
 | `body-text` | string | no | Full function body text (for spec functions) |
 | `module-path` | string | no | Module path derived from file path |
 | `spec-labels` | array of strings | no | Taxonomy classification labels (omitted if empty) |
+
+### `assume-specifications` (optional top-level key)
+
+Sibling of the per-function entries inside `data`.  Each element describes one
+`assume_specification[path]` declaration (declared spec for an external
+function without a proof).  Omitted when there are no such declarations.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `path-segments` | array of strings | yes | Path segments used for matching (e.g. type and method name) |
+| `path-display` | string | yes | Human-readable Verus path for the target |
+| `file` | string | no | Relative source file path (omitted when not available) |
+| `line` | integer | yes | 1-based line number of the declaration |
+| `has_requires` | boolean | yes | Whether a `requires` clause is present |
+| `has_ensures` | boolean | yes | Whether an `ensures` clause is present |
+| `requires_text` | string | no | Raw `requires` text (when specify ran with spec text enabled) |
+| `ensures_text` | string | no | Raw `ensures` text (when specify ran with spec text enabled) |
 
 ---
 
@@ -447,7 +478,7 @@ optional fields are added:
 | `body-dependencies` | array of strings | no | Subset of `dependencies` called in the function body (omitted when empty) |
 | `primary-spec` | string | no | Full spec text (requires + ensures concatenated). Empty string = analyzed, no spec. Absent = not analyzed. |
 | `is-disabled` | bool | no | `false` if the function has a spec; `true` otherwise. Absent for external stubs or when `--skip-specify`. |
-| `verification-status` | string | no | `"verified"`, `"failed"`, `"unverified"`, or `"trusted"` (absent when `--skip-verify`) |
+| `verification-status` | string | no | `"verified"`, `"failed"`, `"unverified"`, or `"trusted"`.  Proofs-derived values are absent when `--skip-verify` or when there is no proofs entry for the atom.  `"trusted"` is set by the merge step when a trust-base trigger applies (can appear even without proofs); see Verification Status Mapping. |
 | `spec-labels` | array of strings | no | Taxonomy classification labels from `--taxonomy-config` (omitted when empty or when `--skip-specify`) |
 
 ### Dependency Categorization
@@ -475,18 +506,33 @@ the atomize step).  The three subcategory fields partition this union:
 | `sorries` | `"unverified"` | Contains `assume()` or `admit()` |
 | `warning` | `"unverified"` | Passed with warnings (defensive: treated as unverified) |
 
-**Trusted override:** Functions whose body contains `admit()` (detected by the
-`specify` step via `contains_admit`) are overridden to `"trusted"` regardless of
-the proofs status.  `admit()` is the Verus analogue of Lean's axiom — it makes
-the solver accept the proof without checking, so the function's correctness is
-assumed, not proven.  Functions with only `assume()` (no `admit()`) remain
-`"unverified"`.
+**Trusted overrides (since v6.4.0 for `admit()`, extended in v6.5.0):** After
+mapping proofs status as above, the merge step may override the unified atom to
+`"trusted"` when any of the following holds (detected using specify output and
+atoms):
+
+1. **`admit()` in the body** — `contains_admit` is true (unchanged since v6.4.0).
+   `admit()` is the Verus analogue of an axiom: the solver accepts the proof
+   without checking.
+
+2. **`#[verifier::external_body]`** — `is_external_body` is true (v6.5.0).  The
+   function is treated as trusted without a checked body.
+
+3. **`assume_specification` matched to an external stub** — An entry in
+   `assume-specifications` is matched to an atom with empty `code-path`
+   (external stub) using its path segments (v6.5.0).  That stub atom is marked
+   `"trusted"` even though it has no local body or proofs entry.
+
+Functions with only `assume()` (no `admit()`, not `external_body`, and not a
+matched `assume_specification` stub) remain `"unverified"` when proofs report
+`sorries`.
 
 ### Notes
 
-- External stubs (functions defined outside the workspace) will not have
-  `primary-spec`, `is-disabled`, `verification-status`, or `spec-labels` fields
-  since they are not parsed by specify or verified by run-verus.
+- External stubs (empty `code-path`) are not ordinary specify entries, so they
+  usually lack `primary-spec`, `is-disabled`, and `spec-labels`, and proofs
+  often omit them.  Merge may still set `verification-status` to `"trusted"`
+  when an `assume_specification` declaration matches the stub (v6.5.0).
 - When a pipeline step is skipped (`--skip-specify` or `--skip-verify`),
   the corresponding fields are absent from **all** entries.
 - `spec-labels` is only populated when `--taxonomy-config` is provided to
@@ -494,7 +540,80 @@ assumed, not proven.  Functions with only `assume()` (no `admit()`) remain
 
 ---
 
-## 6. `probe-verus/stubs` — Stub Frontmatter
+## 6. `probe-verus/extract-summary` — Extract Pipeline Summary
+
+**Produced by:** `extract` (written alongside the unified extract JSON)
+**Envelope schema:** `"probe-verus/extract-summary"`
+**Envelope `tool.command`:** `"extract"`
+
+### Data Shape
+
+`data` records pipeline status and per-step results (`atomize`, `specify`,
+`verify`).  When unified merge produced a map of `UnifiedAtom` values, an
+optional `trust-base` object (v6.5.0) summarizes **post-override**
+`verification-status` counts over those atoms (after trusted overrides from
+`admit()`, `#[verifier::external_body]`, and matched `assume_specification`
+stubs).  `trust-base` is absent when unified output was not produced (e.g. no
+atoms file or merge failure).
+
+```json
+{
+  "status": "success",
+  "atomize": {
+    "success": true,
+    "output_file": "<project>/.verilib/probes/verus_<pkg>_<ver>_atoms.json",
+    "total_functions": 42
+  },
+  "specify": {
+    "success": true,
+    "output_file": "<project>/.verilib/probes/verus_<pkg>_<ver>_specs.json",
+    "total_functions": 42
+  },
+  "verify": {
+    "success": true,
+    "output_file": "<project>/.verilib/probes/verus_<pkg>_<ver>_proofs.json",
+    "summary": {
+      "total_functions": 42,
+      "verified": 40,
+      "failed": 0,
+      "unverified": 2
+    }
+  },
+  "trust-base": {
+    "verified": 38,
+    "trusted": 3,
+    "unverified": 1,
+    "failed": 0,
+    "absent": 0
+  }
+}
+```
+
+### Top-Level `data` Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `status` | string | Overall pipeline status (e.g. `"success"`, `"specify_failed"`) |
+| `atomize` | object | Result of the atomize step (omitted when `--skip-atomize`) |
+| `specify` | object | Result of the specify step (omitted when `--skip-specify` or when specify did not run) |
+| `verify` | object | Result of run-verus (omitted when `--skip-verify`) |
+| `trust-base` | object | Optional post-override verification-status histogram (v6.5.0); see below |
+
+### `trust-base` (optional)
+
+Counts of atoms by final `verification-status` after merge overrides.  Keys:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `verified` | integer | Atoms with `"verified"` |
+| `trusted` | integer | Atoms with `"trusted"` |
+| `unverified` | integer | Atoms with `"unverified"` |
+| `failed` | integer | Atoms with `"failed"` |
+| `absent` | integer | Atoms with no `verification-status` (e.g. stubs skipped by verify, or `--skip-verify`) |
+
+---
+
+## 7. `probe-verus/stubs` — Stub Frontmatter
 
 **Produced by:** `stubify`
 **Envelope schema:** `"probe-verus/stubs"`
@@ -528,7 +647,7 @@ All fields are optional.
 
 ---
 
-## 7. `probe/merged-atoms` — Merged Call Graph
+## 8. `probe/merged-atoms` — Merged Call Graph
 
 **Produced by:** `merge-atoms`
 **Envelope schema:** `"probe/merged-atoms"`
@@ -566,7 +685,7 @@ is an `AtomWithLines`.
 
 The following commands produce raw JSON without a Schema 2.0 envelope.
 
-### 8. `list-functions` — Function Listing
+### 9. `list-functions` — Function Listing
 
 **Envelope:** None
 
@@ -590,7 +709,7 @@ Each `FunctionInfo` in the array has the same shape as the specs entry (section
 4), except the `name` field is **not** serialized and there is no `spec-labels`
 field.
 
-### 9. `callee-crates` — Crate Dependencies at Call Depth
+### 10. `callee-crates` — Crate Dependencies at Call Depth
 
 **Envelope:** None
 

@@ -102,7 +102,7 @@ All JSON outputs are wrapped in a [Schema 2.0 metadata envelope](https://github.
 ### Extract format (`probe-verus/extract`)
 
 The primary output. Each entry is an atom enriched with specs and verification status.
-`verification-status` is one of `"verified"`, `"failed"`, `"unverified"`, or `"trusted"` (functions containing `admit()`).
+`verification-status` is one of `"verified"`, `"failed"`, `"unverified"`, or `"trusted"` (functions containing `admit()`, `#[verifier::external_body]` functions, or `assume_specification` targets).
 
 ```json
 {

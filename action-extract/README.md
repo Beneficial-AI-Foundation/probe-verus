@@ -111,7 +111,7 @@ All JSON outputs use the [Schema 2.0 metadata envelope](https://github.com/Benef
 ### Unified extract output (`probe-verus/extract` schema)
 
 The primary output is a dictionary keyed by code-name, where each entry is a `UnifiedAtom` combining call graph data, specifications, and verification status.
-`verification-status` is one of `"verified"`, `"failed"`, `"unverified"`, or `"trusted"` (functions containing `admit()`).
+`verification-status` is one of `"verified"`, `"failed"`, `"unverified"`, or `"trusted"` (functions containing `admit()`, `#[verifier::external_body]` functions, or `assume_specification` targets).
 
 ```json
 {

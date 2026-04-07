@@ -9,6 +9,7 @@ use crate::metadata::{
     SpecifyInternalConfig,
 };
 use crate::verification::VerusRunner;
+use crate::verus_parser::AssumeSpecInfo;
 use crate::{AtomWithLines, CallLocation, UnifiedAtom};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -20,6 +21,18 @@ struct ExtractPipelineResult {
     atomize: Option<StepResult>,
     specify: Option<StepResult>,
     verify: Option<ExtractStepResult>,
+    #[serde(rename = "trust-base", skip_serializing_if = "Option::is_none")]
+    trust_base: Option<TrustBaseSummary>,
+}
+
+/// Post-override verification status counts from the unified extract output.
+#[derive(Serialize, Clone)]
+struct TrustBaseSummary {
+    verified: usize,
+    trusted: usize,
+    unverified: usize,
+    failed: usize,
+    absent: usize,
 }
 
 #[derive(Serialize)]
@@ -114,6 +127,7 @@ pub fn cmd_extract(
         atomize: None,
         specify: None,
         verify: None,
+        trust_base: None,
     };
 
     // === Step 1: Atomize ===
@@ -205,13 +219,14 @@ pub fn cmd_extract(
     } else {
         Some(results_path.as_path())
     };
-    let unified_path = run_unified_merge(
+    let (unified_path, trust_base) = run_unified_merge(
         &atoms_path,
         merge_specs,
         merge_proofs,
         &project_path,
         &metadata,
     );
+    result.trust_base = trust_base;
 
     // === Summary ===
     print_summary(&result);
@@ -415,6 +430,23 @@ struct SpecsEntry {
     /// Whether the function body contains `admit()` — an axiom (trust base).
     #[serde(default)]
     contains_admit: bool,
+    /// Whether the function has `#[verifier::external_body]` — trusted without proof.
+    #[serde(default)]
+    is_external_body: bool,
+}
+
+/// Deserialization wrapper for the specs.json `data` section.
+///
+/// The data section is a flat dict of code-name → SpecsEntry,
+/// with an optional `assume-specifications` sibling key.
+/// Using `#[serde(flatten)]` lets us deserialize both the function
+/// dict and the metadata key from the same JSON object.
+#[derive(Deserialize)]
+struct SpecsDataRaw {
+    #[serde(flatten)]
+    functions: BTreeMap<String, SpecsEntry>,
+    #[serde(rename = "assume-specifications", default)]
+    assume_specifications: Vec<AssumeSpecInfo>,
 }
 
 /// Minimal deserialization target for proofs entries (only the `status` field).
@@ -427,8 +459,8 @@ struct ProofsEntryMinimal {
 ///
 /// `"sorries"` covers both `assume()` and `admit()`; at this level it maps to
 /// `"unverified"`.  The `merge_into_unified` step further overrides to `"trusted"`
-/// for functions that specifically contain `admit()` (detected via `contains_admit`
-/// from the specify step).
+/// for trust-base atoms: `admit()` (via `contains_admit`), `#[verifier::external_body]`
+/// (via `is_external_body`), or `assume_specification` targets.
 ///
 /// `"warning"` is mapped to `"unverified"` as a defensive measure: the `Warning`
 /// variant is never produced by the current pipeline, but could appear in
@@ -440,6 +472,64 @@ fn map_verification_status(status: &str) -> &'static str {
         "sorries" | "warning" => "unverified",
         _ => "failed",
     }
+}
+
+/// Match `assume_specification` declarations to external stub atoms.
+///
+/// For each declaration, take the last 2 path segments (e.g. `["ConditionallySelectable",
+/// "conditional_swap"]`) and search atoms with empty `code-path` for code-names where
+/// both segments appear separated by `#`.  Returns the set of matched atom code-names.
+fn match_assume_specs_to_atoms(
+    assume_specs: &[AssumeSpecInfo],
+    atoms: &BTreeMap<String, AtomWithLines>,
+) -> BTreeSet<String> {
+    let mut trusted_names = BTreeSet::new();
+
+    for aspec in assume_specs {
+        if aspec.path_segments.len() < 2 {
+            eprintln!(
+                "  Warning: assume_specification has fewer than 2 path segments: {:?}",
+                aspec.path_display
+            );
+            continue;
+        }
+
+        let type_seg = &aspec.path_segments[aspec.path_segments.len() - 2];
+        let method_seg = &aspec.path_segments[aspec.path_segments.len() - 1];
+
+        let candidates: Vec<&String> = atoms
+            .iter()
+            .filter(|(_, atom)| atom.code_path.is_empty())
+            .filter(|(name, _)| {
+                // Match: code-name contains Type#...method where segments are
+                // separated by # (SCIP symbol format).  We check that both
+                // the type and method segments appear, with method right before `()`.
+                name.contains(&format!("{}#", type_seg))
+                    && name.contains(&format!("{}()", method_seg))
+            })
+            .map(|(name, _)| name)
+            .collect();
+
+        match candidates.len() {
+            1 => {
+                trusted_names.insert(candidates[0].clone());
+            }
+            0 => {
+                eprintln!(
+                    "  Warning: no matching atom for assume_specification[{}]",
+                    aspec.path_display
+                );
+            }
+            n => {
+                eprintln!(
+                    "  Warning: {} atoms match assume_specification[{}], skipping (ambiguous): {:?}",
+                    n, aspec.path_display, candidates
+                );
+            }
+        }
+    }
+
+    trusted_names
 }
 
 /// Build the full spec text from a specs entry (requires + ensures concatenated).
@@ -468,10 +558,18 @@ pub fn merge_into_unified(
 ) -> Result<BTreeMap<String, UnifiedAtom>, String> {
     let atoms = load_enveloped_data::<AtomWithLines>(atoms_path, "atoms")?;
 
-    let specs: Option<BTreeMap<String, SpecsEntry>> = specs_path
+    let specs_raw: Option<SpecsDataRaw> = specs_path
         .filter(|p| p.exists())
-        .map(|p| load_enveloped_data(p, "specs"))
+        .map(|p| load_enveloped_data_single(p, "specs"))
         .transpose()?;
+
+    let specs = specs_raw.as_ref().map(|s| &s.functions);
+    let assume_specs = specs_raw
+        .as_ref()
+        .map(|s| s.assume_specifications.as_slice())
+        .unwrap_or(&[]);
+
+    let assume_spec_trusted = match_assume_specs_to_atoms(assume_specs, &atoms);
 
     let proofs: Option<BTreeMap<String, ProofsEntryMinimal>> = proofs_path
         .filter(|p| p.exists())
@@ -481,14 +579,13 @@ pub fn merge_into_unified(
     let mut unified: BTreeMap<String, UnifiedAtom> = BTreeMap::new();
 
     for (code_name, atom) in atoms {
-        let spec_text: Option<String> = specs
-            .as_ref()
-            .and_then(|s| s.get(&code_name))
-            .map(build_spec_text);
+        let specs_entry = specs.and_then(|s| s.get(&code_name));
+
+        let spec_text: Option<String> = specs_entry.map(build_spec_text);
 
         // `is_disabled` semantics: `None` = function was not analyzed for specs;
         // `Some(true)` = function was analyzed but has no spec; `Some(false)` = function has a spec.
-        let is_disabled = spec_text.as_ref().map(|s| s.is_empty());
+        let is_disabled = spec_text.as_ref().map(String::is_empty);
 
         // Derive categorized dependencies from location data
         let mut requires_deps = BTreeSet::new();
@@ -508,15 +605,13 @@ pub fn merge_into_unified(
             }
         }
 
-        let has_admit = specs
-            .as_ref()
-            .and_then(|s| s.get(&code_name))
-            .is_some_and(|e| e.contains_admit);
+        let is_trusted = specs_entry.is_some_and(|e| e.contains_admit || e.is_external_body)
+            || assume_spec_trusted.contains(&code_name);
 
-        let verification_status = if has_admit {
-            // Functions with admit() are axioms — part of the trust base.
-            // Override whatever the proofs step reported (mirrors probe-lean's
-            // isTrustedAtom override for axioms).
+        let verification_status = if is_trusted {
+            // Trust-base atoms: admit() axioms, #[verifier::external_body]
+            // functions, or assume_specification targets. Override whatever
+            // the proofs step reported (mirrors probe-lean's isTrustedAtom).
             Some("trusted".to_string())
         } else {
             proofs
@@ -525,9 +620,7 @@ pub fn merge_into_unified(
                 .map(|e| map_verification_status(&e.status).to_string())
         };
 
-        let spec_labels: Vec<String> = specs
-            .as_ref()
-            .and_then(|s| s.get(&code_name))
+        let spec_labels: Vec<String> = specs_entry
             .map(|e| e.spec_labels.clone())
             .unwrap_or_default();
 
@@ -549,7 +642,7 @@ pub fn merge_into_unified(
     Ok(unified)
 }
 
-/// Load an enveloped (or bare-dict) JSON file and deserialize its data section.
+/// Load an enveloped (or bare-dict) JSON file and deserialize its data section as a dict.
 fn load_enveloped_data<T: serde::de::DeserializeOwned>(
     path: &Path,
     label: &str,
@@ -569,6 +662,53 @@ fn load_enveloped_data<T: serde::de::DeserializeOwned>(
     })
 }
 
+/// Load an enveloped JSON file, deserializing the data section as a single `T`.
+fn load_enveloped_data_single<T: serde::de::DeserializeOwned>(
+    path: &Path,
+    label: &str,
+) -> Result<T, String> {
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read {} file {}: {}", label, path.display(), e))?;
+    let json: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse {} JSON {}: {}", label, path.display(), e))?;
+    let data = unwrap_envelope(json);
+    serde_json::from_value(data).map_err(|e| {
+        format!(
+            "Failed to deserialize {} data from {}: {}",
+            label,
+            path.display(),
+            e
+        )
+    })
+}
+
+/// Compute post-override verification status counts from unified output.
+fn compute_trust_base_summary(unified: &BTreeMap<String, UnifiedAtom>) -> TrustBaseSummary {
+    let mut verified = 0;
+    let mut trusted = 0;
+    let mut unverified = 0;
+    let mut failed = 0;
+    let mut absent = 0;
+
+    for atom in unified.values() {
+        match atom.verification_status.as_deref() {
+            Some("verified") => verified += 1,
+            Some("trusted") => trusted += 1,
+            Some("unverified") => unverified += 1,
+            Some("failed") => failed += 1,
+            _ => absent += 1,
+        }
+    }
+
+    TrustBaseSummary {
+        verified,
+        trusted,
+        unverified,
+        failed,
+        absent,
+    }
+}
+
 /// Run the merge step: produce unified output.
 fn run_unified_merge(
     atoms_path: &Path,
@@ -576,10 +716,10 @@ fn run_unified_merge(
     proofs_path: Option<&Path>,
     project_path: &Path,
     metadata: &ProjectMetadata,
-) -> Option<PathBuf> {
+) -> (Option<PathBuf>, Option<TrustBaseSummary>) {
     if !atoms_path.exists() {
         eprintln!("  Warning: skipping unified output (no atoms file)");
-        return None;
+        return (None, None);
     }
 
     let specs_opt = specs_path.filter(|p| p.exists());
@@ -587,11 +727,12 @@ fn run_unified_merge(
 
     match merge_into_unified(atoms_path, specs_opt, proofs_opt) {
         Ok(unified) => {
+            let trust_base = compute_trust_base_summary(&unified);
             let unified_path = get_default_output_path(project_path, metadata, "");
             if let Some(parent) = unified_path.parent() {
                 if let Err(e) = std::fs::create_dir_all(parent) {
                     eprintln!("  Warning: Could not create output directory: {}", e);
-                    return None;
+                    return (None, Some(trust_base));
                 }
             }
 
@@ -600,7 +741,7 @@ fn run_unified_merge(
                 Ok(json) => {
                     if let Err(e) = std::fs::write(&unified_path, &json) {
                         eprintln!("  Warning: Could not write unified output: {}", e);
-                        return None;
+                        return (None, Some(trust_base));
                     }
                     println!(
                         "  unified: ✓ {} functions → {}",
@@ -608,17 +749,17 @@ fn run_unified_merge(
                         unified_path.display()
                     );
 
-                    Some(unified_path)
+                    (Some(unified_path), Some(trust_base))
                 }
                 Err(e) => {
                     eprintln!("  Warning: Could not serialize unified output: {}", e);
-                    None
+                    (None, Some(trust_base))
                 }
             }
         }
         Err(e) => {
             eprintln!("  Warning: Could not merge outputs: {}", e);
-            None
+            (None, None)
         }
     }
 }
@@ -1128,6 +1269,304 @@ mod tests {
                 .verification_status
                 .is_none(),
             "Non-trusted function without proofs should have no verification status"
+        );
+    }
+
+    #[test]
+    fn test_external_body_overrides_verified_to_trusted() {
+        let dir = TempDir::new().unwrap();
+        let atoms_path = write_json(&dir, "atoms.json", &atoms_json());
+
+        let specs_eb = serde_json::json!({
+            "schema": "probe-verus/specs",
+            "schema-version": "2.0",
+            "tool": {"name": "probe-verus", "version": "6.5.0", "command": "specify"},
+            "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
+            "timestamp": "2026-04-07T00:00:00Z",
+            "data": {
+                "probe:test/0.1.0/module/foo()": {
+                    "spec-text": {"lines-start": 10, "lines-end": 20},
+                    "kind": "exec",
+                    "specified": true,
+                    "is_external_body": true,
+                    "has_requires": true,
+                    "has_ensures": true,
+                    "requires_text": "requires\n    x > 0",
+                    "ensures_text": "ensures\n    result > x"
+                }
+            }
+        });
+        let specs_path = write_json(&dir, "specs.json", &specs_eb);
+
+        let proofs_success = serde_json::json!({
+            "schema": "probe-verus/proofs",
+            "schema-version": "2.0",
+            "tool": {"name": "probe-verus", "version": "6.5.0", "command": "run-verus"},
+            "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
+            "timestamp": "2026-04-07T00:00:00Z",
+            "data": {
+                "probe:test/0.1.0/module/foo()": {
+                    "code-path": "src/module.rs",
+                    "code-line": 10,
+                    "verified": true,
+                    "status": "success"
+                }
+            }
+        });
+        let proofs_path = write_json(&dir, "proofs.json", &proofs_success);
+
+        let result =
+            merge_into_unified(&atoms_path, Some(&specs_path), Some(&proofs_path)).unwrap();
+
+        assert_eq!(
+            result["probe:test/0.1.0/module/foo()"]
+                .verification_status
+                .as_deref(),
+            Some("trusted"),
+            "external_body should override 'success' proofs status to 'trusted'"
+        );
+    }
+
+    #[test]
+    fn test_external_body_absent_gets_trusted() {
+        let dir = TempDir::new().unwrap();
+        let atoms_path = write_json(&dir, "atoms.json", &atoms_json());
+
+        let specs_eb = serde_json::json!({
+            "schema": "probe-verus/specs",
+            "schema-version": "2.0",
+            "tool": {"name": "probe-verus", "version": "6.5.0", "command": "specify"},
+            "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
+            "timestamp": "2026-04-07T00:00:00Z",
+            "data": {
+                "probe:test/0.1.0/module/foo()": {
+                    "spec-text": {"lines-start": 10, "lines-end": 20},
+                    "kind": "exec",
+                    "specified": false,
+                    "is_external_body": true
+                }
+            }
+        });
+        let specs_path = write_json(&dir, "specs.json", &specs_eb);
+
+        let result = merge_into_unified(&atoms_path, Some(&specs_path), None).unwrap();
+
+        assert_eq!(
+            result["probe:test/0.1.0/module/foo()"]
+                .verification_status
+                .as_deref(),
+            Some("trusted"),
+            "external_body without proofs entry should get 'trusted'"
+        );
+    }
+
+    #[test]
+    fn test_non_external_body_unaffected() {
+        let dir = TempDir::new().unwrap();
+        let atoms_path = write_json(&dir, "atoms.json", &atoms_json());
+
+        let specs_normal = serde_json::json!({
+            "schema": "probe-verus/specs",
+            "schema-version": "2.0",
+            "tool": {"name": "probe-verus", "version": "6.5.0", "command": "specify"},
+            "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
+            "timestamp": "2026-04-07T00:00:00Z",
+            "data": {
+                "probe:test/0.1.0/module/foo()": {
+                    "spec-text": {"lines-start": 10, "lines-end": 20},
+                    "kind": "exec",
+                    "specified": true,
+                    "is_external_body": false,
+                    "contains_admit": false
+                }
+            }
+        });
+        let specs_path = write_json(&dir, "specs.json", &specs_normal);
+
+        let proofs = serde_json::json!({
+            "schema": "probe-verus/proofs",
+            "schema-version": "2.0",
+            "tool": {"name": "probe-verus", "version": "6.5.0", "command": "run-verus"},
+            "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
+            "timestamp": "2026-04-07T00:00:00Z",
+            "data": {
+                "probe:test/0.1.0/module/foo()": {
+                    "code-path": "src/module.rs",
+                    "code-line": 10,
+                    "verified": true,
+                    "status": "success"
+                }
+            }
+        });
+        let proofs_path = write_json(&dir, "proofs.json", &proofs);
+
+        let result =
+            merge_into_unified(&atoms_path, Some(&specs_path), Some(&proofs_path)).unwrap();
+
+        assert_eq!(
+            result["probe:test/0.1.0/module/foo()"]
+                .verification_status
+                .as_deref(),
+            Some("verified"),
+            "Non-external_body without admit should keep normal proofs status"
+        );
+    }
+
+    #[test]
+    fn test_assume_spec_matching_single_match() {
+        let atoms_with_external = serde_json::json!({
+            "schema": "probe-verus/atoms",
+            "schema-version": "2.0",
+            "tool": {"name": "probe-verus", "version": "6.5.0", "command": "atomize"},
+            "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
+            "timestamp": "2026-04-07T00:00:00Z",
+            "data": {
+                "probe:subtle/2.6.1/Choice#From#from()": {
+                    "display-name": "from",
+                    "dependencies": [],
+                    "code-module": "",
+                    "code-path": "",
+                    "code-text": {"lines-start": 0, "lines-end": 0},
+                    "kind": "exec",
+                    "language": "rust"
+                }
+            }
+        });
+        let atoms_data: BTreeMap<String, AtomWithLines> =
+            serde_json::from_value(atoms_with_external["data"].clone()).unwrap();
+
+        let assume_specs = vec![crate::verus_parser::AssumeSpecInfo {
+            path_segments: vec!["Choice".to_string(), "from".to_string()],
+            path_display: "Choice::from".to_string(),
+            file: Some("src/assumes.rs".to_string()),
+            line: 10,
+            has_requires: false,
+            has_ensures: true,
+            requires_text: None,
+            ensures_text: Some("ensures (u == 1) == choice_is_true(c)".to_string()),
+        }];
+
+        let result = match_assume_specs_to_atoms(&assume_specs, &atoms_data);
+        assert_eq!(result.len(), 1);
+        assert!(result.contains("probe:subtle/2.6.1/Choice#From#from()"));
+    }
+
+    #[test]
+    fn test_assume_spec_matching_no_match() {
+        let atoms_with_external = serde_json::json!({
+            "schema": "probe-verus/atoms",
+            "schema-version": "2.0",
+            "tool": {"name": "probe-verus", "version": "6.5.0", "command": "atomize"},
+            "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
+            "timestamp": "2026-04-07T00:00:00Z",
+            "data": {
+                "probe:subtle/2.6.1/Choice#From#from()": {
+                    "display-name": "from",
+                    "dependencies": [],
+                    "code-module": "",
+                    "code-path": "",
+                    "code-text": {"lines-start": 0, "lines-end": 0},
+                    "kind": "exec",
+                    "language": "rust"
+                }
+            }
+        });
+        let atoms_data: BTreeMap<String, AtomWithLines> =
+            serde_json::from_value(atoms_with_external["data"].clone()).unwrap();
+
+        let assume_specs = vec![crate::verus_parser::AssumeSpecInfo {
+            path_segments: vec!["Formatter".to_string(), "write_str".to_string()],
+            path_display: "Formatter::write_str".to_string(),
+            file: Some("src/assumes.rs".to_string()),
+            line: 20,
+            has_requires: false,
+            has_ensures: false,
+            requires_text: None,
+            ensures_text: None,
+        }];
+
+        let result = match_assume_specs_to_atoms(&assume_specs, &atoms_data);
+        assert!(
+            result.is_empty(),
+            "No atom should match Formatter::write_str"
+        );
+    }
+
+    #[test]
+    fn test_assume_spec_trusted_in_merge() {
+        let dir = TempDir::new().unwrap();
+
+        let atoms_with_external = serde_json::json!({
+            "schema": "probe-verus/atoms",
+            "schema-version": "2.0",
+            "tool": {"name": "probe-verus", "version": "6.5.0", "command": "atomize"},
+            "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
+            "timestamp": "2026-04-07T00:00:00Z",
+            "data": {
+                "probe:test/0.1.0/module/foo()": {
+                    "display-name": "foo",
+                    "dependencies": [],
+                    "code-module": "module",
+                    "code-path": "src/module.rs",
+                    "code-text": {"lines-start": 10, "lines-end": 20},
+                    "kind": "exec",
+                    "language": "rust"
+                },
+                "probe:subtle/2.6.1/Choice#unwrap_u8()": {
+                    "display-name": "unwrap_u8",
+                    "dependencies": [],
+                    "code-module": "",
+                    "code-path": "",
+                    "code-text": {"lines-start": 0, "lines-end": 0},
+                    "kind": "exec",
+                    "language": "rust"
+                }
+            }
+        });
+        let atoms_path = write_json(&dir, "atoms.json", &atoms_with_external);
+
+        let specs_with_assume = serde_json::json!({
+            "schema": "probe-verus/specs",
+            "schema-version": "2.0",
+            "tool": {"name": "probe-verus", "version": "6.5.0", "command": "specify"},
+            "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
+            "timestamp": "2026-04-07T00:00:00Z",
+            "data": {
+                "probe:test/0.1.0/module/foo()": {
+                    "spec-text": {"lines-start": 10, "lines-end": 20},
+                    "kind": "exec",
+                    "specified": true
+                },
+                "assume-specifications": [
+                    {
+                        "path-segments": ["Choice", "unwrap_u8"],
+                        "path-display": "Choice::unwrap_u8",
+                        "file": "src/assumes.rs",
+                        "line": 10,
+                        "has_requires": false,
+                        "has_ensures": true,
+                        "ensures_text": "ensures choice_is_true(*c) ==> u == 1u8"
+                    }
+                ]
+            }
+        });
+        let specs_path = write_json(&dir, "specs.json", &specs_with_assume);
+
+        let result = merge_into_unified(&atoms_path, Some(&specs_path), None).unwrap();
+
+        assert_eq!(
+            result["probe:subtle/2.6.1/Choice#unwrap_u8()"]
+                .verification_status
+                .as_deref(),
+            Some("trusted"),
+            "External stub matched by assume_specification should be 'trusted'"
+        );
+
+        assert!(
+            result["probe:test/0.1.0/module/foo()"]
+                .verification_status
+                .is_none(),
+            "Non-matched atom without proofs should have no status"
         );
     }
 

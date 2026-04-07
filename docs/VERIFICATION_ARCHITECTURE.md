@@ -54,13 +54,35 @@ The verification analysis (`run-verus`) categorizes functions into three groups:
 | **failed** | Has `requires`/`ensures` + had verification errors | Verification attempted but failed |
 | **unverified** | Has `requires`/`ensures` + contains `assume()`/`admit()` | Contains trusted assumptions |
 
-The **extract** merge step further refines `unverified` into two distinct unified
-statuses using `contains_admit` from the `specify` step:
+The **extract** merge step (`merge_into_unified`) may override `verification-status`
+to `"trusted"` for atoms in the **trust base**. As of **v6.5.0**, there are three
+independent reasons for that override (any one is sufficient). Earlier releases
+only treated `admit()` this way (v6.4.0).
 
-| Unified status | Criteria | Meaning |
-|----------------|----------|---------|
-| **trusted** | Body contains `admit()` | Axiom — correctness assumed without proof |
-| **unverified** | Body contains `assume()` only (no `admit()`) | Has unproven assumptions |
+| Unified `verification-status` | When merge sets it | Meaning |
+|-------------------------------|--------------------|---------|
+| **trusted** | Trust-base override (see below) | Correctness is not established by the normal proof path for that atom; merge replaces whatever the proofs step reported (including `"success"`). |
+| **unverified** | Proofs mapped to unverified (e.g. `"sorries"`) and atom is **not** trust-base | Typical case: body uses `assume()` without `admit()` and without the other trust signals. |
+
+**Trust-base overrides (v6.5.0)** — merge sets `"trusted"` if **any** of:
+
+1. **`admit()`** — `contains_admit` from the `specify` step (body contains a real `admit(` call; same behavior since v6.4.0).
+2. **`#[verifier::external_body]`** — `is_external_body` from `specify` (function marked as externally implemented).
+3. **`assume_specification` target** — the atom is an **external stub** (empty `code-path` in atoms.json) whose **code-name** is matched to an `assume_specification[...]` declaration parsed from source (see below).
+
+At the proofs-mapping layer, `"sorries"` still maps to `"unverified"` for both
+`assume()` and `admit()`; the trust-base rules above are applied afterward and
+can promote those atoms to `"trusted"` where appropriate.
+
+**`assume_specification` and external stubs** — During `specify`, `verus_parser`
+collects every `assume_specification[path]` declaration into the specs envelope
+under `assume-specifications` (path segments + display string). During merge,
+each declaration is matched to at most one atom: candidates are atoms with an
+empty `code-path`. The matcher takes the last two path segments (e.g. trait or
+type name, then method name) and requires the atom’s SCIP-style **code-name**
+to contain both segments in the usual form (type segment followed by `#`, method
+segment before `()`). If no atom or more than one atom matches, merge logs a
+warning and does not mark that declaration as trusted.
 
 ### What's Included
 
@@ -80,7 +102,10 @@ Functions with specifications that have verifiable bodies:
 |----------|--------------|
 | `has_requires` | `sig.spec.requires.is_some()` via `verus_syn` AST |
 | `has_ensures` | `sig.spec.ensures.is_some()` via `verus_syn` AST |
-| `has_trusted_assumption` | Text search for `assume(` or `admit(` in function body |
+| `has_trusted_assumption` | Text-aware scan for `assume(` or `admit(` in function body |
+| `contains_admit` | Text-aware scan for `admit(` in function body (feeds merge `"trusted"` when true) |
+| `is_external_body` | `#[verifier::external_body]` on the function via `verus_syn` attributes |
+| `assume-specifications` | Top-level `assume_specification[...]` declarations visited in source; serialized in specs.json for merge matching to external stub atoms |
 
 ---
 

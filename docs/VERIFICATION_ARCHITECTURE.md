@@ -46,13 +46,21 @@ Both pipelines share `verus_syn` for parsing function spans, but that's the only
 
 ## Function Categorization
 
-The verification analysis categorizes functions into three groups:
+The verification analysis (`run-verus`) categorizes functions into three groups:
 
 | Category | Criteria | Meaning |
 |----------|----------|---------|
 | **verified** | Has `requires`/`ensures` + no errors + no `assume()`/`admit()` | Proven correct by Verus |
 | **failed** | Has `requires`/`ensures` + had verification errors | Verification attempted but failed |
 | **unverified** | Has `requires`/`ensures` + contains `assume()`/`admit()` | Contains trusted assumptions |
+
+The **extract** merge step further refines `unverified` into two distinct unified
+statuses using `contains_admit` from the `specify` step:
+
+| Unified status | Criteria | Meaning |
+|----------------|----------|---------|
+| **trusted** | Body contains `admit()` | Axiom — correctness assumed without proof |
+| **unverified** | Body contains `assume()` only (no `admit()`) | Has unproven assumptions |
 
 ### What's Included
 

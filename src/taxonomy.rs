@@ -486,6 +486,7 @@ mod tests {
             has_ensures: !ensures_calls.is_empty(),
             has_decreases: false,
             has_trusted_assumption: false,
+            contains_admit: false,
             is_external_body: false,
             has_no_decreases_attr: false,
             requires_text: None,

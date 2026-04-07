@@ -663,6 +663,10 @@ pub struct FunctionInfo {
     /// Whether the function body contains assume() or admit() (trusted assumptions)
     #[serde(default)]
     pub has_trusted_assumption: bool,
+    /// Whether the function body contains admit() — an axiom whose correctness
+    /// is assumed without proof (the Verus analogue of Lean's `sorry`/`axiom`).
+    #[serde(default)]
+    pub contains_admit: bool,
     /// Whether the function has #[verifier::external_body] attribute
     #[serde(default)]
     pub is_external_body: bool,
@@ -993,12 +997,9 @@ impl FunctionInfoVisitor {
         self.extract_text_from_span(span.start().line, span.end().line)
     }
 
-    /// Check if the function body (between start and end lines) contains assume() or admit().
-    ///
-    /// Strips line comments (`//`), tracks block comments (`/* */`), and
-    /// removes string literal contents so that occurrences inside comments
-    /// or strings are not counted.
-    fn has_trusted_assumption(&self, start_line: usize, end_line: usize) -> bool {
+    /// Check whether any of `patterns` appear in the function body (between
+    /// start and end lines), after stripping comments and string literals.
+    fn body_contains_any(&self, start_line: usize, end_line: usize, patterns: &[&str]) -> bool {
         if let Some(content) = &self.file_content {
             let lines: Vec<&str> = content.lines().collect();
             let start_idx = start_line.saturating_sub(1);
@@ -1012,12 +1013,23 @@ impl FunctionInfoVisitor {
             for line in &lines[start_idx..end_idx] {
                 let code = strip_comments(line, &mut in_block_comment);
                 let code = strip_string_literals(&code);
-                if code.contains("assume(") || code.contains("admit(") {
+                if patterns.iter().any(|p| code.contains(p)) {
                     return true;
                 }
             }
         }
         false
+    }
+
+    /// Check if the function body contains assume() or admit().
+    fn has_trusted_assumption(&self, start_line: usize, end_line: usize) -> bool {
+        self.body_contains_any(start_line, end_line, &["assume(", "admit("])
+    }
+
+    /// Check if the function body contains admit() specifically (axiom —
+    /// correctness assumed without proof).
+    fn contains_admit(&self, start_line: usize, end_line: usize) -> bool {
+        self.body_contains_any(start_line, end_line, &["admit("])
     }
 
     fn extract_function_kind(&self, sig: &verus_syn::Signature) -> String {
@@ -1106,6 +1118,7 @@ impl FunctionInfoVisitor {
         let has_ensures = sig.spec.ensures.is_some();
         let has_decreases = sig.spec.decreases.is_some();
         let has_trusted_assumption = self.has_trusted_assumption(start_line, end_line);
+        let contains_admit = self.contains_admit(start_line, end_line);
         let is_external_body = has_verifier_attr(attrs, "external_body");
         let has_no_decreases_attr = has_verifier_attr(attrs, "exec_allows_no_decreases_clause");
 
@@ -1198,6 +1211,7 @@ impl FunctionInfoVisitor {
             has_ensures,
             has_decreases,
             has_trusted_assumption,
+            contains_admit,
             is_external_body,
             has_no_decreases_attr,
             requires_text,
@@ -1774,6 +1788,7 @@ impl Bar {{
             has_ensures,
             has_decreases: false,
             has_trusted_assumption,
+            contains_admit: false,
             is_external_body,
             has_no_decreases_attr,
             requires_text: None,
@@ -1908,6 +1923,95 @@ fn logging_function() {{
         assert!(
             !f.has_trusted_assumption,
             "admit() in a string literal must not be detected as a trusted assumption"
+        );
+    }
+
+    // =========================================================================
+    // contains_admit detection (trusted status)
+    // =========================================================================
+
+    /// A real admit() call sets contains_admit = true.
+    #[test]
+    fn test_contains_admit_real_call() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"
+fn axiom_function() {{
+    admit();
+}}
+"#
+        )
+        .unwrap();
+
+        let functions =
+            parse_file_for_functions(file.path(), true, true, true, true, false).unwrap();
+        let f = functions
+            .iter()
+            .find(|f| f.name == "axiom_function")
+            .unwrap();
+        assert!(
+            f.contains_admit,
+            "real admit() call must set contains_admit"
+        );
+        assert!(
+            f.has_trusted_assumption,
+            "admit() also sets has_trusted_assumption"
+        );
+    }
+
+    /// assume() alone does NOT set contains_admit.
+    #[test]
+    fn test_assume_does_not_set_contains_admit() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"
+fn assume_function() {{
+    assume(false);
+    let x: u32 = 42;
+}}
+"#
+        )
+        .unwrap();
+
+        let functions =
+            parse_file_for_functions(file.path(), true, true, true, true, false).unwrap();
+        let f = functions
+            .iter()
+            .find(|f| f.name == "assume_function")
+            .unwrap();
+        assert!(!f.contains_admit, "assume() must not set contains_admit");
+        assert!(
+            f.has_trusted_assumption,
+            "assume() still sets has_trusted_assumption"
+        );
+    }
+
+    /// admit() in a comment does not set contains_admit.
+    #[test]
+    fn test_admit_in_comment_not_detected() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"
+fn clean_function() {{
+    // We removed admit() from this proof
+    let x: u32 = 42;
+}}
+"#
+        )
+        .unwrap();
+
+        let functions =
+            parse_file_for_functions(file.path(), true, true, true, true, false).unwrap();
+        let f = functions
+            .iter()
+            .find(|f| f.name == "clean_function")
+            .unwrap();
+        assert!(
+            !f.contains_admit,
+            "admit() in a comment must not set contains_admit"
         );
     }
 }

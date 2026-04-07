@@ -301,6 +301,7 @@ entries with `code-path: ""` and `code-text: {"lines-start": 0, "lines-end": 0}`
     "has_ensures": true,
     "has_decreases": false,
     "has_trusted_assumption": false,
+    "contains_admit": false,
     "is_external_body": false,
     "has_no_decreases_attr": false,
     "requires_text": "x > 0",
@@ -330,6 +331,7 @@ is **not** serialized (the code-name key serves as the identifier).
 | `has_ensures` | boolean | yes | Has an `ensures` clause |
 | `has_decreases` | boolean | yes | Has a `decreases` clause |
 | `has_trusted_assumption` | boolean | yes | Body contains `assume()` or `admit()` |
+| `contains_admit` | boolean | yes | Body contains `admit()` specifically (axiom — drives `"trusted"` status in extract) |
 | `is_external_body` | boolean | yes | Has `#[verifier::external_body]` |
 | `has_no_decreases_attr` | boolean | yes | Has `#[verifier::exec_allows_no_decreases_clause]` |
 | `requires_text` | string | no | Raw text of the requires clause (only with `--with-spec-text`) |
@@ -445,7 +447,7 @@ optional fields are added:
 | `body-dependencies` | array of strings | no | Subset of `dependencies` called in the function body (omitted when empty) |
 | `primary-spec` | string | no | Full spec text (requires + ensures concatenated). Empty string = analyzed, no spec. Absent = not analyzed. |
 | `is-disabled` | bool | no | `false` if the function has a spec; `true` otherwise. Absent for external stubs or when `--skip-specify`. |
-| `verification-status` | string | no | `"verified"`, `"failed"`, or `"unverified"` (absent when `--skip-verify`) |
+| `verification-status` | string | no | `"verified"`, `"failed"`, `"unverified"`, or `"trusted"` (absent when `--skip-verify`) |
 | `spec-labels` | array of strings | no | Taxonomy classification labels from `--taxonomy-config` (omitted when empty or when `--skip-specify`) |
 
 ### Dependency Categorization
@@ -470,8 +472,15 @@ the atomize step).  The three subcategory fields partition this union:
 |-------------|---------------|---------|
 | `success` | `"verified"` | Passed verification |
 | `failure` | `"failed"` | Verification errors |
-| `sorries` | `"unverified"` | Contains `assume()`/`admit()` |
+| `sorries` | `"unverified"` | Contains `assume()` or `admit()` |
 | `warning` | `"unverified"` | Passed with warnings (defensive: treated as unverified) |
+
+**Trusted override:** Functions whose body contains `admit()` (detected by the
+`specify` step via `contains_admit`) are overridden to `"trusted"` regardless of
+the proofs status.  `admit()` is the Verus analogue of Lean's axiom — it makes
+the solver accept the proof without checking, so the function's correctness is
+assumed, not proven.  Functions with only `assume()` (no `admit()`) remain
+`"unverified"`.
 
 ### Notes
 

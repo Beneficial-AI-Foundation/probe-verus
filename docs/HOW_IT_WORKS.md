@@ -234,7 +234,12 @@ The tool maps errors to specific functions:
 1. Parse all functions in the project with their line ranges
 2. For each error location (file, line), find the enclosing function
 3. Mark that function as "failed"
-4. All other functions are marked as "verified"
+4. Functions with `assume()`/`admit()` (detected via `has_trusted_assumption`) are marked "unverified" (proofs status: `sorries`)
+5. Remaining functions are marked as "verified"
+
+The **extract** merge step further refines "unverified" — functions whose body
+contains `admit()` specifically (`contains_admit` from the specify step) are
+overridden to `verification-status: "trusted"`, making the trust base explicit.
 
 ### Status Determination
 
@@ -294,10 +299,11 @@ When no atoms are available, the verify command produces a structured analysis r
     "status": "success|verification_failed|compilation_failed",
     "summary": {
       "total_functions": 42,
-      "verified_functions": 40,
-      "failed_functions": 2
+      "verified_functions": 38,
+      "failed_functions": 2,
+      "unverified_functions": 2
     },
-    "verification": { "verified_functions": [...], "failed_functions": [...] },
+    "verification": { "verified_functions": [...], "failed_functions": [...], "unverified_functions": [...] },
     "compilation": { "errors": [...], "warnings": [...] }
   }
 }

@@ -412,6 +412,9 @@ struct SpecsEntry {
     ensures_text: Option<String>,
     #[serde(rename = "spec-labels", default)]
     spec_labels: Vec<String>,
+    /// Whether the function body contains `admit()` — an axiom (trust base).
+    #[serde(default)]
+    contains_admit: bool,
 }
 
 /// Minimal deserialization target for proofs entries (only the `status` field).
@@ -420,13 +423,16 @@ struct ProofsEntryMinimal {
     status: String,
 }
 
-/// Map a Verus `VerificationStatus` string to the 3-value web status matching probe-lean.
+/// Map a Verus `VerificationStatus` string to the web status.
+///
+/// `"sorries"` covers both `assume()` and `admit()`; at this level it maps to
+/// `"unverified"`.  The `merge_into_unified` step further overrides to `"trusted"`
+/// for functions that specifically contain `admit()` (detected via `contains_admit`
+/// from the specify step).
 ///
 /// `"warning"` is mapped to `"unverified"` as a defensive measure: the `Warning`
 /// variant is never produced by the current pipeline, but could appear in
-/// hand-edited proofs.json or future Verus output. Until the exact semantics of
-/// Verus warnings are documented and confirmed safe, treating them as unverified
-/// prevents overstating assurance.
+/// hand-edited proofs.json or future Verus output.
 fn map_verification_status(status: &str) -> &'static str {
     match status {
         "success" => "verified",
@@ -502,10 +508,22 @@ pub fn merge_into_unified(
             }
         }
 
-        let verification_status = proofs
+        let has_admit = specs
             .as_ref()
-            .and_then(|p| p.get(&code_name))
-            .map(|e| map_verification_status(&e.status).to_string());
+            .and_then(|s| s.get(&code_name))
+            .is_some_and(|e| e.contains_admit);
+
+        let verification_status = if has_admit {
+            // Functions with admit() are axioms — part of the trust base.
+            // Override whatever the proofs step reported (mirrors probe-lean's
+            // isTrustedAtom override for axioms).
+            Some("trusted".to_string())
+        } else {
+            proofs
+                .as_ref()
+                .and_then(|p| p.get(&code_name))
+                .map(|e| map_verification_status(&e.status).to_string())
+        };
 
         let spec_labels: Vec<String> = specs
             .as_ref()
@@ -886,6 +904,231 @@ mod tests {
         assert!(ext_json.get("is-disabled").is_none());
         assert!(ext_json.get("spec-labels").is_none());
         assert_eq!(ext_json["language"], "rust");
+    }
+
+    #[test]
+    fn test_trusted_from_contains_admit() {
+        let dir = TempDir::new().unwrap();
+        let atoms_path = write_json(&dir, "atoms.json", &atoms_json());
+
+        let specs_with_admit = serde_json::json!({
+            "schema": "probe-verus/specs",
+            "schema-version": "2.0",
+            "tool": {"name": "probe-verus", "version": "6.4.0", "command": "specify"},
+            "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
+            "timestamp": "2026-04-07T00:00:00Z",
+            "data": {
+                "probe:test/0.1.0/module/foo()": {
+                    "spec-text": {"lines-start": 10, "lines-end": 20},
+                    "kind": "exec",
+                    "specified": true,
+                    "has_requires": true,
+                    "has_ensures": true,
+                    "contains_admit": true,
+                    "requires_text": "requires\n    x > 0",
+                    "ensures_text": "ensures\n    result > x"
+                },
+                "probe:test/0.1.0/module/bar()": {
+                    "spec-text": {"lines-start": 30, "lines-end": 40},
+                    "kind": "proof",
+                    "specified": false,
+                    "contains_admit": false
+                }
+            }
+        });
+        let specs_path = write_json(&dir, "specs.json", &specs_with_admit);
+
+        let proofs_with_sorries = serde_json::json!({
+            "schema": "probe-verus/proofs",
+            "schema-version": "2.0",
+            "tool": {"name": "probe-verus", "version": "6.4.0", "command": "run-verus"},
+            "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
+            "timestamp": "2026-04-07T00:00:00Z",
+            "data": {
+                "probe:test/0.1.0/module/foo()": {
+                    "code-path": "src/module.rs",
+                    "code-line": 10,
+                    "verified": false,
+                    "status": "sorries"
+                },
+                "probe:test/0.1.0/module/bar()": {
+                    "code-path": "src/module.rs",
+                    "code-line": 30,
+                    "verified": true,
+                    "status": "success"
+                }
+            }
+        });
+        let proofs_path = write_json(&dir, "proofs.json", &proofs_with_sorries);
+
+        let result =
+            merge_into_unified(&atoms_path, Some(&specs_path), Some(&proofs_path)).unwrap();
+
+        assert_eq!(
+            result["probe:test/0.1.0/module/foo()"]
+                .verification_status
+                .as_deref(),
+            Some("trusted"),
+            "Function with contains_admit=true should be 'trusted'"
+        );
+        assert_eq!(
+            result["probe:test/0.1.0/module/bar()"]
+                .verification_status
+                .as_deref(),
+            Some("verified"),
+            "Function without contains_admit should keep its proofs status"
+        );
+    }
+
+    #[test]
+    fn test_assume_only_stays_unverified() {
+        let dir = TempDir::new().unwrap();
+        let atoms_path = write_json(&dir, "atoms.json", &atoms_json());
+
+        // has_trusted_assumption=true but contains_admit=false → assume() only
+        let specs_assume_only = serde_json::json!({
+            "schema": "probe-verus/specs",
+            "schema-version": "2.0",
+            "tool": {"name": "probe-verus", "version": "6.4.0", "command": "specify"},
+            "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
+            "timestamp": "2026-04-07T00:00:00Z",
+            "data": {
+                "probe:test/0.1.0/module/foo()": {
+                    "spec-text": {"lines-start": 10, "lines-end": 20},
+                    "kind": "exec",
+                    "specified": true,
+                    "has_trusted_assumption": true,
+                    "contains_admit": false
+                }
+            }
+        });
+        let specs_path = write_json(&dir, "specs.json", &specs_assume_only);
+
+        let proofs_sorries = serde_json::json!({
+            "schema": "probe-verus/proofs",
+            "schema-version": "2.0",
+            "tool": {"name": "probe-verus", "version": "6.4.0", "command": "run-verus"},
+            "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
+            "timestamp": "2026-04-07T00:00:00Z",
+            "data": {
+                "probe:test/0.1.0/module/foo()": {
+                    "code-path": "src/module.rs",
+                    "code-line": 10,
+                    "verified": false,
+                    "status": "sorries"
+                }
+            }
+        });
+        let proofs_path = write_json(&dir, "proofs.json", &proofs_sorries);
+
+        let result =
+            merge_into_unified(&atoms_path, Some(&specs_path), Some(&proofs_path)).unwrap();
+
+        assert_eq!(
+            result["probe:test/0.1.0/module/foo()"]
+                .verification_status
+                .as_deref(),
+            Some("unverified"),
+            "Function with assume() but no admit() should be 'unverified', not 'trusted'"
+        );
+    }
+
+    #[test]
+    fn test_trusted_overrides_proofs_status() {
+        let dir = TempDir::new().unwrap();
+        let atoms_path = write_json(&dir, "atoms.json", &atoms_json());
+
+        let specs_with_admit = serde_json::json!({
+            "schema": "probe-verus/specs",
+            "schema-version": "2.0",
+            "tool": {"name": "probe-verus", "version": "6.4.0", "command": "specify"},
+            "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
+            "timestamp": "2026-04-07T00:00:00Z",
+            "data": {
+                "probe:test/0.1.0/module/foo()": {
+                    "spec-text": {"lines-start": 10, "lines-end": 20},
+                    "kind": "exec",
+                    "specified": true,
+                    "contains_admit": true
+                }
+            }
+        });
+        let specs_path = write_json(&dir, "specs.json", &specs_with_admit);
+
+        // Even if proofs says "success", contains_admit overrides to "trusted"
+        let proofs_success = serde_json::json!({
+            "schema": "probe-verus/proofs",
+            "schema-version": "2.0",
+            "tool": {"name": "probe-verus", "version": "6.4.0", "command": "run-verus"},
+            "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
+            "timestamp": "2026-04-07T00:00:00Z",
+            "data": {
+                "probe:test/0.1.0/module/foo()": {
+                    "code-path": "src/module.rs",
+                    "code-line": 10,
+                    "verified": true,
+                    "status": "success"
+                }
+            }
+        });
+        let proofs_path = write_json(&dir, "proofs.json", &proofs_success);
+
+        let result =
+            merge_into_unified(&atoms_path, Some(&specs_path), Some(&proofs_path)).unwrap();
+
+        assert_eq!(
+            result["probe:test/0.1.0/module/foo()"]
+                .verification_status
+                .as_deref(),
+            Some("trusted"),
+            "contains_admit overrides even 'success' proofs status"
+        );
+    }
+
+    #[test]
+    fn test_trusted_from_specs_without_proofs() {
+        let dir = TempDir::new().unwrap();
+        let atoms_path = write_json(&dir, "atoms.json", &atoms_json());
+
+        let specs_with_admit = serde_json::json!({
+            "schema": "probe-verus/specs",
+            "schema-version": "2.0",
+            "tool": {"name": "probe-verus", "version": "6.4.0", "command": "specify"},
+            "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
+            "timestamp": "2026-04-07T00:00:00Z",
+            "data": {
+                "probe:test/0.1.0/module/foo()": {
+                    "spec-text": {"lines-start": 10, "lines-end": 20},
+                    "kind": "exec",
+                    "specified": true,
+                    "contains_admit": true
+                },
+                "probe:test/0.1.0/module/bar()": {
+                    "spec-text": {"lines-start": 30, "lines-end": 40},
+                    "kind": "proof",
+                    "specified": false,
+                    "contains_admit": false
+                }
+            }
+        });
+        let specs_path = write_json(&dir, "specs.json", &specs_with_admit);
+
+        // No proofs.json — specs-only override still sets "trusted"
+        let result = merge_into_unified(&atoms_path, Some(&specs_path), None).unwrap();
+
+        assert_eq!(
+            result["probe:test/0.1.0/module/foo()"]
+                .verification_status
+                .as_deref(),
+            Some("trusted"),
+            "contains_admit sets 'trusted' even without proofs.json"
+        );
+        assert!(
+            result["probe:test/0.1.0/module/bar()"]
+                .verification_status
+                .is_none(),
+            "Non-trusted function without proofs should have no verification status"
+        );
     }
 
     #[test]

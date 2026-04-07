@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 See the [Versioning Policy section in CLAUDE.md](CLAUDE.md#versioning-policy) for
 what constitutes a breaking change.
 
+## [6.4.0] - 2026-04-07
+
+### Added
+- **`"trusted"` verification status for axioms**: Functions containing `admit()` now get `verification-status: "trusted"` in extract output, making the trust base explicit (matching probe-lean's treatment of axioms). Functions with only `assume()` remain `"unverified"`. Detection uses the new `contains_admit` field from the specify step, which overrides the proofs status.
+- **`contains_admit` field in specs output**: New boolean field on `FunctionInfo` that specifically detects `admit()` (not `assume()`). Used by the extract merge to determine the `"trusted"` override.
+
 ## [6.3.2] - 2026-04-03
 
 ### Fixed

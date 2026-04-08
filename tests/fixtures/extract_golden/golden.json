@@ -21,6 +21,8 @@
         }
       ],
       "display-name": "checked_add",
+      "is-public": false,
+      "is-public-api": false,
       "kind": "exec",
       "language": "rust"
     },
@@ -52,6 +54,8 @@
         }
       ],
       "display-name": "double_checked",
+      "is-public": false,
+      "is-public-api": false,
       "kind": "exec",
       "language": "rust"
     },
@@ -64,6 +68,8 @@
       },
       "dependencies": [],
       "display-name": "is_positive",
+      "is-public": false,
+      "is-public-api": false,
       "kind": "exec",
       "language": "rust"
     },
@@ -98,6 +104,8 @@
         }
       ],
       "display-name": "positive_sum",
+      "is-public": false,
+      "is-public-api": false,
       "kind": "exec",
       "language": "rust"
     }
@@ -111,10 +119,10 @@
     "package-version": "0.1.0",
     "repo": ""
   },
-  "timestamp": "2026-03-22T06:18:52Z",
+  "timestamp": "2026-04-07T19:12:11Z",
   "tool": {
     "command": "extract",
     "name": "probe-verus",
-    "version": "5.2.0"
+    "version": "6.5.1"
   }
 }

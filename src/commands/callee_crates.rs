@@ -264,6 +264,8 @@ mod tests {
             kind,
             language: "rust".to_string(),
             rust_qualified_name: None,
+            is_public: None,
+            is_public_api: None,
         }
     }
 

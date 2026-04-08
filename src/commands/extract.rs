@@ -775,9 +775,14 @@ fn run_unified_merge(
                         eprintln!("  Warning: Could not write unified output: {}", e);
                         return (None, Some(trust_base));
                     }
+                    let public_api_count = unified
+                        .values()
+                        .filter(|a| a.atom.is_public_api == Some(true))
+                        .count();
                     println!(
-                        "  unified: ✓ {} functions → {}",
+                        "  unified: ✓ {} functions ({} public API) → {}",
                         unified.len(),
+                        public_api_count,
                         unified_path.display()
                     );
 

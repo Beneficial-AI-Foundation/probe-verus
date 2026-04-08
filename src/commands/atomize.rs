@@ -1,8 +1,8 @@
 //! Atomize command - Generate call graph atoms from SCIP indexes.
 
 use crate::{
-    add_external_stubs, backfill_atoms_from_parser, build_call_graph,
-    convert_to_atoms_with_parsed_spans, find_duplicate_code_names,
+    add_external_stubs, backfill_atoms_from_parser, build_call_graph, build_module_visibility_map,
+    convert_to_atoms_with_parsed_spans, find_duplicate_code_names, is_library_crate,
     metadata::{gather_metadata, get_default_output_path, wrap_in_envelope, AtomizeInternalConfig},
     parse_scip_json,
     scip_cache::{Analyzer, ScipCache},
@@ -60,6 +60,9 @@ pub fn cmd_atomize(
     println!("  ✓ Call graph built with {} functions", call_graph.len());
     println!();
 
+    let file_module_pub = build_module_visibility_map(&project_path);
+    let is_library = is_library_crate(&project_path);
+
     // Convert to atoms format with line numbers
     println!("Converting to atoms format with accurate line numbers...");
     println!("  Parsing source files with verus_syn for accurate function spans...");
@@ -69,6 +72,8 @@ pub fn cmd_atomize(
         &symbol_to_display_name,
         &project_path,
         with_locations,
+        &file_module_pub,
+        is_library,
     );
     println!("  ✓ Converted {} functions to atoms format", atoms.len());
     if with_locations {
@@ -114,6 +119,8 @@ pub fn cmd_atomize(
         &mut atoms_dict,
         &metadata.pkg_name,
         &metadata.pkg_version,
+        &file_module_pub,
+        is_library,
     );
     if backfill_count > 0 {
         println!(
@@ -247,11 +254,16 @@ pub fn atomize_internal(config: &AtomizeInternalConfig) -> Result<usize, String>
 
     let (call_graph, symbol_to_display_name) = build_call_graph(&scip_index);
 
+    let file_module_pub = build_module_visibility_map(config.project_path);
+    let is_library = is_library_crate(config.project_path);
+
     let atoms = convert_to_atoms_with_parsed_spans(
         &call_graph,
         &symbol_to_display_name,
         config.project_path,
         config.with_locations,
+        &file_module_pub,
+        is_library,
     );
 
     let duplicates = find_duplicate_code_names(&atoms);
@@ -278,6 +290,8 @@ pub fn atomize_internal(config: &AtomizeInternalConfig) -> Result<usize, String>
         &mut atoms_dict,
         &config.metadata.pkg_name,
         &config.metadata.pkg_version,
+        &file_module_pub,
+        is_library,
     );
 
     let count = atoms_dict.len();

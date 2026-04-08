@@ -182,6 +182,20 @@ fn default_language() -> String {
     "rust".to_string()
 }
 
+/// Check whether a SCIP signature represents an unrestricted `pub` item.
+///
+/// Returns `true` for `pub fn`, `pub unsafe fn`, `pub async fn`, etc.
+/// Returns `false` for `fn`, `pub(crate) fn`, `pub(super) fn`, and similar.
+#[must_use]
+pub fn is_signature_public(sig: &str) -> bool {
+    let trimmed = sig.trim_start();
+    if let Some(rest) = trimmed.strip_prefix("pub") {
+        !rest.starts_with('(')
+    } else {
+        false
+    }
+}
+
 /// Output format: Atom with line numbers
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AtomWithLines {
@@ -218,6 +232,19 @@ pub struct AtomWithLines {
         default
     )]
     pub rust_qualified_name: Option<String>,
+    /// Whether the function signature starts with unrestricted `pub`.
+    #[serde(rename = "is-public", skip_serializing_if = "Option::is_none", default)]
+    pub is_public: Option<bool>,
+    /// Whether the function is part of the crate's public API:
+    /// `pub fn` + all ancestor modules `pub` + exec kind + library crate.
+    /// `spec fn` and `proof fn` always get `false` (erased at runtime).
+    /// External stubs get `None`.
+    #[serde(
+        rename = "is-public-api",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    pub is_public_api: Option<bool>,
 }
 
 /// Unified atom: all `AtomWithLines` fields plus optional verification, specification,
@@ -1120,7 +1147,15 @@ pub fn convert_to_atoms_with_lines(
     call_graph: &HashMap<String, FunctionNode>,
     symbol_to_display_name: &HashMap<String, String>,
 ) -> Vec<AtomWithLines> {
-    convert_to_atoms_with_lines_internal(call_graph, symbol_to_display_name, None, false)
+    let empty_map = HashMap::new();
+    convert_to_atoms_with_lines_internal(
+        call_graph,
+        symbol_to_display_name,
+        None,
+        false,
+        &empty_map,
+        false,
+    )
 }
 
 /// Convert call graph to atoms with accurate line numbers by parsing source files.
@@ -1131,6 +1166,8 @@ pub fn convert_to_atoms_with_parsed_spans(
     symbol_to_display_name: &HashMap<String, String>,
     project_root: &Path,
     with_locations: bool,
+    file_module_pub: &HashMap<String, bool>,
+    is_library: bool,
 ) -> Vec<AtomWithLines> {
     // Collect all unique relative paths
     let relative_paths: Vec<String> = call_graph
@@ -1148,6 +1185,8 @@ pub fn convert_to_atoms_with_parsed_spans(
         symbol_to_display_name,
         Some(&span_map),
         with_locations,
+        file_module_pub,
+        is_library,
     )
 }
 
@@ -1161,6 +1200,8 @@ fn convert_to_atoms_with_lines_internal(
     symbol_to_display_name: &HashMap<String, String>,
     span_map: Option<&HashMap<(String, String, usize), verus_parser::SpanAndMode>>,
     with_locations: bool,
+    file_module_pub: &HashMap<String, bool>,
+    is_library: bool,
 ) -> Vec<AtomWithLines> {
     // === Phase 1: Compute line ranges and base code_names for all nodes ===
     struct NodeData<'a> {
@@ -1547,6 +1588,7 @@ fn convert_to_atoms_with_lines_internal(
                     .cmp(&b.line)
                     .then_with(|| a.code_name.cmp(&b.code_name))
             });
+            let sig_public = is_signature_public(&data.node.signature_text);
             AtomWithLines {
                 display_name: data.node.display_name.clone(),
                 code_name,
@@ -1561,6 +1603,14 @@ fn convert_to_atoms_with_lines_internal(
                 kind: data.kind,
                 language: data.language,
                 rust_qualified_name: rqn,
+                is_public: Some(sig_public),
+                is_public_api: classify_public_api(
+                    sig_public,
+                    &data.node.relative_path,
+                    data.kind,
+                    file_module_pub,
+                    is_library,
+                ),
             }
         })
         .collect()
@@ -1643,6 +1693,155 @@ pub fn normalize_code_name(code_name: &str) -> String {
     code_name.strip_suffix('.').unwrap_or(code_name).to_string()
 }
 
+// =============================================================================
+// Public-API classification
+// =============================================================================
+
+/// Check whether a Rust project is a library crate.
+///
+/// Returns `true` if `Cargo.toml` contains a `[lib]` section or `src/lib.rs` exists.
+#[must_use]
+pub fn is_library_crate(project_path: &Path) -> bool {
+    let cargo_toml = project_path.join("Cargo.toml");
+    if let Ok(contents) = std::fs::read_to_string(&cargo_toml) {
+        if let Ok(parsed) = contents.parse::<toml::Table>() {
+            if parsed.contains_key("lib") {
+                return true;
+            }
+        }
+    }
+    project_path.join("src/lib.rs").exists()
+}
+
+/// Build a map from relative file path to "all ancestor modules are pub".
+///
+/// Walks `mod` declarations starting from `src/lib.rs` (or `src/main.rs`),
+/// recording whether each module is declared with unrestricted `pub`.
+/// The map keys are relative file paths (e.g., `"src/scalar.rs"`) matching
+/// the `code_path` field on atoms.
+///
+/// For duplicate `mod` declarations (e.g., cfg-gated `pub mod backend` and
+/// `pub(crate) mod backend`), uses the **most permissive** visibility to
+/// avoid false negatives.
+#[must_use]
+pub fn build_module_visibility_map(project_path: &Path) -> HashMap<String, bool> {
+    let mut map = HashMap::new();
+
+    let src_dir = project_path.join("src");
+    let lib_rs = src_dir.join("lib.rs");
+    let main_rs = src_dir.join("main.rs");
+
+    let entry = if lib_rs.exists() {
+        lib_rs
+    } else if main_rs.exists() {
+        main_rs
+    } else {
+        return map;
+    };
+
+    // The entry file itself is always reachable (it IS the crate root).
+    if let Ok(rel) = entry.strip_prefix(project_path) {
+        map.insert(rel.to_string_lossy().to_string(), true);
+    }
+
+    walk_mod_declarations(project_path, &entry, true, &mut map);
+    map
+}
+
+/// Recursively walk `mod` declarations in a Rust source file.
+///
+/// `parent_chain_pub` indicates whether every ancestor module up to and
+/// including this file's own module is unrestricted `pub`.
+fn walk_mod_declarations(
+    project_path: &Path,
+    file_path: &Path,
+    parent_chain_pub: bool,
+    map: &mut HashMap<String, bool>,
+) {
+    let content = match std::fs::read_to_string(file_path) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+
+    let syntax = match verus_syn::parse_file(&content) {
+        Ok(f) => f,
+        Err(_) => return,
+    };
+
+    let file_dir = file_path.parent().unwrap_or(Path::new(""));
+
+    for item in &syntax.items {
+        if let verus_syn::Item::Mod(item_mod) = item {
+            let mod_name = item_mod.ident.to_string();
+            let is_pub_unrestricted = matches!(item_mod.vis, verus_syn::Visibility::Public(_));
+
+            let chain_pub = parent_chain_pub && is_pub_unrestricted;
+
+            if item_mod.content.is_some() {
+                // Inline module — no separate file, but record that the
+                // containing file has this module path.  We don't create a
+                // separate map entry for inline modules because atoms use
+                // the *file* path as their code_path.
+                continue;
+            }
+
+            // External module — resolve to file
+            let mod_file = file_dir.join(format!("{mod_name}.rs"));
+            let mod_dir_file = file_dir.join(&mod_name).join("mod.rs");
+
+            let resolved = if mod_file.exists() {
+                Some(mod_file)
+            } else if mod_dir_file.exists() {
+                Some(mod_dir_file)
+            } else {
+                None
+            };
+
+            if let Some(ref path) = resolved {
+                if let Ok(rel) = path.strip_prefix(project_path) {
+                    let key = rel.to_string_lossy().to_string();
+                    // Most permissive: if any declaration is pub, treat as pub
+                    let existing = map.get(&key).copied().unwrap_or(false);
+                    map.insert(key, existing || chain_pub);
+                }
+                walk_mod_declarations(project_path, path, chain_pub, map);
+            }
+        }
+    }
+}
+
+/// Determine `is-public-api` for a function.
+///
+/// Rules:
+/// - External stubs (empty `code_path`) → `None`
+/// - Binary-only crate → `Some(false)`
+/// - spec/proof functions → `Some(false)` (erased at runtime)
+/// - Non-pub function → `Some(false)`
+/// - pub exec function with all-pub module chain → `Some(true)`
+/// - Otherwise → `Some(false)`
+#[must_use]
+pub fn classify_public_api(
+    is_public: bool,
+    code_path: &str,
+    kind: DeclKind,
+    file_module_pub: &HashMap<String, bool>,
+    is_library: bool,
+) -> Option<bool> {
+    if code_path.is_empty() {
+        return None;
+    }
+    if !is_library {
+        return Some(false);
+    }
+    if kind != DeclKind::Exec {
+        return Some(false);
+    }
+    if !is_public {
+        return Some(false);
+    }
+    Some(file_module_pub.get(code_path).copied().unwrap_or(false))
+}
+
 /// Backfill atoms from `verus_parser` for functions that SCIP missed.
 ///
 /// Runs the verus source parser over the project, identifies functions that are not yet
@@ -1656,6 +1855,8 @@ pub fn backfill_atoms_from_parser(
     atoms_dict: &mut BTreeMap<String, AtomWithLines>,
     pkg_name: &str,
     pkg_version: &str,
+    file_module_pub: &HashMap<String, bool>,
+    is_library: bool,
 ) -> usize {
     let src_dir = project_path.join("src");
     let parse_root: &Path = if src_dir.is_dir() {
@@ -1667,7 +1868,7 @@ pub fn backfill_atoms_from_parser(
     let parsed = verus_parser::parse_all_functions(
         parse_root, true,  // include_verus_constructs
         true,  // include_methods
-        false, // show_visibility
+        true,  // show_visibility
         true,  // show_kind
         false, // include_spec_text
     );
@@ -1730,6 +1931,11 @@ pub fn backfill_atoms_from_parser(
             module_path.replace('/', "::")
         };
 
+        let vis_public = fi
+            .visibility
+            .as_deref()
+            .map(|v| v == "pub")
+            .unwrap_or(false);
         atoms_dict.insert(
             code_name.clone(),
             AtomWithLines {
@@ -1738,14 +1944,27 @@ pub fn backfill_atoms_from_parser(
                 dependencies: BTreeSet::new(),
                 dependencies_with_locations: Vec::new(),
                 code_module,
-                code_path,
+                code_path: code_path.clone(),
                 code_text: CodeTextInfo {
                     lines_start: fi.spec_text.lines_start,
                     lines_end: fi.spec_text.lines_end,
                 },
                 kind: fi.kind,
-                language: "rust".to_string(),
+                language: if fi.kind == DeclKind::Exec {
+                    "rust"
+                } else {
+                    "verus"
+                }
+                .to_string(),
                 rust_qualified_name: None,
+                is_public: Some(vis_public),
+                is_public_api: classify_public_api(
+                    vis_public,
+                    &code_path,
+                    fi.kind,
+                    file_module_pub,
+                    is_library,
+                ),
             },
         );
         if !is_replacement {
@@ -1805,6 +2024,8 @@ pub fn add_external_stubs(atoms_dict: &mut BTreeMap<String, AtomWithLines>) -> u
                 kind: DeclKind::Exec,
                 language: "rust".to_string(),
                 rust_qualified_name: None,
+                is_public: None,
+                is_public_api: None,
             },
         );
     }
@@ -2058,6 +2279,8 @@ mod tests {
                 kind: DeclKind::Exec,
                 language: "rust".to_string(),
                 rust_qualified_name: None,
+                is_public: None,
+                is_public_api: None,
             },
         );
 
@@ -2096,6 +2319,8 @@ mod tests {
                 kind: DeclKind::Exec,
                 language: "rust".to_string(),
                 rust_qualified_name: None,
+                is_public: None,
+                is_public_api: None,
             },
         );
         atoms_dict.insert(
@@ -2114,6 +2339,8 @@ mod tests {
                 kind: DeclKind::Exec,
                 language: "rust".to_string(),
                 rust_qualified_name: None,
+                is_public: None,
+                is_public_api: None,
             },
         );
 
@@ -2167,6 +2394,8 @@ mod tests {
             kind: DeclKind::Exec,
             language: "rust".to_string(),
             rust_qualified_name: None,
+            is_public: None,
+            is_public_api: None,
         };
         let json = serde_json::to_value(&atom).unwrap();
         assert_eq!(json["language"], "rust");
@@ -2277,6 +2506,8 @@ mod tests {
             kind: DeclKind::Exec,
             language: "rust".to_string(),
             rust_qualified_name: Some("my_crate::field::reduce".to_string()),
+            is_public: None,
+            is_public_api: None,
         };
         let json = serde_json::to_value(&atom).unwrap();
         assert_eq!(json["rust-qualified-name"], "my_crate::field::reduce");
@@ -2298,8 +2529,301 @@ mod tests {
             kind: DeclKind::Exec,
             language: "rust".to_string(),
             rust_qualified_name: None,
+            is_public: None,
+            is_public_api: None,
         };
         let json = serde_json::to_value(&atom).unwrap();
         assert!(json.get("rust-qualified-name").is_none());
+    }
+
+    // =========================================================================
+    // is_signature_public tests
+    // =========================================================================
+
+    #[test]
+    fn test_is_signature_public_pub_fn() {
+        assert!(is_signature_public("pub fn foo()"));
+    }
+
+    #[test]
+    fn test_is_signature_public_pub_unsafe_fn() {
+        assert!(is_signature_public("pub unsafe fn bar()"));
+    }
+
+    #[test]
+    fn test_is_signature_public_pub_async_fn() {
+        assert!(is_signature_public("pub async fn baz()"));
+    }
+
+    #[test]
+    fn test_is_signature_public_not_pub_crate() {
+        assert!(!is_signature_public("pub(crate) fn foo()"));
+    }
+
+    #[test]
+    fn test_is_signature_public_not_pub_super() {
+        assert!(!is_signature_public("pub(super) fn foo()"));
+    }
+
+    #[test]
+    fn test_is_signature_public_private() {
+        assert!(!is_signature_public("fn foo()"));
+    }
+
+    #[test]
+    fn test_is_signature_public_empty() {
+        assert!(!is_signature_public(""));
+    }
+
+    #[test]
+    fn test_is_signature_public_leading_whitespace() {
+        assert!(is_signature_public("  pub fn foo()"));
+    }
+
+    // =========================================================================
+    // classify_public_api tests
+    // =========================================================================
+
+    #[test]
+    fn test_classify_public_api_external_stub() {
+        let map = HashMap::new();
+        assert_eq!(
+            classify_public_api(true, "", DeclKind::Exec, &map, true),
+            None
+        );
+    }
+
+    #[test]
+    fn test_classify_public_api_binary_crate() {
+        let map = HashMap::new();
+        assert_eq!(
+            classify_public_api(true, "src/main.rs", DeclKind::Exec, &map, false),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn test_classify_public_api_spec_fn() {
+        let mut map = HashMap::new();
+        map.insert("src/lib.rs".to_string(), true);
+        assert_eq!(
+            classify_public_api(true, "src/lib.rs", DeclKind::Spec, &map, true),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn test_classify_public_api_proof_fn() {
+        let mut map = HashMap::new();
+        map.insert("src/lib.rs".to_string(), true);
+        assert_eq!(
+            classify_public_api(true, "src/lib.rs", DeclKind::Proof, &map, true),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn test_classify_public_api_private_fn() {
+        let mut map = HashMap::new();
+        map.insert("src/lib.rs".to_string(), true);
+        assert_eq!(
+            classify_public_api(false, "src/lib.rs", DeclKind::Exec, &map, true),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn test_classify_public_api_pub_exec_in_pub_module() {
+        let mut map = HashMap::new();
+        map.insert("src/scalar.rs".to_string(), true);
+        assert_eq!(
+            classify_public_api(true, "src/scalar.rs", DeclKind::Exec, &map, true),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn test_classify_public_api_pub_exec_in_private_module() {
+        let mut map = HashMap::new();
+        map.insert("src/internal.rs".to_string(), false);
+        assert_eq!(
+            classify_public_api(true, "src/internal.rs", DeclKind::Exec, &map, true),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn test_classify_public_api_unknown_file() {
+        let map = HashMap::new();
+        assert_eq!(
+            classify_public_api(true, "src/unknown.rs", DeclKind::Exec, &map, true),
+            Some(false)
+        );
+    }
+
+    // =========================================================================
+    // is_library_crate tests
+    // =========================================================================
+
+    #[test]
+    fn test_is_library_crate_with_lib_rs() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/lib.rs"), "").unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"test\"\nversion = \"0.1.0\"",
+        )
+        .unwrap();
+        assert!(is_library_crate(dir.path()));
+    }
+
+    #[test]
+    fn test_is_library_crate_with_lib_section() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"test\"\n\n[lib]\nname = \"test\"",
+        )
+        .unwrap();
+        assert!(is_library_crate(dir.path()));
+    }
+
+    #[test]
+    fn test_is_library_crate_binary_only() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/main.rs"), "fn main() {}").unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"test\"\nversion = \"0.1.0\"",
+        )
+        .unwrap();
+        assert!(!is_library_crate(dir.path()));
+    }
+
+    // =========================================================================
+    // is-public / is-public-api serialization tests
+    // =========================================================================
+
+    #[test]
+    fn test_is_public_serialized_when_present() {
+        let atom = AtomWithLines {
+            display_name: "foo".to_string(),
+            code_name: "probe:crate/1.0/foo()".to_string(),
+            dependencies: BTreeSet::new(),
+            dependencies_with_locations: Vec::new(),
+            code_module: String::new(),
+            code_path: "src/lib.rs".to_string(),
+            code_text: CodeTextInfo {
+                lines_start: 1,
+                lines_end: 10,
+            },
+            kind: DeclKind::Exec,
+            language: "rust".to_string(),
+            rust_qualified_name: None,
+            is_public: Some(true),
+            is_public_api: Some(true),
+        };
+        let json = serde_json::to_value(&atom).unwrap();
+        assert_eq!(json["is-public"], true);
+        assert_eq!(json["is-public-api"], true);
+    }
+
+    #[test]
+    fn test_is_public_omitted_when_none() {
+        let atom = AtomWithLines {
+            display_name: "foo".to_string(),
+            code_name: "probe:crate/1.0/foo()".to_string(),
+            dependencies: BTreeSet::new(),
+            dependencies_with_locations: Vec::new(),
+            code_module: String::new(),
+            code_path: String::new(),
+            code_text: CodeTextInfo {
+                lines_start: 0,
+                lines_end: 0,
+            },
+            kind: DeclKind::Exec,
+            language: "rust".to_string(),
+            rust_qualified_name: None,
+            is_public: None,
+            is_public_api: None,
+        };
+        let json = serde_json::to_value(&atom).unwrap();
+        assert!(json.get("is-public").is_none());
+        assert!(json.get("is-public-api").is_none());
+    }
+
+    #[test]
+    fn test_is_public_deserialized_from_old_json() {
+        let old_json = serde_json::json!({
+            "display-name": "foo",
+            "dependencies": [],
+            "code-module": "",
+            "code-path": "src/lib.rs",
+            "code-text": { "lines-start": 1, "lines-end": 10 },
+            "kind": "exec"
+        });
+        let atom: AtomWithLines = serde_json::from_value(old_json).unwrap();
+        assert_eq!(atom.is_public, None);
+        assert_eq!(atom.is_public_api, None);
+    }
+
+    // =========================================================================
+    // build_module_visibility_map tests
+    // =========================================================================
+
+    #[test]
+    fn test_build_module_visibility_map_simple() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+
+        std::fs::write(src.join("lib.rs"), "pub mod scalar;\nmod internal;\n").unwrap();
+        std::fs::write(src.join("scalar.rs"), "pub fn foo() {}\n").unwrap();
+        std::fs::write(src.join("internal.rs"), "pub fn bar() {}\n").unwrap();
+
+        let map = build_module_visibility_map(dir.path());
+
+        assert_eq!(map.get("src/lib.rs"), Some(&true));
+        assert_eq!(map.get("src/scalar.rs"), Some(&true));
+        assert_eq!(map.get("src/internal.rs"), Some(&false));
+    }
+
+    #[test]
+    fn test_build_module_visibility_map_nested() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        std::fs::create_dir_all(src.join("backend")).unwrap();
+
+        std::fs::write(src.join("lib.rs"), "pub mod backend;\n").unwrap();
+        std::fs::write(src.join("backend/mod.rs"), "pub mod serial;\n").unwrap();
+        std::fs::write(src.join("backend/serial.rs"), "").unwrap();
+
+        let map = build_module_visibility_map(dir.path());
+
+        assert_eq!(map.get("src/lib.rs"), Some(&true));
+        assert_eq!(map.get("src/backend/mod.rs"), Some(&true));
+        assert_eq!(map.get("src/backend/serial.rs"), Some(&true));
+    }
+
+    #[test]
+    fn test_build_module_visibility_map_chain_broken() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        std::fs::create_dir_all(src.join("internal")).unwrap();
+
+        std::fs::write(src.join("lib.rs"), "mod internal;\n").unwrap();
+        std::fs::write(src.join("internal/mod.rs"), "pub mod deep;\n").unwrap();
+        std::fs::write(src.join("internal/deep.rs"), "").unwrap();
+
+        let map = build_module_visibility_map(dir.path());
+
+        assert_eq!(map.get("src/internal/mod.rs"), Some(&false));
+        assert_eq!(
+            map.get("src/internal/deep.rs"),
+            Some(&false),
+            "deep is pub but its parent is not, so chain is broken"
+        );
     }
 }

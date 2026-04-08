@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 See the [Versioning Policy section in CLAUDE.md](CLAUDE.md#versioning-policy) for
 what constitutes a breaking change.
 
+## [Unreleased]
+
+### Added
+- **`is-public` and `is-public-api` fields on atoms**: New optional boolean fields on each atom indicating whether the function signature is unrestricted `pub` (`is-public`) and whether it is part of the crate's public API (`is-public-api`).  `spec fn` and `proof fn` always get `is-public-api: false` (erased at runtime). External stubs omit both fields. Module visibility is determined by walking `mod` declarations from `src/lib.rs` using `verus_syn`, applying the most-permissive rule for cfg-gated duplicate declarations to avoid false negatives.
+- **Public API count in extract summary**: The unified merge step now prints the number of public API functions alongside the total function count.
+
 ## [6.5.1] - 2026-04-07
 
 ### Added

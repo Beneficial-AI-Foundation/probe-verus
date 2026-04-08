@@ -92,7 +92,9 @@ probe:core/https://github.com/rust-lang/rust/library/core/option/impl#map()
     "code-path": "src/module.rs",
     "code-text": { "lines-start": 42, "lines-end": 67 },
     "kind": "exec",
-    "language": "rust"
+    "language": "rust",
+    "is-public": true,
+    "is-public-api": true
   }
 }
 ```
@@ -109,6 +111,29 @@ probe:core/https://github.com/rust-lang/rust/library/core/option/impl#map()
 | `code-text` | CodeTextInfo | yes | Line range of the function body |
 | `kind` | DeclKind | yes | `"exec"`, `"proof"`, or `"spec"` |
 | `language` | string | yes | `"rust"` for `exec` atoms, `"verus"` for `proof`/`spec` atoms (derived from `kind`, not lexical scope; see [P20]) |
+| `is-public` | boolean | no | Whether the function signature starts with unrestricted `pub` (absent for external stubs) |
+| `is-public-api` | boolean | no | Whether the function is reachable from outside the crate: `pub fn` + all ancestor modules `pub` + exec kind + library crate.  `spec fn` and `proof fn` always get `false` (erased at runtime). Absent for external stubs. |
+
+#### Limitation: `is-public-api` and trait implementation methods
+
+`is-public-api` relies on `is-public` as a prerequisite, which checks whether
+the SCIP signature text starts with `pub`. Because `probe-verus` uses
+`verus-analyzer` for SCIP indexing (rather than `rust-analyzer`),
+`verus-analyzer`'s SCIP data does not include the richer type-context
+information that `rust-analyzer` provides. In particular, trait implementation
+methods (e.g., `impl Add for Point { fn add(...) }`) do not carry `pub` in
+their signature — they inherit publicity from the trait — so they are
+classified as `is-public: false` and excluded from `is-public-api`.
+
+In contrast, `probe-rust` (which uses `rust-analyzer`) correctly identifies
+these as public API. For `curve25519-dalek`, this accounts for a gap of ~64
+functions (trait impls like `ct_eq`, `fmt`, `neg`, `add_assign`,
+`multiscalar_mul`, etc.). Running `rust-analyzer` alongside `verus-analyzer`
+would close this gap but would double indexing time.
+
+**Consequence**: `is-public-api` may undercount public API functions. Use
+`is-public` (which includes all `pub fn` regardless of module chain) as an
+upper bound. Any function that is truly public API will have `is-public: true`.
 
 ### DependencyWithLocation
 
@@ -124,6 +149,7 @@ Only present when `--with-locations` is passed to `atomize`.
 
 Functions called as dependencies but defined outside the workspace get stub
 entries with `code-path: ""` and `code-text: {"lines-start": 0, "lines-end": 0}`.
+`is-public` and `is-public-api` are absent on external stubs.
 
 ---
 
@@ -437,6 +463,8 @@ are always written alongside it in `<project>/.verilib/probes/`.
     "code-text": { "lines-start": 42, "lines-end": 67 },
     "kind": "exec",
     "language": "rust",
+    "is-public": true,
+    "is-public-api": true,
     "primary-spec": "requires\n    x > 0,\n    y < 100\nensures\n    result > x",
     "is-disabled": false,
     "verification-status": "verified",
@@ -451,6 +479,8 @@ are always written alongside it in `<project>/.verilib/probes/`.
     "code-text": { "lines-start": 80, "lines-end": 90 },
     "kind": "exec",
     "language": "rust",
+    "is-public": false,
+    "is-public-api": false,
     "primary-spec": "",
     "is-disabled": true
   },
@@ -462,6 +492,8 @@ are always written alongside it in `<project>/.verilib/probes/`.
     "code-text": { "lines-start": 100, "lines-end": 110 },
     "kind": "proof",
     "language": "verus",
+    "is-public": true,
+    "is-public-api": false,
     "primary-spec": "ensures\n    foo_property(x)",
     "is-disabled": false,
     "verification-status": "trusted",

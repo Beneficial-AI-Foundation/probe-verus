@@ -210,7 +210,9 @@ impl ScipCache {
         let path = self.data_dir().join(".va_scip_config.json");
         std::fs::create_dir_all(self.data_dir()).ok()?;
         std::fs::write(&path, r#"{"cargo":{"cfgs":{"verus_keep_ghost":null}}}"#).ok()?;
-        Some(path)
+        // Canonicalize to an absolute path so it remains valid when the child
+        // process runs with a different CWD (current_dir set to project_path).
+        std::fs::canonicalize(&path).ok().or(Some(path))
     }
 
     /// Generate the SCIP index using the configured analyzer.

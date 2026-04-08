@@ -16,6 +16,10 @@ use verus_syn::visit::Visit;
 use verus_syn::{Attribute, FnMode, ImplItemFn, Item, ItemFn, ItemMacro, TraitItemFn, Visibility};
 use walkdir::WalkDir;
 
+fn default_true() -> bool {
+    true
+}
+
 /// Remove comments from a single line of source code.
 ///
 /// `in_block_comment` tracks whether we are inside a `/* ... */` block
@@ -101,6 +105,12 @@ pub struct FunctionSpan {
     pub requires_range: Option<(usize, usize)>,
     /// Line range of ensures clause (start, end), if present
     pub ensures_range: Option<(usize, usize)>,
+    /// Whether the function has a body (false for bodiless trait declarations)
+    pub has_body: bool,
+    /// Whether `#[verifier::external]` (direct or via `cfg_attr`) is present
+    pub is_external: bool,
+    /// Whether the function or an enclosing item has `#[cfg(...)]`
+    pub is_cfg: bool,
 }
 
 /// Convert FnMode to DeclKind
@@ -119,6 +129,47 @@ fn has_verifier_attr(attrs: &[Attribute], attr_name: &str) -> bool {
         let path = attr.path();
         let segments: Vec<_> = path.segments.iter().collect();
         segments.len() == 2 && segments[0].ident == "verifier" && segments[1].ident == attr_name
+    })
+}
+
+/// Check whether `attrs` contains any `#[cfg(...)]` attribute.
+///
+/// Public wrapper for use from `lib.rs` module visibility map.
+pub fn has_any_cfg_attr_pub(attrs: &[Attribute]) -> bool {
+    has_any_cfg_attr(attrs)
+}
+
+fn has_any_cfg_attr(attrs: &[Attribute]) -> bool {
+    attrs.iter().any(|attr| {
+        let path = attr.path();
+        let segments: Vec<_> = path.segments.iter().collect();
+        segments.len() == 1 && segments[0].ident == "cfg"
+    })
+}
+
+/// Check whether `attrs` contains `#[verifier::external]`, either directly
+/// or wrapped in `#[cfg_attr(_, verifier::external)]`.
+///
+/// `verus_syn` preserves `cfg_attr` as-is (does not expand it), so we need
+/// to inspect the token stream inside `cfg_attr(...)` for the inner attribute.
+fn has_verifier_external(attrs: &[Attribute]) -> bool {
+    if has_verifier_attr(attrs, "external") {
+        return true;
+    }
+    attrs.iter().any(|attr| {
+        let path = attr.path();
+        let segments: Vec<_> = path.segments.iter().collect();
+        if segments.len() != 1 || segments[0].ident != "cfg_attr" {
+            return false;
+        }
+        // Parse inside: cfg_attr(PREDICATE, ATTR)
+        // The token stream contains: predicate , verifier :: external
+        let tokens = match &attr.meta {
+            verus_syn::Meta::List(list) => &list.tokens,
+            _ => return false,
+        };
+        let s = tokens.to_string();
+        s.contains("verifier") && s.contains("external")
     })
 }
 
@@ -224,6 +275,12 @@ struct FunctionSpanVisitor {
     functions: Vec<FunctionSpan>,
     /// Depth counter: >0 when visiting inside a `verus!{}` macro
     inside_verus: usize,
+    /// Depth counter: >0 when visiting inside a `#[cfg(...)]` impl block
+    inside_cfg_impl: usize,
+    /// Depth counter: >0 when visiting inside a `#[cfg(...)]` mod block
+    inside_cfg_mod: usize,
+    /// Depth counter: >0 when visiting inside a `cfg_if!` branch
+    inside_cfg_if: usize,
 }
 
 impl FunctionSpanVisitor {
@@ -231,7 +288,14 @@ impl FunctionSpanVisitor {
         Self {
             functions: Vec::new(),
             inside_verus: 0,
+            inside_cfg_impl: 0,
+            inside_cfg_mod: 0,
+            inside_cfg_if: 0,
         }
+    }
+
+    fn is_inside_cfg(&self) -> bool {
+        self.inside_cfg_impl > 0 || self.inside_cfg_mod > 0 || self.inside_cfg_if > 0
     }
 
     /// Extract requires/ensures line ranges from a signature's spec
@@ -267,9 +331,11 @@ impl<'ast> Visit<'ast> for FunctionSpanVisitor {
             is_verus: self.inside_verus > 0,
             requires_range,
             ensures_range,
+            has_body: true,
+            is_external: has_verifier_external(&node.attrs),
+            is_cfg: has_any_cfg_attr(&node.attrs) || self.is_inside_cfg(),
         });
 
-        // Continue visiting nested items
         verus_syn::visit::visit_item_fn(self, node);
     }
 
@@ -289,9 +355,11 @@ impl<'ast> Visit<'ast> for FunctionSpanVisitor {
             is_verus: self.inside_verus > 0,
             requires_range,
             ensures_range,
+            has_body: true,
+            is_external: has_verifier_external(&node.attrs),
+            is_cfg: has_any_cfg_attr(&node.attrs) || self.is_inside_cfg(),
         });
 
-        // Continue visiting nested items
         verus_syn::visit::visit_impl_item_fn(self, node);
     }
 
@@ -311,35 +379,43 @@ impl<'ast> Visit<'ast> for FunctionSpanVisitor {
             is_verus: self.inside_verus > 0,
             requires_range,
             ensures_range,
+            has_body: node.default.is_some(),
+            is_external: has_verifier_external(&node.attrs),
+            is_cfg: has_any_cfg_attr(&node.attrs) || self.is_inside_cfg(),
         });
 
-        // Continue visiting nested items
         verus_syn::visit::visit_trait_item_fn(self, node);
     }
 
-    // Ensure we traverse into impl blocks
     fn visit_item_impl(&mut self, node: &'ast verus_syn::ItemImpl) {
-        // Visit all items in the impl block
+        let cfg_gated = has_any_cfg_attr(&node.attrs);
+        if cfg_gated {
+            self.inside_cfg_impl += 1;
+        }
         verus_syn::visit::visit_item_impl(self, node);
+        if cfg_gated {
+            self.inside_cfg_impl -= 1;
+        }
     }
 
-    // Ensure we traverse into trait definitions
     fn visit_item_trait(&mut self, node: &'ast verus_syn::ItemTrait) {
-        // Visit all items in the trait
         verus_syn::visit::visit_item_trait(self, node);
     }
 
-    // Ensure we traverse into modules
     fn visit_item_mod(&mut self, node: &'ast verus_syn::ItemMod) {
-        // Visit all items in the module
+        let cfg_gated = has_any_cfg_attr(&node.attrs);
+        if cfg_gated {
+            self.inside_cfg_mod += 1;
+        }
         verus_syn::visit::visit_item_mod(self, node);
+        if cfg_gated {
+            self.inside_cfg_mod -= 1;
+        }
     }
 
-    // Handle verus! and cfg_if! macro blocks by parsing their contents
     fn visit_item_macro(&mut self, node: &'ast ItemMacro) {
         if let Some(ident) = &node.mac.path.get_ident() {
             if *ident == "verus" {
-                // Try to parse the macro body as items
                 if let Ok(items) = verus_syn::parse2::<VerusMacroBody>(node.mac.tokens.clone()) {
                     self.inside_verus += 1;
                     for item in items.items {
@@ -348,19 +424,17 @@ impl<'ast> Visit<'ast> for FunctionSpanVisitor {
                     self.inside_verus -= 1;
                 }
             } else if *ident == "cfg_if" {
-                // Try to parse the cfg_if! macro body
-                // cfg_if! has syntax: if #[cfg(...)] { items } else if #[cfg(...)] { items } else { items }
-                // We want to extract items from ALL branches since all may contain function definitions
                 if let Ok(branches) = verus_syn::parse2::<CfgIfMacroBody>(node.mac.tokens.clone()) {
+                    self.inside_cfg_if += 1;
                     for items in branches.all_items {
                         for item in items {
                             self.visit_item(&item);
                         }
                     }
+                    self.inside_cfg_if -= 1;
                 }
             }
         }
-        // Continue with default traversal
         verus_syn::visit::visit_item_macro(self, node);
     }
 }
@@ -474,6 +548,12 @@ pub struct SpanAndMode {
     pub requires_range: Option<(usize, usize)>,
     /// Line range of ensures clause (start, end), if present
     pub ensures_range: Option<(usize, usize)>,
+    /// Whether the function has a body (false for bodiless trait declarations)
+    pub has_body: bool,
+    /// Whether `#[verifier::external]` (direct or via `cfg_attr`) is present
+    pub is_external: bool,
+    /// Whether the function or an enclosing item has `#[cfg(...)]`
+    pub is_cfg: bool,
 }
 
 /// Parse all source files in a project and build a lookup map.
@@ -506,6 +586,9 @@ pub fn build_function_span_map(
                         is_verus: func.is_verus,
                         requires_range: func.requires_range,
                         ensures_range: func.ensures_range,
+                        has_body: func.has_body,
+                        is_external: func.is_external,
+                        is_cfg: func.is_cfg,
                     },
                 );
             }
@@ -524,43 +607,48 @@ fn bare_function_name(function_name: &str) -> &str {
     function_name.rsplit("::").next().unwrap_or(function_name)
 }
 
-/// Get the end line for a function given its path, name, and start line.
+/// Look up a `SpanAndMode` entry by (path, name, line).
 ///
-/// If we can't find an exact match, we try to find a function with the same name
+/// Tries an exact key match first, then falls back to a containment match
 /// where the SCIP-reported start line falls within the parsed span.
-pub fn get_function_end_line(
-    span_map: &HashMap<(String, String, usize), SpanAndMode>,
+pub fn get_span_and_mode<'a>(
+    span_map: &'a HashMap<(String, String, usize), SpanAndMode>,
     relative_path: &str,
     function_name: &str,
     start_line: usize,
-) -> Option<usize> {
+) -> Option<&'a SpanAndMode> {
     let bare_name = bare_function_name(function_name);
 
-    // Try exact match first
     let key = (relative_path.to_string(), bare_name.to_string(), start_line);
-    if let Some(span_and_mode) = span_map.get(&key) {
-        return Some(span_and_mode.end_line);
+    if let Some(sam) = span_map.get(&key) {
+        return Some(sam);
     }
 
-    // Try containment match: find a function with the same name in the same file
-    // where the SCIP start_line falls within the parsed span [parsed_start, end_line].
-    // This works because verus_syn includes attributes/docs in the span, so the
-    // actual signature line (what SCIP reports) should be within that span.
-    for ((path, name, parsed_start), span_and_mode) in span_map.iter() {
-        if path == relative_path && name == bare_name {
-            // SCIP's start_line should be within [parsed_start, end_line]
-            if start_line >= *parsed_start && start_line <= span_and_mode.end_line {
-                return Some(span_and_mode.end_line);
-            }
+    for ((path, name, parsed_start), sam) in span_map.iter() {
+        if path == relative_path
+            && name == bare_name
+            && start_line >= *parsed_start
+            && start_line <= sam.end_line
+        {
+            return Some(sam);
         }
     }
 
     None
 }
 
+/// Get the end line for a function given its path, name, and start line.
+pub fn get_function_end_line(
+    span_map: &HashMap<(String, String, usize), SpanAndMode>,
+    relative_path: &str,
+    function_name: &str,
+    start_line: usize,
+) -> Option<usize> {
+    get_span_and_mode(span_map, relative_path, function_name, start_line).map(|sam| sam.end_line)
+}
+
 /// Get the declaration kind (exec, proof, spec) given its path, name, and start line.
 ///
-/// Uses the same lookup strategy as get_function_end_line.
 /// Returns `(kind, is_verus)` -- `is_verus` is true when the function was
 /// inside a `verus!{}` block.
 pub fn get_function_kind(
@@ -569,26 +657,8 @@ pub fn get_function_kind(
     function_name: &str,
     start_line: usize,
 ) -> Option<(DeclKind, bool)> {
-    let bare_name = bare_function_name(function_name);
-
-    // Try exact match first
-    let key = (relative_path.to_string(), bare_name.to_string(), start_line);
-    if let Some(span_and_mode) = span_map.get(&key) {
-        return Some((span_and_mode.kind, span_and_mode.is_verus));
-    }
-
-    // Try containment match
-    for ((path, name, parsed_start), span_and_mode) in span_map.iter() {
-        if path == relative_path
-            && name == bare_name
-            && start_line >= *parsed_start
-            && start_line <= span_and_mode.end_line
-        {
-            return Some((span_and_mode.kind, span_and_mode.is_verus));
-        }
-    }
-
-    None
+    get_span_and_mode(span_map, relative_path, function_name, start_line)
+        .map(|sam| (sam.kind, sam.is_verus))
 }
 
 /// Get the spec ranges (requires/ensures) for a function.
@@ -600,26 +670,9 @@ pub fn get_function_spec_ranges(
     function_name: &str,
     start_line: usize,
 ) -> SpecRanges {
-    let bare_name = bare_function_name(function_name);
-
-    // Try exact match first
-    let key = (relative_path.to_string(), bare_name.to_string(), start_line);
-    if let Some(span_and_mode) = span_map.get(&key) {
-        return (span_and_mode.requires_range, span_and_mode.ensures_range);
-    }
-
-    // Try containment match
-    for ((path, name, parsed_start), span_and_mode) in span_map.iter() {
-        if path == relative_path
-            && name == bare_name
-            && start_line >= *parsed_start
-            && start_line <= span_and_mode.end_line
-        {
-            return (span_and_mode.requires_range, span_and_mode.ensures_range);
-        }
-    }
-
-    (None, None)
+    get_span_and_mode(span_map, relative_path, function_name, start_line)
+        .map(|sam| (sam.requires_range, sam.ensures_range))
+        .unwrap_or((None, None))
 }
 
 /// Line range for spec text
@@ -670,6 +723,15 @@ pub struct FunctionInfo {
     /// Whether the function has #[verifier::external_body] attribute
     #[serde(default)]
     pub is_external_body: bool,
+    /// Whether the function has #[verifier::external] (direct or via cfg_attr)
+    #[serde(default)]
+    pub is_external: bool,
+    /// Whether the function has a body (false for bodiless trait declarations)
+    #[serde(default = "default_true")]
+    pub has_body: bool,
+    /// Whether the function or an enclosing item has #[cfg(...)]
+    #[serde(default)]
+    pub is_cfg: bool,
     /// Whether the function has #[verifier::exec_allows_no_decreases_clause] attribute
     #[serde(default)]
     pub has_no_decreases_attr: bool,
@@ -861,6 +923,12 @@ struct FunctionInfoVisitor {
     /// Whether we are currently inside an `impl Trait for Type` block.
     /// Trait impl methods are inherently public even without an explicit `pub` keyword.
     in_trait_impl: bool,
+    /// Depth counter: >0 when visiting inside a `#[cfg(...)]` impl block
+    inside_cfg_impl: usize,
+    /// Depth counter: >0 when visiting inside a `#[cfg(...)]` mod block
+    inside_cfg_mod: usize,
+    /// Depth counter: >0 when visiting inside a `cfg_if!` branch
+    inside_cfg_if: usize,
 }
 
 impl FunctionInfoVisitor {
@@ -886,6 +954,9 @@ impl FunctionInfoVisitor {
             include_extended_info: false,
             current_impl_type: None,
             in_trait_impl: false,
+            inside_cfg_impl: 0,
+            inside_cfg_mod: 0,
+            inside_cfg_if: 0,
         }
     }
 
@@ -1117,6 +1188,11 @@ impl FunctionInfoVisitor {
         }
     }
 
+    fn is_inside_cfg(&self) -> bool {
+        self.inside_cfg_impl > 0 || self.inside_cfg_mod > 0 || self.inside_cfg_if > 0
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn add_function(
         &mut self,
         name: String,
@@ -1125,6 +1201,7 @@ impl FunctionInfoVisitor {
         vis: &Visibility,
         attrs: &[Attribute],
         context: Option<String>,
+        has_body: bool,
     ) {
         if !self.should_include_function(sig) {
             return;
@@ -1156,6 +1233,8 @@ impl FunctionInfoVisitor {
         let has_trusted_assumption = self.has_trusted_assumption(start_line, end_line);
         let contains_admit = self.contains_admit(start_line, end_line);
         let is_external_body = has_verifier_attr(attrs, "external_body");
+        let is_external = has_verifier_external(attrs);
+        let is_cfg = has_any_cfg_attr(attrs) || self.is_inside_cfg();
         let has_no_decreases_attr = has_verifier_attr(attrs, "exec_allows_no_decreases_clause");
 
         // Extract spec text if requested
@@ -1249,6 +1328,9 @@ impl FunctionInfoVisitor {
             has_trusted_assumption,
             contains_admit,
             is_external_body,
+            is_external,
+            has_body,
+            is_cfg,
             has_no_decreases_attr,
             requires_text,
             ensures_text,
@@ -1265,7 +1347,7 @@ impl FunctionInfoVisitor {
             doc_comment,
             signature_text,
             body_text,
-            module_path: None, // Set later by parse_all_functions
+            module_path: None,
             fn_line,
         });
     }
@@ -1282,6 +1364,7 @@ impl<'ast> Visit<'ast> for FunctionInfoVisitor {
             &node.vis,
             &node.attrs,
             Some("standalone".to_string()),
+            true,
         );
         verus_syn::visit::visit_item_fn(self, node);
     }
@@ -1293,7 +1376,6 @@ impl<'ast> Visit<'ast> for FunctionInfoVisitor {
 
         let name = node.sig.ident.to_string();
         let span = node.span();
-        // Trait impl methods are inherently public even without an explicit `pub` keyword.
         let vis_public = Visibility::Public(verus_syn::token::Pub::default());
         let vis = if self.in_trait_impl {
             &vis_public
@@ -1307,6 +1389,7 @@ impl<'ast> Visit<'ast> for FunctionInfoVisitor {
             vis,
             &node.attrs,
             Some("impl".to_string()),
+            true,
         );
         verus_syn::visit::visit_impl_item_fn(self, node);
     }
@@ -1326,6 +1409,7 @@ impl<'ast> Visit<'ast> for FunctionInfoVisitor {
             &vis,
             &node.attrs,
             Some("trait".to_string()),
+            node.default.is_some(),
         );
         verus_syn::visit::visit_trait_item_fn(self, node);
     }
@@ -1356,7 +1440,14 @@ impl<'ast> Visit<'ast> for FunctionInfoVisitor {
             }
             self.current_impl_type = Some(cleaned);
         }
+        let cfg_gated = has_any_cfg_attr(&node.attrs);
+        if cfg_gated {
+            self.inside_cfg_impl += 1;
+        }
         verus_syn::visit::visit_item_impl(self, node);
+        if cfg_gated {
+            self.inside_cfg_impl -= 1;
+        }
         self.current_impl_type = prev_impl_type;
         self.in_trait_impl = prev_in_trait_impl;
     }
@@ -1371,7 +1462,14 @@ impl<'ast> Visit<'ast> for FunctionInfoVisitor {
     }
 
     fn visit_item_mod(&mut self, node: &'ast verus_syn::ItemMod) {
+        let cfg_gated = has_any_cfg_attr(&node.attrs);
+        if cfg_gated {
+            self.inside_cfg_mod += 1;
+        }
         verus_syn::visit::visit_item_mod(self, node);
+        if cfg_gated {
+            self.inside_cfg_mod -= 1;
+        }
     }
 
     fn visit_item_macro(&mut self, node: &'ast ItemMacro) {
@@ -1384,11 +1482,13 @@ impl<'ast> Visit<'ast> for FunctionInfoVisitor {
                 }
             } else if *ident == "cfg_if" {
                 if let Ok(branches) = verus_syn::parse2::<CfgIfMacroBody>(node.mac.tokens.clone()) {
+                    self.inside_cfg_if += 1;
                     for items in branches.all_items {
                         for item in items {
                             self.visit_item(&item);
                         }
                     }
+                    self.inside_cfg_if -= 1;
                 }
             }
         }
@@ -1939,6 +2039,9 @@ impl Bar {{
             has_trusted_assumption,
             contains_admit: false,
             is_external_body,
+            is_external: false,
+            has_body: true,
+            is_cfg: false,
             has_no_decreases_attr,
             requires_text: None,
             ensures_text: None,
@@ -2245,5 +2348,207 @@ verus! {{
             "Display should include trait: {}",
             aspec.path_display
         );
+    }
+
+    #[test]
+    fn test_cfg_attr_verifier_external_detection() {
+        let src = r#"
+verus! {
+    #[cfg_attr(verus_keep_ghost, verifier::external)]
+    pub fn gated_external() {}
+
+    #[verifier::external]
+    pub fn direct_external() {}
+
+    pub fn normal() {}
+}
+"#;
+        let parsed = verus_syn::parse_file(src).unwrap();
+
+        // Walk items inside verus! macro to test attribute helpers
+        let mut results: Vec<(String, bool, bool)> = Vec::new();
+        for item in &parsed.items {
+            if let verus_syn::Item::Macro(mac) = item {
+                let body: verus_syn::File = verus_syn::parse2(mac.mac.tokens.clone()).unwrap();
+                for inner in &body.items {
+                    if let verus_syn::Item::Fn(item_fn) = inner {
+                        let name = item_fn.sig.ident.to_string();
+                        let is_ext = has_verifier_external(&item_fn.attrs);
+                        let is_cfg = has_any_cfg_attr(&item_fn.attrs);
+                        results.push((name, is_ext, is_cfg));
+                    }
+                }
+            }
+        }
+
+        assert_eq!(results.len(), 3);
+
+        let (name, is_ext, is_cfg) = &results[0];
+        assert_eq!(name, "gated_external");
+        assert!(
+            is_ext,
+            "cfg_attr-wrapped verifier::external must be detected"
+        );
+        assert!(
+            !is_cfg,
+            "cfg_attr wrapping verifier::external is not a #[cfg] gate"
+        );
+
+        let (name, is_ext, is_cfg) = &results[1];
+        assert_eq!(name, "direct_external");
+        assert!(is_ext, "direct verifier::external must be detected");
+        assert!(!is_cfg);
+
+        let (name, is_ext, is_cfg) = &results[2];
+        assert_eq!(name, "normal");
+        assert!(!is_ext);
+        assert!(!is_cfg);
+    }
+
+    #[test]
+    fn test_has_body_trait_methods() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"
+trait Foo {{
+    fn bodiless(&self);
+    fn with_default(&self) {{}}
+}}
+"#
+        )
+        .unwrap();
+
+        let functions =
+            parse_file_for_functions(file.path(), true, true, true, true, false).unwrap();
+        let bodiless = functions.iter().find(|f| f.name == "bodiless").unwrap();
+        assert!(
+            !bodiless.has_body,
+            "bodiless trait method should have has_body=false"
+        );
+        let with_default = functions.iter().find(|f| f.name == "with_default").unwrap();
+        assert!(
+            with_default.has_body,
+            "default trait method should have has_body=true"
+        );
+    }
+
+    #[test]
+    fn test_is_external_and_cfg_on_function_info() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"
+verus! {{
+    #[verifier::external]
+    pub fn ext_fn() {{}}
+
+    #[cfg(feature = "alloc")]
+    pub fn cfg_fn() {{}}
+
+    pub fn plain() {{}}
+}}
+"#
+        )
+        .unwrap();
+
+        let functions =
+            parse_file_for_functions(file.path(), true, true, true, true, false).unwrap();
+
+        let ext = functions.iter().find(|f| f.name == "ext_fn").unwrap();
+        assert!(ext.is_external);
+        assert!(!ext.is_cfg);
+
+        let cfg = functions.iter().find(|f| f.name == "cfg_fn").unwrap();
+        assert!(!cfg.is_external);
+        assert!(cfg.is_cfg);
+
+        let plain = functions.iter().find(|f| f.name == "plain").unwrap();
+        assert!(!plain.is_external);
+        assert!(!plain.is_cfg);
+    }
+
+    #[test]
+    fn test_cfg_impl_propagation() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"
+struct Foo;
+
+#[cfg(feature = "alloc")]
+impl Foo {{
+    fn gated_method(&self) {{}}
+}}
+
+impl Foo {{
+    fn normal_method(&self) {{}}
+}}
+"#
+        )
+        .unwrap();
+
+        let functions =
+            parse_file_for_functions(file.path(), true, true, true, true, false).unwrap();
+
+        let gated = functions.iter().find(|f| f.name == "gated_method").unwrap();
+        assert!(
+            gated.is_cfg,
+            "method inside #[cfg] impl should inherit is_cfg"
+        );
+
+        let normal = functions
+            .iter()
+            .find(|f| f.name == "normal_method")
+            .unwrap();
+        assert!(!normal.is_cfg);
+    }
+
+    #[test]
+    fn test_has_body_is_external_is_cfg_on_spans() {
+        let file_content = r#"
+verus! {
+    #[verifier::external]
+    pub fn ext() {}
+
+    #[cfg(test)]
+    pub fn in_test() {}
+
+    pub fn normal() {}
+}
+
+trait Bar {
+    fn decl_only(&self);
+}
+"#;
+        let parsed = verus_syn::parse_file(file_content).unwrap();
+        let mut visitor = FunctionSpanVisitor::new();
+        visitor.visit_file(&parsed);
+
+        let ext = visitor.functions.iter().find(|f| f.name == "ext").unwrap();
+        assert!(ext.is_external);
+        assert!(ext.has_body);
+        assert!(!ext.is_cfg);
+
+        let in_test = visitor
+            .functions
+            .iter()
+            .find(|f| f.name == "in_test")
+            .unwrap();
+        assert!(!in_test.is_external);
+        assert!(in_test.is_cfg);
+        assert!(in_test.has_body);
+
+        let decl = visitor
+            .functions
+            .iter()
+            .find(|f| f.name == "decl_only")
+            .unwrap();
+        assert!(
+            !decl.has_body,
+            "bodiless trait fn should have has_body=false"
+        );
+        assert!(!decl.is_external);
+        assert!(!decl.is_cfg);
     }
 }

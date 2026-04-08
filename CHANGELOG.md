@@ -10,9 +10,18 @@ what constitutes a breaking change.
 
 ## [Unreleased]
 
+## [6.6.0] - 2026-04-08
+
 ### Added
 - **`is-public` and `is-public-api` fields on atoms**: New optional boolean fields on each atom indicating whether the function signature is unrestricted `pub` (`is-public`) and whether it is part of the crate's public API (`is-public-api`).  `spec fn` and `proof fn` always get `is-public-api: false` (erased at runtime). External stubs omit both fields. Module visibility is determined by walking `mod` declarations from `src/lib.rs` using `verus_syn`, applying the most-permissive rule for cfg-gated duplicate declarations to avoid false negatives.
+- **`has-body`, `is-external`, `is-cfg-gated` fields on atoms**: New optional boolean fields enabling categorization of which functions should be verified. `has-body` is `false` for bodiless trait method declarations; `is-external` detects `#[verifier::external]` (including via `#[cfg_attr(verus_keep_ghost, verifier::external)]`); `is-cfg-gated` is `true` when the function, its enclosing `impl` block, module, `cfg_if!` branch, or `mod` declaration has `#[cfg(...)]`. External stubs omit all three fields.
 - **Public API count in extract summary**: The unified merge step now prints the number of public API functions alongside the total function count.
+
+### Fixed
+- **Atomize fails with relative project paths**: `verus-analyzer scip` failed with "No such file or directory" when `extract`/`atomize` was invoked with a relative project path (e.g., `../my-project/`). The `verus_keep_ghost` config file path was relative to the parent process's CWD but passed to verus-analyzer running with a different CWD. Fixed by canonicalizing the config path to an absolute path before passing it to the child process.
+
+### Changed
+- **Refactored Rust toolchain install logic**: Extracted `install_rust_toolchain_info` from `ensure_rust_toolchain` and `print_toolchain_install_status` helper in the tool manager, decoupling the install step from Verus-specific version resolution.
 
 ## [6.5.1] - 2026-04-07
 

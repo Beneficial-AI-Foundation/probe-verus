@@ -266,6 +266,9 @@ mod tests {
             rust_qualified_name: None,
             is_public: None,
             is_public_api: None,
+            has_body: None,
+            is_external: None,
+            is_cfg_gated: None,
         }
     }
 

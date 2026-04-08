@@ -245,6 +245,25 @@ pub struct AtomWithLines {
         default
     )]
     pub is_public_api: Option<bool>,
+    /// Whether the function has a body.
+    /// `false` for bodiless trait method declarations; `true` otherwise.
+    #[serde(rename = "has-body", skip_serializing_if = "Option::is_none", default)]
+    pub has_body: Option<bool>,
+    /// Whether `#[verifier::external]` (direct or via `cfg_attr`) is present.
+    #[serde(
+        rename = "is-external",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    pub is_external: Option<bool>,
+    /// Whether the function or an enclosing item (impl, mod, cfg_if branch,
+    /// or the module's `mod` declaration) has `#[cfg(...)]`.
+    #[serde(
+        rename = "is-cfg-gated",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    pub is_cfg_gated: Option<bool>,
 }
 
 /// Unified atom: all `AtomWithLines` fields plus optional verification, specification,
@@ -1166,7 +1185,7 @@ pub fn convert_to_atoms_with_parsed_spans(
     symbol_to_display_name: &HashMap<String, String>,
     project_root: &Path,
     with_locations: bool,
-    file_module_pub: &HashMap<String, bool>,
+    file_module_pub: &HashMap<String, ModuleInfo>,
     is_library: bool,
 ) -> Vec<AtomWithLines> {
     // Collect all unique relative paths
@@ -1200,7 +1219,7 @@ fn convert_to_atoms_with_lines_internal(
     symbol_to_display_name: &HashMap<String, String>,
     span_map: Option<&HashMap<(String, String, usize), verus_parser::SpanAndMode>>,
     with_locations: bool,
-    file_module_pub: &HashMap<String, bool>,
+    file_module_pub: &HashMap<String, ModuleInfo>,
     is_library: bool,
 ) -> Vec<AtomWithLines> {
     // === Phase 1: Compute line ranges and base code_names for all nodes ===
@@ -1216,6 +1235,9 @@ fn convert_to_atoms_with_lines_internal(
         requires_range: Option<(usize, usize)>,
         /// Line range of ensures clause, if present
         ensures_range: Option<(usize, usize)>,
+        has_body: bool,
+        is_external: bool,
+        is_cfg: bool,
     }
 
     let node_data: Vec<NodeData> = call_graph
@@ -1227,55 +1249,41 @@ fn convert_to_atoms_with_lines_internal(
                 0
             };
 
-            let lines_end = if let Some(map) = span_map {
-                verus_parser::get_function_end_line(
+            let sam = span_map.and_then(|map| {
+                verus_parser::get_span_and_mode(
                     map,
                     &node.relative_path,
                     &node.display_name,
                     lines_start,
                 )
-                .unwrap_or(lines_start)
-            } else {
-                match node.range.len() {
+            });
+
+            let lines_end = sam
+                .map(|s| s.end_line)
+                .unwrap_or_else(|| match node.range.len() {
                     4 => node.range[2] as usize + 1,
                     _ => lines_start,
-                }
-            };
+                });
 
-            // Get kind from span_map (defaults to Exec if not found).
-            // Language is derived from kind: exec functions are Rust (even
-            // when inside `verus!{}` blocks with specs), while spec and proof
-            // functions are Verus-only constructs.
-            let (kind, language) = if let Some(map) = span_map {
-                match verus_parser::get_function_kind(
-                    map,
-                    &node.relative_path,
-                    &node.display_name,
-                    lines_start,
-                ) {
-                    Some((k, _)) => {
-                        let lang = if k == DeclKind::Exec { "rust" } else { "verus" };
-                        (k, lang.to_string())
-                    }
-                    None => (DeclKind::Exec, "rust".to_string()),
-                }
-            } else {
-                (DeclKind::Exec, "rust".to_string())
-            };
+            let (kind, language) = sam
+                .map(|s| {
+                    let lang = if s.kind == DeclKind::Exec {
+                        "rust"
+                    } else {
+                        "verus"
+                    };
+                    (s.kind, lang.to_string())
+                })
+                .unwrap_or((DeclKind::Exec, "rust".to_string()));
 
-            // Get spec ranges (requires/ensures line ranges)
-            let (requires_range, ensures_range) = if let Some(map) = span_map {
-                verus_parser::get_function_spec_ranges(
-                    map,
-                    &node.relative_path,
-                    &node.display_name,
-                    lines_start,
-                )
-            } else {
-                (None, None)
-            };
+            let (requires_range, ensures_range) = sam
+                .map(|s| (s.requires_range, s.ensures_range))
+                .unwrap_or((None, None));
 
-            // Generate base code_name WITHOUT line number
+            let has_body = sam.map(|s| s.has_body).unwrap_or(true);
+            let is_external = sam.map(|s| s.is_external).unwrap_or(false);
+            let is_cfg = sam.map(|s| s.is_cfg).unwrap_or(false);
+
             let base_code_name = symbol_to_code_name(
                 &node.symbol,
                 &node.display_name,
@@ -1292,6 +1300,9 @@ fn convert_to_atoms_with_lines_internal(
                 language,
                 requires_range,
                 ensures_range,
+                has_body,
+                is_external,
+                is_cfg,
             }
         })
         .collect();
@@ -1589,6 +1600,10 @@ fn convert_to_atoms_with_lines_internal(
                     .then_with(|| a.code_name.cmp(&b.code_name))
             });
             let sig_public = is_signature_public(&data.node.signature_text);
+            let module_cfg = file_module_pub
+                .get(&data.node.relative_path)
+                .map(|mi| mi.is_cfg)
+                .unwrap_or(false);
             AtomWithLines {
                 display_name: data.node.display_name.clone(),
                 code_name,
@@ -1611,6 +1626,9 @@ fn convert_to_atoms_with_lines_internal(
                     file_module_pub,
                     is_library,
                 ),
+                has_body: Some(data.has_body),
+                is_external: Some(data.is_external),
+                is_cfg_gated: Some(data.is_cfg || module_cfg),
             }
         })
         .collect()
@@ -1713,10 +1731,21 @@ pub fn is_library_crate(project_path: &Path) -> bool {
     project_path.join("src/lib.rs").exists()
 }
 
-/// Build a map from relative file path to "all ancestor modules are pub".
+/// Module-level metadata: visibility chain and cfg status.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ModuleInfo {
+    /// Whether every ancestor module up to the crate root is unrestricted `pub`.
+    pub is_pub_chain: bool,
+    /// Whether the module's `mod` declaration (or any ancestor's) has `#[cfg(...)]`.
+    pub is_cfg: bool,
+}
+
+/// Build a map from relative file path to module-level metadata.
 ///
 /// Walks `mod` declarations starting from `src/lib.rs` (or `src/main.rs`),
-/// recording whether each module is declared with unrestricted `pub`.
+/// recording for each file whether all ancestor modules are `pub` and whether
+/// any ancestor has `#[cfg(...)]`.
+///
 /// The map keys are relative file paths (e.g., `"src/scalar.rs"`) matching
 /// the `code_path` field on atoms.
 ///
@@ -1724,7 +1753,7 @@ pub fn is_library_crate(project_path: &Path) -> bool {
 /// `pub(crate) mod backend`), uses the **most permissive** visibility to
 /// avoid false negatives.
 #[must_use]
-pub fn build_module_visibility_map(project_path: &Path) -> HashMap<String, bool> {
+pub fn build_module_visibility_map(project_path: &Path) -> HashMap<String, ModuleInfo> {
     let mut map = HashMap::new();
 
     let src_dir = project_path.join("src");
@@ -1739,12 +1768,17 @@ pub fn build_module_visibility_map(project_path: &Path) -> HashMap<String, bool>
         return map;
     };
 
-    // The entry file itself is always reachable (it IS the crate root).
     if let Ok(rel) = entry.strip_prefix(project_path) {
-        map.insert(rel.to_string_lossy().to_string(), true);
+        map.insert(
+            rel.to_string_lossy().to_string(),
+            ModuleInfo {
+                is_pub_chain: true,
+                is_cfg: false,
+            },
+        );
     }
 
-    walk_mod_declarations(project_path, &entry, true, &mut map);
+    walk_mod_declarations(project_path, &entry, true, false, &mut map);
     map
 }
 
@@ -1752,11 +1786,13 @@ pub fn build_module_visibility_map(project_path: &Path) -> HashMap<String, bool>
 ///
 /// `parent_chain_pub` indicates whether every ancestor module up to and
 /// including this file's own module is unrestricted `pub`.
+/// `parent_chain_cfg` indicates whether any ancestor has `#[cfg(...)]`.
 fn walk_mod_declarations(
     project_path: &Path,
     file_path: &Path,
     parent_chain_pub: bool,
-    map: &mut HashMap<String, bool>,
+    parent_chain_cfg: bool,
+    map: &mut HashMap<String, ModuleInfo>,
 ) {
     let content = match std::fs::read_to_string(file_path) {
         Ok(c) => c,
@@ -1774,18 +1810,15 @@ fn walk_mod_declarations(
         if let verus_syn::Item::Mod(item_mod) = item {
             let mod_name = item_mod.ident.to_string();
             let is_pub_unrestricted = matches!(item_mod.vis, verus_syn::Visibility::Public(_));
+            let mod_has_cfg = verus_parser::has_any_cfg_attr_pub(&item_mod.attrs);
 
             let chain_pub = parent_chain_pub && is_pub_unrestricted;
+            let chain_cfg = parent_chain_cfg || mod_has_cfg;
 
             if item_mod.content.is_some() {
-                // Inline module — no separate file, but record that the
-                // containing file has this module path.  We don't create a
-                // separate map entry for inline modules because atoms use
-                // the *file* path as their code_path.
                 continue;
             }
 
-            // External module — resolve to file
             let mod_file = file_dir.join(format!("{mod_name}.rs"));
             let mod_dir_file = file_dir.join(&mod_name).join("mod.rs");
 
@@ -1800,11 +1833,19 @@ fn walk_mod_declarations(
             if let Some(ref path) = resolved {
                 if let Ok(rel) = path.strip_prefix(project_path) {
                     let key = rel.to_string_lossy().to_string();
-                    // Most permissive: if any declaration is pub, treat as pub
-                    let existing = map.get(&key).copied().unwrap_or(false);
-                    map.insert(key, existing || chain_pub);
+                    let existing = map.get(&key).copied().unwrap_or(ModuleInfo {
+                        is_pub_chain: false,
+                        is_cfg: false,
+                    });
+                    map.insert(
+                        key,
+                        ModuleInfo {
+                            is_pub_chain: existing.is_pub_chain || chain_pub,
+                            is_cfg: existing.is_cfg || chain_cfg,
+                        },
+                    );
                 }
-                walk_mod_declarations(project_path, path, chain_pub, map);
+                walk_mod_declarations(project_path, path, chain_pub, chain_cfg, map);
             }
         }
     }
@@ -1824,7 +1865,7 @@ pub fn classify_public_api(
     is_public: bool,
     code_path: &str,
     kind: DeclKind,
-    file_module_pub: &HashMap<String, bool>,
+    file_module_pub: &HashMap<String, ModuleInfo>,
     is_library: bool,
 ) -> Option<bool> {
     if code_path.is_empty() {
@@ -1839,7 +1880,12 @@ pub fn classify_public_api(
     if !is_public {
         return Some(false);
     }
-    Some(file_module_pub.get(code_path).copied().unwrap_or(false))
+    Some(
+        file_module_pub
+            .get(code_path)
+            .map(|mi| mi.is_pub_chain)
+            .unwrap_or(false),
+    )
 }
 
 /// Backfill atoms from `verus_parser` for functions that SCIP missed.
@@ -1855,7 +1901,7 @@ pub fn backfill_atoms_from_parser(
     atoms_dict: &mut BTreeMap<String, AtomWithLines>,
     pkg_name: &str,
     pkg_version: &str,
-    file_module_pub: &HashMap<String, bool>,
+    file_module_pub: &HashMap<String, ModuleInfo>,
     is_library: bool,
 ) -> usize {
     let src_dir = project_path.join("src");
@@ -1965,6 +2011,15 @@ pub fn backfill_atoms_from_parser(
                     file_module_pub,
                     is_library,
                 ),
+                has_body: Some(fi.has_body),
+                is_external: Some(fi.is_external),
+                is_cfg_gated: Some(
+                    fi.is_cfg
+                        || file_module_pub
+                            .get(&code_path)
+                            .map(|mi| mi.is_cfg)
+                            .unwrap_or(false),
+                ),
             },
         );
         if !is_replacement {
@@ -2026,6 +2081,9 @@ pub fn add_external_stubs(atoms_dict: &mut BTreeMap<String, AtomWithLines>) -> u
                 rust_qualified_name: None,
                 is_public: None,
                 is_public_api: None,
+                has_body: None,
+                is_external: None,
+                is_cfg_gated: None,
             },
         );
     }
@@ -2281,6 +2339,9 @@ mod tests {
                 rust_qualified_name: None,
                 is_public: None,
                 is_public_api: None,
+                has_body: None,
+                is_external: None,
+                is_cfg_gated: None,
             },
         );
 
@@ -2321,6 +2382,9 @@ mod tests {
                 rust_qualified_name: None,
                 is_public: None,
                 is_public_api: None,
+                has_body: None,
+                is_external: None,
+                is_cfg_gated: None,
             },
         );
         atoms_dict.insert(
@@ -2341,6 +2405,9 @@ mod tests {
                 rust_qualified_name: None,
                 is_public: None,
                 is_public_api: None,
+                has_body: None,
+                is_external: None,
+                is_cfg_gated: None,
             },
         );
 
@@ -2396,6 +2463,9 @@ mod tests {
             rust_qualified_name: None,
             is_public: None,
             is_public_api: None,
+            has_body: None,
+            is_external: None,
+            is_cfg_gated: None,
         };
         let json = serde_json::to_value(&atom).unwrap();
         assert_eq!(json["language"], "rust");
@@ -2508,6 +2578,9 @@ mod tests {
             rust_qualified_name: Some("my_crate::field::reduce".to_string()),
             is_public: None,
             is_public_api: None,
+            has_body: None,
+            is_external: None,
+            is_cfg_gated: None,
         };
         let json = serde_json::to_value(&atom).unwrap();
         assert_eq!(json["rust-qualified-name"], "my_crate::field::reduce");
@@ -2531,6 +2604,9 @@ mod tests {
             rust_qualified_name: None,
             is_public: None,
             is_public_api: None,
+            has_body: None,
+            is_external: None,
+            is_cfg_gated: None,
         };
         let json = serde_json::to_value(&atom).unwrap();
         assert!(json.get("rust-qualified-name").is_none());
@@ -2602,10 +2678,17 @@ mod tests {
         );
     }
 
+    fn mi(is_pub: bool) -> ModuleInfo {
+        ModuleInfo {
+            is_pub_chain: is_pub,
+            is_cfg: false,
+        }
+    }
+
     #[test]
     fn test_classify_public_api_spec_fn() {
         let mut map = HashMap::new();
-        map.insert("src/lib.rs".to_string(), true);
+        map.insert("src/lib.rs".to_string(), mi(true));
         assert_eq!(
             classify_public_api(true, "src/lib.rs", DeclKind::Spec, &map, true),
             Some(false)
@@ -2615,7 +2698,7 @@ mod tests {
     #[test]
     fn test_classify_public_api_proof_fn() {
         let mut map = HashMap::new();
-        map.insert("src/lib.rs".to_string(), true);
+        map.insert("src/lib.rs".to_string(), mi(true));
         assert_eq!(
             classify_public_api(true, "src/lib.rs", DeclKind::Proof, &map, true),
             Some(false)
@@ -2625,7 +2708,7 @@ mod tests {
     #[test]
     fn test_classify_public_api_private_fn() {
         let mut map = HashMap::new();
-        map.insert("src/lib.rs".to_string(), true);
+        map.insert("src/lib.rs".to_string(), mi(true));
         assert_eq!(
             classify_public_api(false, "src/lib.rs", DeclKind::Exec, &map, true),
             Some(false)
@@ -2635,7 +2718,7 @@ mod tests {
     #[test]
     fn test_classify_public_api_pub_exec_in_pub_module() {
         let mut map = HashMap::new();
-        map.insert("src/scalar.rs".to_string(), true);
+        map.insert("src/scalar.rs".to_string(), mi(true));
         assert_eq!(
             classify_public_api(true, "src/scalar.rs", DeclKind::Exec, &map, true),
             Some(true)
@@ -2645,7 +2728,7 @@ mod tests {
     #[test]
     fn test_classify_public_api_pub_exec_in_private_module() {
         let mut map = HashMap::new();
-        map.insert("src/internal.rs".to_string(), false);
+        map.insert("src/internal.rs".to_string(), mi(false));
         assert_eq!(
             classify_public_api(true, "src/internal.rs", DeclKind::Exec, &map, true),
             Some(false)
@@ -2724,10 +2807,16 @@ mod tests {
             rust_qualified_name: None,
             is_public: Some(true),
             is_public_api: Some(true),
+            has_body: Some(true),
+            is_external: Some(false),
+            is_cfg_gated: Some(false),
         };
         let json = serde_json::to_value(&atom).unwrap();
         assert_eq!(json["is-public"], true);
         assert_eq!(json["is-public-api"], true);
+        assert_eq!(json["has-body"], true);
+        assert_eq!(json["is-external"], false);
+        assert_eq!(json["is-cfg-gated"], false);
     }
 
     #[test]
@@ -2748,6 +2837,9 @@ mod tests {
             rust_qualified_name: None,
             is_public: None,
             is_public_api: None,
+            has_body: None,
+            is_external: None,
+            is_cfg_gated: None,
         };
         let json = serde_json::to_value(&atom).unwrap();
         assert!(json.get("is-public").is_none());
@@ -2785,9 +2877,15 @@ mod tests {
 
         let map = build_module_visibility_map(dir.path());
 
-        assert_eq!(map.get("src/lib.rs"), Some(&true));
-        assert_eq!(map.get("src/scalar.rs"), Some(&true));
-        assert_eq!(map.get("src/internal.rs"), Some(&false));
+        let lib = map.get("src/lib.rs").unwrap();
+        assert!(lib.is_pub_chain);
+        assert!(!lib.is_cfg);
+        let scalar = map.get("src/scalar.rs").unwrap();
+        assert!(scalar.is_pub_chain);
+        assert!(!scalar.is_cfg);
+        let internal = map.get("src/internal.rs").unwrap();
+        assert!(!internal.is_pub_chain);
+        assert!(!internal.is_cfg);
     }
 
     #[test]
@@ -2802,9 +2900,9 @@ mod tests {
 
         let map = build_module_visibility_map(dir.path());
 
-        assert_eq!(map.get("src/lib.rs"), Some(&true));
-        assert_eq!(map.get("src/backend/mod.rs"), Some(&true));
-        assert_eq!(map.get("src/backend/serial.rs"), Some(&true));
+        assert!(map.get("src/lib.rs").unwrap().is_pub_chain);
+        assert!(map.get("src/backend/mod.rs").unwrap().is_pub_chain);
+        assert!(map.get("src/backend/serial.rs").unwrap().is_pub_chain);
     }
 
     #[test]
@@ -2819,11 +2917,35 @@ mod tests {
 
         let map = build_module_visibility_map(dir.path());
 
-        assert_eq!(map.get("src/internal/mod.rs"), Some(&false));
-        assert_eq!(
-            map.get("src/internal/deep.rs"),
-            Some(&false),
+        assert!(!map.get("src/internal/mod.rs").unwrap().is_pub_chain);
+        assert!(
+            !map.get("src/internal/deep.rs").unwrap().is_pub_chain,
             "deep is pub but its parent is not, so chain is broken"
         );
+    }
+
+    #[test]
+    fn test_build_module_visibility_map_cfg_tracking() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+
+        std::fs::write(
+            src.join("lib.rs"),
+            "pub mod normal;\n#[cfg(feature = \"alloc\")]\npub mod gated;\n",
+        )
+        .unwrap();
+        std::fs::write(src.join("normal.rs"), "").unwrap();
+        std::fs::write(src.join("gated.rs"), "").unwrap();
+
+        let map = build_module_visibility_map(dir.path());
+
+        let normal = map.get("src/normal.rs").unwrap();
+        assert!(normal.is_pub_chain);
+        assert!(!normal.is_cfg);
+
+        let gated = map.get("src/gated.rs").unwrap();
+        assert!(gated.is_pub_chain);
+        assert!(gated.is_cfg, "cfg-gated module should have is_cfg=true");
     }
 }

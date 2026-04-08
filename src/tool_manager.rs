@@ -855,19 +855,10 @@ fn parse_rust_toolchain_toml(content: &str) -> Option<RustToolchainInfo> {
     })
 }
 
-/// Ensure the Rust toolchain required by a Verus release is installed.
+/// Install a Rust toolchain from a parsed `RustToolchainInfo`.
 ///
-/// Fetches the `rust-toolchain.toml` from the Verus release tag, then runs
-/// `rustup toolchain install` and `rustup component add` as needed.
-pub fn ensure_rust_toolchain(verus_version: &str) -> Result<RustToolchainInfo, String> {
-    let info = fetch_verus_rust_toolchain(verus_version)
-        .ok_or_else(|| format!("could not fetch rust-toolchain.toml for Verus {verus_version}"))?;
-
-    eprintln!(
-        "Verus {verus_version} requires Rust toolchain: {}",
-        info.channel
-    );
-
+/// Runs `rustup toolchain install` and `rustup component add` as needed.
+pub fn install_rust_toolchain_info(info: &RustToolchainInfo) -> Result<(), String> {
     let rustup_ok = Command::new("rustup")
         .arg("--version")
         .stdout(Stdio::null())
@@ -911,6 +902,23 @@ pub fn ensure_rust_toolchain(verus_version: &str) -> Result<RustToolchainInfo, S
     }
 
     eprintln!("Rust toolchain {} is ready.", info.channel);
+    Ok(())
+}
+
+/// Ensure the Rust toolchain required by a Verus release is installed.
+///
+/// Fetches the `rust-toolchain.toml` from the Verus release tag, then runs
+/// `rustup toolchain install` and `rustup component add` as needed.
+pub fn ensure_rust_toolchain(verus_version: &str) -> Result<RustToolchainInfo, String> {
+    let info = fetch_verus_rust_toolchain(verus_version)
+        .ok_or_else(|| format!("could not fetch rust-toolchain.toml for Verus {verus_version}"))?;
+
+    eprintln!(
+        "Verus {verus_version} requires Rust toolchain: {}",
+        info.channel
+    );
+
+    install_rust_toolchain_info(&info)?;
     Ok(info)
 }
 
@@ -946,6 +954,26 @@ pub fn tool_status(tool: Tool) -> ToolStatus {
         managed_path: mp,
         path_location: pp,
         install_version,
+    }
+}
+
+/// Check and print whether a Rust toolchain is installed via rustup.
+fn print_toolchain_install_status(channel: &str) {
+    let rustup_has = Command::new("rustup")
+        .args(["run", channel, "rustc", "--version"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .ok()
+        .filter(|o| o.status.success());
+    match rustup_has {
+        Some(output) => {
+            let ver = String::from_utf8_lossy(&output.stdout);
+            println!("  Installed: {}", ver.trim());
+        }
+        None => {
+            println!("  Status: NOT INSTALLED (run `probe-verus setup` to install)");
+        }
     }
 }
 
@@ -990,22 +1018,7 @@ pub fn print_status() {
             "Rust toolchain required by Verus {}: {}",
             verus_resolved.tag, tc.channel
         );
-        let rustup_has = Command::new("rustup")
-            .args(["run", &tc.channel, "rustc", "--version"])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .output()
-            .ok()
-            .filter(|o| o.status.success());
-        match rustup_has {
-            Some(output) => {
-                let ver = String::from_utf8_lossy(&output.stdout);
-                println!("  Installed: {}", ver.trim());
-            }
-            None => {
-                println!("  Status: NOT INSTALLED (run `probe-verus setup` to install)");
-            }
-        }
+        print_toolchain_install_status(&tc.channel);
         println!();
     }
 

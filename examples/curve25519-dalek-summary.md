@@ -10,7 +10,7 @@ FILE=examples/verus_curve25519-dalek_4.1.3.json
 ```
 
 Functions that Verus processes receive a `verification-status` field
-(`verified`, `trusted`, or `unverified`). Functions outside Verus's scope
+(`verified`, `trusted`, `unverified`, or `failed`). Functions outside Verus's scope
 (feature-gated ecosystem trait impls, `#[verifier::external]` originals,
 test helpers, bodyless trait declarations) have no `verification-status`.
 The ratios below use `verification-status != null` as the denominator so
@@ -147,6 +147,55 @@ jq '[.data | to_entries[] | select(.value."verification-status" == "trusted")] |
 
 ---
 
+## 6. Out-of-scope pub exec functions (4-category breakdown)
+
+**79** `pub fn` exec functions have no `verification-status`. Using the new
+`has-body`, `is-external`, and `is-cfg-gated` fields (added in v6.6.0), these
+are categorized as follows:
+
+| Category | Count | Description |
+|----------|------:|-------------|
+| Bodiless trait declarations | 5 | Trait methods with no default body (`has-body: false`) |
+| `#[verifier::external]` | 8 | Explicitly excluded from verification |
+| Feature/cfg-gated | 62 | Under `#[cfg(...)]` — not compiled during verification |
+| Other (trait default methods) | 4 | Trait default methods in `src/traits.rs` that delegate to other methods |
+| **Total** | **79** | |
+
+The 4 "other" functions are all thin delegation methods defined as trait
+defaults in `src/traits.rs` (`BasepointTable::mul_base_clamped`,
+`VartimeMultiscalarMul::vartime_multiscalar_mul`,
+`VartimePrecomputedMultiscalarMul::vartime_multiscalar_mul`,
+`VartimePrecomputedMultiscalarMul::vartime_mixed_multiscalar_mul`).
+They are not processed by Verus because they are trait default methods,
+not `impl` methods.
+
+```bash
+# Total pub exec without verification-status
+jq '[.data | to_entries[] | select(.value.kind == "exec" and .value."is-public" == true and .value."verification-status" == null)] | length' "$FILE"
+# => 79
+
+# Cat 1: Bodiless trait declarations
+jq '[.data | to_entries[] | select(.value.kind == "exec" and .value."is-public" == true and .value."verification-status" == null and .value."has-body" == false)] | length' "$FILE"
+# => 5
+
+# Cat 2: External (verifier::external), excluding bodiless
+jq '[.data | to_entries[] | select(.value.kind == "exec" and .value."is-public" == true and .value."verification-status" == null and .value."has-body" != false and .value."is-external" == true)] | length' "$FILE"
+# => 8
+
+# Cat 3: Cfg-gated (not external, not bodiless)
+jq '[.data | to_entries[] | select(.value.kind == "exec" and .value."is-public" == true and .value."verification-status" == null and .value."has-body" != false and .value."is-external" != true and .value."is-cfg-gated" == true)] | length' "$FILE"
+# => 62
+
+# Cat 4: Other (none of the above)
+jq '[.data | to_entries[] | select(.value.kind == "exec" and .value."is-public" == true and .value."verification-status" == null and .value."has-body" != false and .value."is-external" != true and .value."is-cfg-gated" != true)] | length' "$FILE"
+# => 4
+
+# List the "other" functions
+jq -r '.data | to_entries[] | select(.value.kind == "exec" and .value."is-public" == true and .value."verification-status" == null and .value."has-body" != false and .value."is-external" != true and .value."is-cfg-gated" != true) | "\(.value."display-name")\t\(.value."code-path")"' "$FILE" | sort
+```
+
+---
+
 ## Summary
 
 | Metric | Verified | Trusted | In-scope | % (v+t) |
@@ -156,9 +205,9 @@ jq '[.data | to_entries[] | select(.value."verification-status" == "trusted")] |
 | Public API exec | 93 | 29 | 122 | 100% |
 
 "In-scope" = functions with a `verification-status` (i.e., Verus processed
-them). Functions outside scope (79 pub exec with no status) are feature-gated
-ecosystem trait impls, `#[verifier::external]` originals, test helpers, and
-trait declarations.
+them). The 79 pub exec functions outside scope break down as:
+5 bodiless trait declarations, 8 `#[verifier::external]`, 62 feature/cfg-gated,
+and 4 trait default methods (see section 6).
 
 | Trust base | Count |
 |------------|------:|

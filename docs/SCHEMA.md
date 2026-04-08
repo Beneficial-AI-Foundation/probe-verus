@@ -1,6 +1,6 @@
 # probe-verus Data Schemas
 
-Version: 6.5.0
+Version: 6.6.0
 Date: 2026-04-07
 
 This document specifies the concrete JSON `data` payloads produced by each
@@ -94,7 +94,10 @@ probe:core/https://github.com/rust-lang/rust/library/core/option/impl#map()
     "kind": "exec",
     "language": "rust",
     "is-public": true,
-    "is-public-api": true
+    "is-public-api": true,
+    "has-body": true,
+    "is-external": false,
+    "is-cfg-gated": false
   }
 }
 ```
@@ -113,6 +116,9 @@ probe:core/https://github.com/rust-lang/rust/library/core/option/impl#map()
 | `language` | string | yes | `"rust"` for `exec` atoms, `"verus"` for `proof`/`spec` atoms (derived from `kind`, not lexical scope; see [P20]) |
 | `is-public` | boolean | no | Whether the function signature starts with unrestricted `pub` (absent for external stubs) |
 | `is-public-api` | boolean | no | Whether the function is reachable from outside the crate: `pub fn` + all ancestor modules `pub` + exec kind + library crate.  `spec fn` and `proof fn` always get `false` (erased at runtime). Absent for external stubs. |
+| `has-body` | boolean | no | Whether the function has a body. `false` for bodiless trait method declarations; `true` otherwise. Absent for external stubs. |
+| `is-external` | boolean | no | Whether `#[verifier::external]` is present (directly or via `#[cfg_attr(verus_keep_ghost, verifier::external)]`). Absent for external stubs. |
+| `is-cfg-gated` | boolean | no | Whether the function or any enclosing item (impl block, module, `cfg_if!` branch, or the module's `mod` declaration) has `#[cfg(...)]`. Absent for external stubs. |
 
 #### Limitation: `is-public-api` and trait implementation methods
 
@@ -149,7 +155,7 @@ Only present when `--with-locations` is passed to `atomize`.
 
 Functions called as dependencies but defined outside the workspace get stub
 entries with `code-path: ""` and `code-text: {"lines-start": 0, "lines-end": 0}`.
-`is-public` and `is-public-api` are absent on external stubs.
+`is-public`, `is-public-api`, `has-body`, `is-external`, and `is-cfg-gated` are absent on external stubs.
 
 ---
 
@@ -465,6 +471,9 @@ are always written alongside it in `<project>/.verilib/probes/`.
     "language": "rust",
     "is-public": true,
     "is-public-api": true,
+    "has-body": true,
+    "is-external": false,
+    "is-cfg-gated": false,
     "primary-spec": "requires\n    x > 0,\n    y < 100\nensures\n    result > x",
     "is-disabled": false,
     "verification-status": "verified",
@@ -481,6 +490,9 @@ are always written alongside it in `<project>/.verilib/probes/`.
     "language": "rust",
     "is-public": false,
     "is-public-api": false,
+    "has-body": true,
+    "is-external": false,
+    "is-cfg-gated": false,
     "primary-spec": "",
     "is-disabled": true
   },
@@ -494,6 +506,9 @@ are always written alongside it in `<project>/.verilib/probes/`.
     "language": "verus",
     "is-public": true,
     "is-public-api": false,
+    "has-body": true,
+    "is-external": false,
+    "is-cfg-gated": false,
     "primary-spec": "ensures\n    foo_property(x)",
     "is-disabled": false,
     "verification-status": "trusted",

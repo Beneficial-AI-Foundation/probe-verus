@@ -21,6 +21,9 @@
         }
       ],
       "display-name": "checked_add",
+      "has-body": true,
+      "is-cfg-gated": false,
+      "is-external": false,
       "is-public": false,
       "is-public-api": false,
       "kind": "exec",
@@ -54,6 +57,9 @@
         }
       ],
       "display-name": "double_checked",
+      "has-body": true,
+      "is-cfg-gated": false,
+      "is-external": false,
       "is-public": false,
       "is-public-api": false,
       "kind": "exec",
@@ -68,6 +74,9 @@
       },
       "dependencies": [],
       "display-name": "is_positive",
+      "has-body": true,
+      "is-cfg-gated": false,
+      "is-external": false,
       "is-public": false,
       "is-public-api": false,
       "kind": "exec",
@@ -104,6 +113,9 @@
         }
       ],
       "display-name": "positive_sum",
+      "has-body": true,
+      "is-cfg-gated": false,
+      "is-external": false,
       "is-public": false,
       "is-public-api": false,
       "kind": "exec",
@@ -119,10 +131,10 @@
     "package-version": "0.1.0",
     "repo": ""
   },
-  "timestamp": "2026-04-07T19:12:11Z",
+  "timestamp": "2026-04-08T09:36:17Z",
   "tool": {
     "command": "extract",
     "name": "probe-verus",
-    "version": "6.5.1"
+    "version": "6.6.0"
   }
 }

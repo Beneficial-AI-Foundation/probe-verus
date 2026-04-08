@@ -9,66 +9,96 @@ All queries below use `jq` on the extract JSON:
 FILE=examples/verus_curve25519-dalek_4.1.3.json
 ```
 
+Functions that Verus processes receive a `verification-status` field
+(`verified`, `trusted`, or `unverified`). Functions outside Verus's scope
+(feature-gated ecosystem trait impls, `#[verifier::external]` originals,
+test helpers, bodyless trait declarations) have no `verification-status`.
+The ratios below use `verification-status != null` as the denominator so
+they reflect only functions Verus actually processed.
+
 ---
 
-## 1. Public functions verified
+## 1. Verified exec functions (all)
 
-**167 / 246** `pub fn` exec functions are verified or trusted (67.9%):
-102 verified + 65 trusted.
-
-These are functions whose signature starts with unrestricted `pub` (not
-`pub(crate)` or `pub(super)`) and whose kind is `exec`.
+**363** exec functions were processed by Verus: **281 verified + 82 trusted,
+0 unverified** (100%).
 
 ```bash
-# Count
-jq '[.data | to_entries[] | select(.value."is-public" == true and .value.kind == "exec")] | length' "$FILE"
-# => 246
+# In-scope exec = those with a verification-status
+jq '[.data | to_entries[] | select(.value.kind == "exec" and .value."verification-status" != null)] | length' "$FILE"
+# => 363
 
-# Count verified
-jq '[.data | to_entries[] | select(.value."is-public" == true and .value.kind == "exec" and .value."verification-status" == "verified")] | length' "$FILE"
-# => 102
+# Verified
+jq '[.data | to_entries[] | select(.value.kind == "exec" and .value."verification-status" == "verified")] | length' "$FILE"
+# => 281
 
-# Count verified or trusted
-jq '[.data | to_entries[] | select(.value."is-public" == true and .value.kind == "exec" and (.value."verification-status" == "verified" or .value."verification-status" == "trusted"))] | length' "$FILE"
-# => 167
+# Trusted
+jq '[.data | to_entries[] | select(.value.kind == "exec" and .value."verification-status" == "trusted")] | length' "$FILE"
+# => 82
 
-# List verified or trusted pub fn
-jq -r '.data | to_entries[] | select(.value."is-public" == true and .value.kind == "exec" and (.value."verification-status" == "verified" or .value."verification-status" == "trusted")) | "\(.value."verification-status")\t\(.value."display-name")\t\(.value."code-path")"' "$FILE" | sort
+# List all in-scope exec by status
+jq -r '.data | to_entries[] | select(.value.kind == "exec" and .value."verification-status" != null) | "\(.value."verification-status")\t\(.value."display-name")\t\(.value."code-path")"' "$FILE" | sort
 ```
 
 ---
 
-## 2. Public API functions verified
+## 2. Verified pub exec functions
 
-**122 / 148** public API functions are verified or trusted (82.4%):
-93 verified + 29 trusted.
+**167** `pub fn` exec functions were processed by Verus: **102 verified +
+65 trusted, 0 unverified** (100%).
+
+Note: 246 total `pub fn` exec functions exist in the output, but 79 have no
+`verification-status` because they are outside Verus's scope (feature-gated
+trait impls for `group`/`serde`/`ff`, `#[verifier::external]` originals with
+`_verus` companions, `#[cfg(test)]` helpers, trait declarations).
+
+```bash
+# In-scope pub exec = pub + exec + has status
+jq '[.data | to_entries[] | select(.value."is-public" == true and .value.kind == "exec" and .value."verification-status" != null)] | length' "$FILE"
+# => 167
+
+# Verified
+jq '[.data | to_entries[] | select(.value."is-public" == true and .value.kind == "exec" and .value."verification-status" == "verified")] | length' "$FILE"
+# => 102
+
+# Trusted
+jq '[.data | to_entries[] | select(.value."is-public" == true and .value.kind == "exec" and .value."verification-status" == "trusted")] | length' "$FILE"
+# => 65
+
+# List in-scope pub exec by status
+jq -r '.data | to_entries[] | select(.value."is-public" == true and .value.kind == "exec" and .value."verification-status" != null) | "\(.value."verification-status")\t\(.value."display-name")\t\(.value."code-path")"' "$FILE" | sort
+```
+
+---
+
+## 3. Verified public API functions
+
+**122** public API exec functions were processed by Verus: **93 verified +
+29 trusted, 0 unverified** (100%).
 
 Public API = `pub fn` + all ancestor modules are `pub` + exec kind + library
 crate. `spec fn` and `proof fn` are excluded (erased at runtime).
 
 ```bash
-# Count
-jq '[.data | to_entries[] | select(.value."is-public-api" == true)] | length' "$FILE"
-# => 148
+# In-scope public API = is-public-api + has status
+jq '[.data | to_entries[] | select(.value."is-public-api" == true and .value."verification-status" != null)] | length' "$FILE"
+# => 122
 
-# Count verified
+# Verified
 jq '[.data | to_entries[] | select(.value."is-public-api" == true and .value."verification-status" == "verified")] | length' "$FILE"
 # => 93
 
-# Count verified or trusted
-jq '[.data | to_entries[] | select(.value."is-public-api" == true and (.value."verification-status" == "verified" or .value."verification-status" == "trusted"))] | length' "$FILE"
-# => 122
+# Trusted
+jq '[.data | to_entries[] | select(.value."is-public-api" == true and .value."verification-status" == "trusted")] | length' "$FILE"
+# => 29
 
-# List verified or trusted public API
-jq -r '.data | to_entries[] | select(.value."is-public-api" == true and (.value."verification-status" == "verified" or .value."verification-status" == "trusted")) | "\(.value."verification-status")\t\(.value."display-name")\t\(.value."code-path")"' "$FILE" | sort
-
-# Full public API breakdown by verification status
-jq '[.data | to_entries[] | select(.value."is-public-api" == true)] | group_by(.value."verification-status" // "absent") | map({status: .[0].value."verification-status" // "absent", count: length})' "$FILE"
+# List in-scope public API by status
+jq -r '.data | to_entries[] | select(.value."is-public-api" == true and .value."verification-status" != null) | "\(.value."verification-status")\t\(.value."display-name")\t\(.value."code-path")"' "$FILE" | sort
 ```
 
 ---
 
-## 3. Axioms (functions using `admit()`)
+## 4. Axioms (functions using `admit()`)
 
 **48** functions use `admit()` in their body.
 
@@ -87,7 +117,7 @@ jq -r '.data | to_entries[] | select(.value."trusted-reason" == "admit") | "\(.v
 
 ---
 
-## 4. External functions assumed correct
+## 5. External functions assumed correct
 
 **82** external functions are assumed correct without proof:
 
@@ -119,15 +149,20 @@ jq '[.data | to_entries[] | select(.value."verification-status" == "trusted")] |
 
 ## Summary
 
-| Metric | Count | Denominator | % |
-|--------|------:|------------:|---:|
-| `pub fn` exec verified or trusted | 167 | 246 | 67.9% |
-| — of which verified | 102 | 246 | 41.5% |
-| — of which trusted | 65 | 246 | 26.4% |
-| Public API verified or trusted | 122 | 148 | 82.4% |
-| — of which verified | 93 | 148 | 62.8% |
-| — of which trusted | 29 | 148 | 19.6% |
-| Axioms (`admit()`) | 48 | — | — |
-| External-body (trusted) | 77 | — | — |
-| Assume-specification (trusted) | 5 | — | — |
-| **Total trust base** | **130** | 2281 | 5.7% |
+| Metric | Verified | Trusted | In-scope | % (v+t) |
+|--------|--------:|---------:|---------:|--------:|
+| All exec functions | 281 | 82 | 363 | 100% |
+| `pub fn` exec | 102 | 65 | 167 | 100% |
+| Public API exec | 93 | 29 | 122 | 100% |
+
+"In-scope" = functions with a `verification-status` (i.e., Verus processed
+them). Functions outside scope (79 pub exec with no status) are feature-gated
+ecosystem trait impls, `#[verifier::external]` originals, test helpers, and
+trait declarations.
+
+| Trust base | Count |
+|------------|------:|
+| Axioms (`admit()`) | 48 |
+| External-body (trusted) | 77 |
+| Assume-specification (trusted) | 5 |
+| **Total trust base** | **130** |

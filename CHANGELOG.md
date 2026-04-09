@@ -10,6 +10,15 @@ what constitutes a breaking change.
 
 ## [Unreleased]
 
+## [6.8.0] - 2026-04-09
+
+### Fixed
+- **specs-data: body no longer includes doc-comment lines** (#18): When `doc_comment` is present as a separate field, the `body` field now strips leading `///` lines so consumers don't see the same content duplicated.
+- **specs-data: contract no longer duplicates requires/ensures** (#17): `signature_text` extraction now stops before `requires`/`ensures` keywords instead of scanning to the first `{`. This eliminates the root cause of duplicated contract clauses and fixes truncation when ensures expressions contain `{` (e.g., `match` blocks).
+
+### Changed
+- **Structural validation merged into backward compat test** (#23): `extract_backward_compat` now runs `probe-extract-check::check_all` after the golden comparison, consolidating structural validation (envelope, line ranges, referential integrity) into a single extract pass. The separate `live_extract_structural_check` test is retired.
+
 ## [6.7.0] - 2026-04-09
 
 ### Added

@@ -20,9 +20,6 @@ static PROSE_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 static WORD_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"[a-zA-Z]{4,}").expect("valid regex"));
-static RE_SIG_KEYWORD: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?m)^\s*(requires|ensures)\b").expect("valid regex"));
-
 /// Top-level output matching the existing specs_data.json schema.
 #[derive(Serialize)]
 struct SpecsData {
@@ -74,6 +71,27 @@ struct VerifiedFunctionEntry {
     is_libsignal: bool,
     has_spec: bool,
     has_proof: bool,
+}
+
+/// Strip leading `///` doc-comment lines (and any immediately following blank line)
+/// from a body string, so consumers that render `doc_comment` separately don't
+/// see the same content duplicated in `body`.
+fn strip_leading_doc_comments(body: &str) -> String {
+    let mut lines = body.lines().peekable();
+    while let Some(line) = lines.peek() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("///") {
+            lines.next();
+        } else if trimmed.is_empty() {
+            // Skip one blank line that often separates doc comments from code
+            lines.next();
+            break;
+        } else {
+            break;
+        }
+    }
+    let remaining: Vec<&str> = lines.collect();
+    remaining.join("\n")
 }
 
 /// Derive a short module name from the full module path for grouping in the UI.
@@ -382,7 +400,7 @@ pub fn cmd_specs_data(
         match func.kind {
             DeclKind::Spec => {
                 let signature = func.signature_text.as_deref().unwrap_or("").to_string();
-                let body = func.body_text.as_deref().unwrap_or("").to_string();
+                let body = strip_leading_doc_comments(func.body_text.as_deref().unwrap_or(""));
                 let vis = func
                     .kind_display
                     .as_deref()
@@ -432,7 +450,7 @@ pub fn cmd_specs_data(
             }
             DeclKind::Proof if func.name.starts_with("axiom_") => {
                 let signature = func.signature_text.as_deref().unwrap_or("").to_string();
-                let body = func.body_text.as_deref().unwrap_or("").to_string();
+                let body = strip_leading_doc_comments(func.body_text.as_deref().unwrap_or(""));
                 let short_module = derive_short_module(module_path);
                 let fn_id = make_id(module_path, &func.name, display_name, line);
 
@@ -472,15 +490,11 @@ pub fn cmd_specs_data(
                 let impl_type = func.impl_type.as_deref().unwrap_or("");
                 let fn_id = make_id(module_path, &func.name, display_name, line);
 
-                // Build contract from signature (truncated before requires/ensures)
-                // plus AST-extracted requires/ensures text for accuracy.
-                let sig = func.signature_text.as_deref().unwrap_or("");
-                let sig_only = if let Some(pos) = RE_SIG_KEYWORD.find(sig) {
-                    sig[..pos.start()].trim_end()
-                } else {
-                    sig.trim_end()
-                };
-                let mut contract_parts: Vec<&str> = vec![sig_only];
+                // Build contract from signature + AST-extracted requires/ensures.
+                // signature_text already stops before requires/ensures keywords,
+                // so no deduplication is needed.
+                let sig = func.signature_text.as_deref().unwrap_or("").trim_end();
+                let mut contract_parts: Vec<&str> = vec![sig];
                 if let Some(ref req) = func.requires_text {
                     contract_parts.push(req);
                 }
@@ -583,4 +597,40 @@ pub fn cmd_specs_data(
         output.display()
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strip_doc_comments_basic() {
+        let body = "/// Compute a + b.\n/// Returns the sum.\nspec fn add(a: int, b: int) -> int {\n    a + b\n}";
+        let stripped = strip_leading_doc_comments(body);
+        assert_eq!(
+            stripped,
+            "spec fn add(a: int, b: int) -> int {\n    a + b\n}"
+        );
+    }
+
+    #[test]
+    fn strip_doc_comments_with_blank_separator() {
+        let body = "/// Doc line.\n\nspec fn f() -> int { 0 }";
+        let stripped = strip_leading_doc_comments(body);
+        assert_eq!(stripped, "spec fn f() -> int { 0 }");
+    }
+
+    #[test]
+    fn strip_doc_comments_no_docs() {
+        let body = "spec fn f() -> int { 0 }";
+        let stripped = strip_leading_doc_comments(body);
+        assert_eq!(stripped, "spec fn f() -> int { 0 }");
+    }
+
+    #[test]
+    fn strip_doc_comments_only_docs() {
+        let body = "/// Just a doc comment.";
+        let stripped = strip_leading_doc_comments(body);
+        assert_eq!(stripped, "");
+    }
 }

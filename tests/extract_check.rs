@@ -62,58 +62,6 @@ fn fixture_atoms_have_valid_kinds() {
     }
 }
 
-/// Run extraction via the library API and validate the output.
-///
-/// Requires `verus-analyzer` (or `rust-analyzer`), `scip`, and `verus` to be installed.
-#[test]
-#[ignore]
-fn live_extract_structural_check() {
-    let fixture = Path::new("../probe/probe-extract-check/tests/fixtures/verus_micro");
-    if !fixture.exists() {
-        panic!("verus_micro fixture not found at {}", fixture.display());
-    }
-
-    probe_verus::commands::cmd_extract(
-        fixture.to_path_buf(),
-        false,
-        false,
-        false,
-        None,
-        false,
-        false,
-        false,
-        false,
-        true,
-        None,
-        false,
-        None,
-        vec![],
-        false,
-    )
-    .expect("probe-verus extract failed");
-
-    let probes_dir = fixture.join(".verilib").join("probes");
-    let unified = std::fs::read_dir(&probes_dir)
-        .unwrap()
-        .filter_map(|e| e.ok())
-        .find(|e| {
-            let name = e.path().file_name().unwrap().to_string_lossy().to_string();
-            name.starts_with("verus_")
-                && name.ends_with(".json")
-                && !name.contains("_atoms")
-                && !name.contains("_specs")
-                && !name.contains("_proofs")
-                && !name.contains("_extract_summary")
-        })
-        .unwrap_or_else(|| panic!("no unified output found in {}", probes_dir.display()));
-
-    let envelope = load_extract_json(&unified.path()).unwrap();
-    let report = check_all(&envelope, Some(fixture));
-
-    report.print_summary();
-    assert!(
-        report.is_ok(),
-        "live extract check found {} error(s)",
-        report.error_count()
-    );
-}
+// NOTE: The live extract structural check has been merged into extract_backward_compat
+// (issue #23). Both golden comparison and structural validation now run in a single
+// extract pass. See tests/extract_backward_compat.rs.

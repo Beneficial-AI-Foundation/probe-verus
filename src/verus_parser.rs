@@ -1009,10 +1009,13 @@ impl FunctionInfoVisitor {
         Some(doc_lines.join("\n"))
     }
 
-    /// Extract the function signature text from source (everything before the opening brace).
+    /// Extract the function signature text from source.
     ///
     /// Skips doc comments (`///`) and attribute lines (`#[`) at the start of the span,
-    /// then collects from the `fn` keyword line until the body-opening `{`.
+    /// then collects from the `fn` keyword line until `requires`, `ensures`, or the
+    /// body-opening `{` — whichever comes first.  This keeps the signature free of
+    /// contract clauses so that `specs-data` can compose signature + AST-extracted
+    /// requires/ensures without duplication.
     fn extract_signature_text(&self, start_line: usize, end_line: usize) -> Option<String> {
         if !self.include_extended_info {
             return None;
@@ -1052,13 +1055,43 @@ impl FunctionInfoVisitor {
             }
         }
 
-        // Phase 2: collect from the fn declaration until the body-opening `{`,
-        // preserving indentation relative to the fn line.
+        // Phase 2: collect from the fn declaration until `requires`, `ensures`,
+        // or the body-opening `{` — whichever comes first.
         let base_indent = lines
             .get(sig_start)
             .map_or(0, |l| l.len() - l.trim_start().len());
         let mut sig_lines = Vec::new();
         for line in &lines[sig_start..end_idx] {
+            let trimmed = line.trim();
+
+            // Stop before requires/ensures keywords (contract clauses).
+            if trimmed.starts_with("requires") || trimmed.starts_with("ensures") {
+                break;
+            }
+
+            // Also handle inline requires/ensures on the same line (e.g. `-> u32 requires ...`)
+            for keyword in &["requires", "ensures"] {
+                if let Some(kw_pos) = trimmed.find(keyword) {
+                    if kw_pos > 0 {
+                        let before_kw = line[..line.len() - trimmed.len() + kw_pos].trim_end();
+                        if !before_kw.is_empty() {
+                            let stripped = if before_kw.len() > base_indent
+                                && before_kw[..base_indent].trim().is_empty()
+                            {
+                                &before_kw[base_indent..]
+                            } else {
+                                before_kw.trim_start()
+                            };
+                            sig_lines.push(stripped.to_string());
+                        }
+                        if sig_lines.is_empty() {
+                            return None;
+                        }
+                        return Some(sig_lines.join("\n"));
+                    }
+                }
+            }
+
             if let Some(brace_pos) = line.find('{') {
                 let before = line[..brace_pos].trim_end();
                 if !before.is_empty() {
@@ -1068,7 +1101,7 @@ impl FunctionInfoVisitor {
                         } else {
                             before.trim_start()
                         };
-                    sig_lines.push(stripped);
+                    sig_lines.push(stripped.to_string());
                 }
                 break;
             }
@@ -1077,7 +1110,7 @@ impl FunctionInfoVisitor {
             } else {
                 line.trim()
             };
-            sig_lines.push(stripped);
+            sig_lines.push(stripped.to_string());
         }
 
         if sig_lines.is_empty() {
@@ -2550,5 +2583,85 @@ trait Bar {
         );
         assert!(!decl.is_external);
         assert!(!decl.is_cfg);
+    }
+
+    #[test]
+    fn test_signature_text_excludes_requires_ensures() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"
+verus! {{
+    pub fn checked_add(a: u32, b: u32) -> (result: u32)
+        requires
+            a < 100,
+        ensures
+            result >= a,
+    {{
+        a + b
+    }}
+}}
+"#
+        )
+        .unwrap();
+
+        let (functions, _) =
+            parse_file_for_functions_ext(file.path(), true, true, true, true, true, true).unwrap();
+        let func = functions
+            .iter()
+            .find(|f| f.name == "checked_add")
+            .expect("checked_add not found in parsed functions");
+
+        let sig = func.signature_text.as_ref().expect("should have signature");
+        assert!(
+            !sig.contains("requires"),
+            "signature_text should not contain 'requires', got: {sig}"
+        );
+        assert!(
+            !sig.contains("ensures"),
+            "signature_text should not contain 'ensures', got: {sig}"
+        );
+        assert!(
+            sig.contains("checked_add"),
+            "signature_text should contain function name"
+        );
+        assert!(
+            sig.contains("(result: u32)"),
+            "signature_text should contain return type"
+        );
+    }
+
+    #[test]
+    fn test_body_text_for_spec_fn() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"
+verus! {{
+    /// Checks if a value is positive.
+    pub open spec fn is_positive(x: int) -> bool {{
+        x > 0
+    }}
+}}
+"#
+        )
+        .unwrap();
+
+        let (functions, _) =
+            parse_file_for_functions_ext(file.path(), true, true, true, true, true, true).unwrap();
+        let func = functions.iter().find(|f| f.name == "is_positive").unwrap();
+
+        let body = func.body_text.as_ref().expect("spec fn should have body");
+        assert!(
+            body.contains("/// Checks if a value is positive."),
+            "body_text should include doc comment: {body}"
+        );
+        assert!(
+            body.contains("x > 0"),
+            "body_text should include function body"
+        );
+
+        let doc = func.doc_comment.as_ref().expect("should have doc_comment");
+        assert_eq!(doc, "Checks if a value is positive.");
     }
 }

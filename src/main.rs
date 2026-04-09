@@ -57,6 +57,10 @@ enum Commands {
         /// Automatically download missing external tools (verus-analyzer, scip) without prompting
         #[arg(long)]
         auto_install: bool,
+
+        /// Use `cargo public-api` to override is-public-api (requires cargo-public-api installed)
+        #[arg(long)]
+        with_public_api: bool,
     },
 
     /// Combine independently-indexed atoms.json files, replacing stubs with real atoms
@@ -365,6 +369,10 @@ enum Commands {
         /// Extra arguments passed to Verus (e.g. --log smt --log-dir ./smt-logs)
         #[arg(long, num_args = 1.., allow_hyphen_values = true)]
         verus_args: Vec<String>,
+
+        /// Use `cargo public-api` to override is-public-api (requires cargo-public-api installed)
+        #[arg(long)]
+        with_public_api: bool,
     },
 }
 
@@ -380,6 +388,7 @@ fn main() {
             rust_analyzer,
             allow_duplicates,
             auto_install,
+            with_public_api,
         } => {
             if let Err(e) = cmd_atomize(
                 project_path,
@@ -389,6 +398,7 @@ fn main() {
                 rust_analyzer,
                 allow_duplicates,
                 auto_install,
+                with_public_api,
             ) {
                 eprintln!("Error: {e}");
                 std::process::exit(1);
@@ -557,6 +567,7 @@ fn main() {
             with_spec_text,
             taxonomy_config,
             verus_args,
+            with_public_api,
         } => {
             if let Err(e) = cmd_extract(
                 project_path,
@@ -573,6 +584,7 @@ fn main() {
                 with_spec_text,
                 taxonomy_config,
                 verus_args,
+                with_public_api,
             ) {
                 eprintln!("Error: {e}");
                 std::process::exit(1);

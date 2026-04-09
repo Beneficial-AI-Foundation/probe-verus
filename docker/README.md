@@ -108,7 +108,7 @@ The primary output. Each entry is an atom enriched with specs and verification s
 {
   "schema": "probe-verus/extract",
   "schema-version": "2.0",
-  "tool": { "name": "probe-verus", "version": "6.0.0", "command": "extract" },
+  "tool": { "name": "probe-verus", "version": "6.7.0", "command": "extract" },
   "source": { "repo": "...", "commit": "...", "language": "rust", "package": "...", "package-version": "..." },
   "timestamp": "2026-03-23T12:00:00Z",
   "data": {
@@ -135,7 +135,7 @@ The primary output. Each entry is an atom enriched with specs and verification s
 {
   "schema": "probe-verus/extract-summary",
   "schema-version": "2.0",
-  "tool": { "name": "probe-verus", "version": "6.0.0", "command": "extract" },
+  "tool": { "name": "probe-verus", "version": "6.7.0", "command": "extract" },
   "source": { "repo": "...", "commit": "...", "language": "rust", "package": "...", "package-version": "..." },
   "timestamp": "2026-03-23T12:00:00Z",
   "data": {

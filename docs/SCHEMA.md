@@ -1,7 +1,7 @@
 # probe-verus Data Schemas
 
-Version: 6.6.0
-Date: 2026-04-07
+Version: 6.7.0
+Date: 2026-04-09
 
 This document specifies the concrete JSON `data` payloads produced by each
 probe-verus subcommand.  It complements the language-agnostic
@@ -115,31 +115,26 @@ probe:core/https://github.com/rust-lang/rust/library/core/option/impl#map()
 | `kind` | DeclKind | yes | `"exec"`, `"proof"`, or `"spec"` |
 | `language` | string | yes | `"rust"` for `exec` atoms, `"verus"` for `proof`/`spec` atoms (derived from `kind`, not lexical scope; see [P20]) |
 | `is-public` | boolean | no | Whether the function signature starts with unrestricted `pub` (absent for external stubs) |
-| `is-public-api` | boolean | no | Whether the function is reachable from outside the crate: `pub fn` + all ancestor modules `pub` + exec kind + library crate.  `spec fn` and `proof fn` always get `false` (erased at runtime). Absent for external stubs. |
+| `is-public-api` | boolean | no | Whether the function is part of the crate's public API. Default: SCIP module-chain walk (`pub fn` + all ancestor modules `pub` + exec kind + library crate). With `--with-public-api`: overridden by `cargo public-api` ground truth via RQN matching. `spec fn` and `proof fn` always get `false` (erased at runtime). Absent for external stubs. |
 | `has-body` | boolean | no | Whether the function has a body. `false` for bodiless trait method declarations; `true` otherwise. Absent for external stubs. |
 | `is-external` | boolean | no | Whether `#[verifier::external]` is present (directly or via `#[cfg_attr(verus_keep_ghost, verifier::external)]`). Absent for external stubs. |
 | `is-cfg-gated` | boolean | no | Whether the function or any enclosing item (impl block, module, `cfg_if!` branch, or the module's `mod` declaration) has `#[cfg(...)]`. Absent for external stubs. |
 
-#### Limitation: `is-public-api` and trait implementation methods
+#### `--with-public-api`: ground-truth override
 
-`is-public-api` relies on `is-public` as a prerequisite, which checks whether
-the SCIP signature text starts with `pub`. Because `probe-verus` uses
-`verus-analyzer` for SCIP indexing (rather than `rust-analyzer`),
-`verus-analyzer`'s SCIP data does not include the richer type-context
-information that `rust-analyzer` provides. In particular, trait implementation
-methods (e.g., `impl Add for Point { fn add(...) }`) do not carry `pub` in
-their signature — they inherit publicity from the trait — so they are
-classified as `is-public: false` and excluded from `is-public-api`.
+By default, `is-public-api` uses the SCIP module-chain walk (zero external
+dependencies). This has a known limitation: trait implementation methods
+(e.g., `impl Add for Point { fn add(...) }`) lack `pub` in their signature,
+so they get `is-public: false` and are excluded from `is-public-api`.
 
-In contrast, `probe-rust` (which uses `rust-analyzer`) correctly identifies
-these as public API. For `curve25519-dalek`, this accounts for a gap of ~64
-functions (trait impls like `ct_eq`, `fmt`, `neg`, `add_assign`,
-`multiscalar_mul`, etc.). Running `rust-analyzer` alongside `verus-analyzer`
-would close this gap but would double indexing time.
+The `--with-public-api` flag runs `cargo public-api` (requires
+`cargo-public-api` installed) and overrides `is-public-api` for all atoms
+whose `rust-qualified-name` matches a public API entry. This uses `rustdoc`
+as the authority, correctly handling trait impls and re-exports.
 
-**Consequence**: `is-public-api` may undercount public API functions. Use
-`is-public` (which includes all `pub fn` regardless of module chain) as an
-upper bound. Any function that is truly public API will have `is-public: true`.
+Atoms without a `rust-qualified-name` (external stubs) keep their existing
+SCIP-walk value. Blanket impls (`Into`, `TryFrom`, etc.) are filtered out
+since they have no corresponding atoms.
 
 ### DependencyWithLocation
 

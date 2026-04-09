@@ -1,13 +1,14 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub mod commands;
 pub mod constants;
 pub mod error;
 pub mod metadata;
 pub mod path_utils;
+pub mod public_api;
 pub mod scip_cache;
 pub mod taxonomy;
 pub mod tool_manager;
@@ -194,6 +195,50 @@ pub fn is_signature_public(sig: &str) -> bool {
     } else {
         false
     }
+}
+
+/// Check whether a probe `code_name` represents a trait impl method.
+///
+/// Verus-analyzer SCIP encodes inherent impls as `SelfType#SelfType<Ret>#method()`
+/// (the impl name matches the self type), while trait impls use
+/// `SelfType#TraitName<Params>#method()` (impl name differs from self type).
+///
+/// This function requires 2+ `#` separators **and** that the impl-name segment
+/// (between the first `#` and the next `<` or `#`) differs from the self-type
+/// base name (the identifier before the first `#`, stripped of `&`/`mut/`/generics).
+///
+/// **Known limitation:** treats ALL trait impl methods as public, including
+/// impls of `pub(crate)` or private traits. SCIP symbols do not encode trait
+/// visibility. In practice the affected traits are public `core`/`std` traits.
+#[must_use]
+pub fn is_trait_impl_code_name(code_name: &str) -> bool {
+    let s = code_name
+        .strip_prefix(PROBE_URI_PREFIX)
+        .unwrap_or(code_name);
+    if s.matches('#').count() < 2 {
+        return false;
+    }
+    let first_hash = match s.find('#') {
+        Some(i) => i,
+        None => return false,
+    };
+    // Self-type segment: everything between the last `/` (before first `#`) and the `#`.
+    let before_hash = &s[..first_hash];
+    let self_segment = match before_hash.rfind('/') {
+        Some(i) => &before_hash[i + 1..],
+        None => before_hash,
+    };
+    // Strip `&` and `mut/` prefixes, then drop `<...>` generics.
+    let self_base = self_segment
+        .trim_start_matches('&')
+        .trim_start_matches("mut/");
+    let self_base = self_base.split('<').next().unwrap_or(self_base);
+
+    // Impl-name segment: between first `#` and the next `<` or `#`.
+    let after_hash = &s[first_hash + 1..];
+    let impl_name = after_hash.split(['<', '#']).next().unwrap_or("");
+
+    !impl_name.is_empty() && impl_name != self_base
 }
 
 /// Output format: Atom with line numbers
@@ -576,10 +621,6 @@ pub fn build_call_graph(
                     .unwrap_or_else(|| "unknown".to_string());
                 let display_name = enrich_display_name(&symbol.symbol, &base_display_name);
 
-                // Track ALL function symbols for dependency tracking
-                all_function_symbols.insert(symbol.symbol.clone());
-                symbol_to_display_name.insert(symbol.symbol.clone(), display_name.clone());
-
                 // Get the nth definition for this symbol (matching symbol entry order with def order)
                 let def_index = *symbol_seen_count.get(&symbol.symbol).unwrap_or(&0);
                 symbol_seen_count
@@ -600,6 +641,26 @@ pub fn build_call_graph(
                     } else {
                         None
                     };
+
+                // P21: Re-enrich display name for single-hash trait impl symbols.
+                // verus-analyzer emits "module/Trait#method()" (missing Self type)
+                // which enrich_display_name turns into "Trait::method". Replace with
+                // "SelfType::method" using the self_type from the SCIP pre-pass.
+                let display_name = if is_missing_self_type(&symbol.symbol) {
+                    if let Some(ref st) = self_type {
+                        let bare_st = st.strip_prefix('&').unwrap_or(st);
+                        let bare_st = bare_st.strip_prefix("mut ").unwrap_or(bare_st);
+                        format!("{bare_st}::{base_display_name}")
+                    } else {
+                        display_name
+                    }
+                } else {
+                    display_name
+                };
+
+                // Track ALL function symbols for dependency tracking
+                all_function_symbols.insert(symbol.symbol.clone());
+                symbol_to_display_name.insert(symbol.symbol.clone(), display_name.clone());
 
                 // Only add to call_graph if DEFINED in this project
                 if let Some(defs) = symbol_to_definitions.get(&symbol.symbol) {
@@ -1174,12 +1235,18 @@ pub fn convert_to_atoms_with_lines(
         false,
         &empty_map,
         false,
+        "",
+        "",
     )
 }
 
 /// Convert call graph to atoms with accurate line numbers by parsing source files.
 ///
 /// This version uses verus_syn to parse source files and get accurate function body spans.
+/// `code_path_prefix` is prepended to the SCIP `relative_path` when building the atom's
+/// `code_path` field (e.g., `"curve25519-dalek"` for workspace members). Internal lookups
+/// (span matching, module visibility) still use the raw SCIP path.
+#[allow(clippy::too_many_arguments)]
 pub fn convert_to_atoms_with_parsed_spans(
     call_graph: &HashMap<String, FunctionNode>,
     symbol_to_display_name: &HashMap<String, String>,
@@ -1187,14 +1254,17 @@ pub fn convert_to_atoms_with_parsed_spans(
     with_locations: bool,
     file_module_pub: &HashMap<String, ModuleInfo>,
     is_library: bool,
+    code_path_prefix: &str,
+    pkg_name: &str,
 ) -> Vec<AtomWithLines> {
-    // Collect all unique relative paths
-    let relative_paths: Vec<String> = call_graph
+    // Collect all unique relative paths (sorted for deterministic file traversal per P14)
+    let mut relative_paths: Vec<String> = call_graph
         .values()
         .map(|node| node.relative_path.clone())
         .collect::<HashSet<_>>()
         .into_iter()
         .collect();
+    relative_paths.sort();
 
     // Build the span map by parsing all source files
     let span_map = verus_parser::build_function_span_map(project_root, &relative_paths);
@@ -1206,6 +1276,8 @@ pub fn convert_to_atoms_with_parsed_spans(
         with_locations,
         file_module_pub,
         is_library,
+        code_path_prefix,
+        pkg_name,
     )
 }
 
@@ -1214,6 +1286,7 @@ pub fn convert_to_atoms_with_parsed_spans(
 /// 1. Compute final code_names for all atoms (with line numbers for duplicates)
 /// 2. Build a map: raw_symbol → list of final_code_names
 /// 3. Resolve dependencies using the map (include all matches for ambiguous refs)
+#[allow(clippy::too_many_arguments)]
 fn convert_to_atoms_with_lines_internal(
     call_graph: &HashMap<String, FunctionNode>,
     symbol_to_display_name: &HashMap<String, String>,
@@ -1221,6 +1294,8 @@ fn convert_to_atoms_with_lines_internal(
     with_locations: bool,
     file_module_pub: &HashMap<String, ModuleInfo>,
     is_library: bool,
+    code_path_prefix: &str,
+    pkg_name: &str,
 ) -> Vec<AtomWithLines> {
     // === Phase 1: Compute line ranges and base code_names for all nodes ===
     struct NodeData<'a> {
@@ -1593,7 +1668,21 @@ fn convert_to_atoms_with_lines_internal(
             }
 
             let code_module = extract_code_module(&code_name);
-            let rqn = derive_rust_qualified_name(&data.node.relative_path, &data.node.display_name);
+            let output_code_path = if code_path_prefix.is_empty() {
+                data.node.relative_path.clone()
+            } else {
+                format!("{}/{}", code_path_prefix, data.node.relative_path)
+            };
+            // For RQN, ensure path has "crate-name/src/..." format so
+            // derive_rust_qualified_name can split on "/src/".
+            let rqn_path = if output_code_path.contains("/src/") {
+                output_code_path.clone()
+            } else if !pkg_name.is_empty() && output_code_path.starts_with("src/") {
+                format!("{}/{}", pkg_name, output_code_path)
+            } else {
+                output_code_path.clone()
+            };
+            let rqn = derive_rust_qualified_name(&rqn_path, &data.node.display_name);
             dependencies_with_locations.sort_by(|a, b| {
                 a.line
                     .cmp(&b.line)
@@ -1606,11 +1695,11 @@ fn convert_to_atoms_with_lines_internal(
                 .unwrap_or(false);
             AtomWithLines {
                 display_name: data.node.display_name.clone(),
-                code_name,
+                code_name: code_name.clone(),
                 dependencies,
                 dependencies_with_locations,
                 code_module,
-                code_path: data.node.relative_path.clone(),
+                code_path: output_code_path,
                 code_text: CodeTextInfo {
                     lines_start: data.lines_start,
                     lines_end: data.lines_end,
@@ -1621,6 +1710,7 @@ fn convert_to_atoms_with_lines_internal(
                 is_public: Some(sig_public),
                 is_public_api: classify_public_api(
                     sig_public,
+                    &code_name,
                     &data.node.relative_path,
                     data.kind,
                     file_module_pub,
@@ -1715,6 +1805,71 @@ pub fn normalize_code_name(code_name: &str) -> String {
 // Public-API classification
 // =============================================================================
 
+/// Resolve the source root for a package within a workspace.
+///
+/// For workspace-only `Cargo.toml` files (containing `[workspace]` but no `[package]`),
+/// finds the member directory whose `Cargo.toml` `[package].name` matches `package`,
+/// or falls back to a single-member workspace. Returns `project_path` unchanged if
+/// it already contains a `[package]` section or no workspace is detected.
+#[must_use]
+pub fn resolve_package_root(project_path: &Path, package: Option<&str>) -> PathBuf {
+    let cargo_toml = project_path.join("Cargo.toml");
+    let contents = match std::fs::read_to_string(&cargo_toml) {
+        Ok(c) => c,
+        Err(_) => return project_path.to_path_buf(),
+    };
+    let table: toml::Table = match contents.parse() {
+        Ok(t) => t,
+        Err(_) => return project_path.to_path_buf(),
+    };
+
+    if table.contains_key("package") {
+        return project_path.to_path_buf();
+    }
+
+    let members = match table
+        .get("workspace")
+        .and_then(|w| w.as_table())
+        .and_then(|w| w.get("members"))
+        .and_then(|m| m.as_array())
+    {
+        Some(m) => m,
+        None => return project_path.to_path_buf(),
+    };
+
+    if let Some(pkg) = package {
+        for m in members {
+            if let Some(member_path) = m.as_str() {
+                let dir = project_path.join(member_path);
+                let member_toml = dir.join("Cargo.toml");
+                if let Ok(mc) = std::fs::read_to_string(&member_toml) {
+                    if let Ok(mt) = mc.parse::<toml::Table>() {
+                        let name = mt
+                            .get("package")
+                            .and_then(|p| p.as_table())
+                            .and_then(|p| p.get("name"))
+                            .and_then(|n| n.as_str());
+                        if name == Some(pkg) {
+                            return dir;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if members.len() == 1 {
+        if let Some(member) = members[0].as_str() {
+            let dir = project_path.join(member);
+            if dir.exists() {
+                return dir;
+            }
+        }
+    }
+
+    project_path.to_path_buf()
+}
+
 /// Check whether a Rust project is a library crate.
 ///
 /// Returns `true` if `Cargo.toml` contains a `[lib]` section or `src/lib.rs` exists.
@@ -1738,6 +1893,11 @@ pub struct ModuleInfo {
     pub is_pub_chain: bool,
     /// Whether the module's `mod` declaration (or any ancestor's) has `#[cfg(...)]`.
     pub is_cfg: bool,
+    /// Whether `is_pub_chain` was set exclusively from cfg-gated `mod` declarations.
+    /// When a non-cfg-gated declaration exists it is authoritative (compiles in normal
+    /// builds), so a cfg-gated `pub mod` (e.g. `#[cfg(docsrs)] pub mod backend`)
+    /// should not override a non-cfg-gated `pub(crate) mod backend`.
+    pub from_cfg_only: bool,
 }
 
 /// Build a map from relative file path to module-level metadata.
@@ -1749,9 +1909,9 @@ pub struct ModuleInfo {
 /// The map keys are relative file paths (e.g., `"src/scalar.rs"`) matching
 /// the `code_path` field on atoms.
 ///
-/// For duplicate `mod` declarations (e.g., cfg-gated `pub mod backend` and
-/// `pub(crate) mod backend`), uses the **most permissive** visibility to
-/// avoid false negatives.
+/// For duplicate `mod` declarations (e.g., `#[cfg(docsrs)] pub mod backend`
+/// and `pub(crate) mod backend`), a non-cfg-gated declaration is authoritative
+/// since it is what compiles in normal builds.
 #[must_use]
 pub fn build_module_visibility_map(project_path: &Path) -> HashMap<String, ModuleInfo> {
     let mut map = HashMap::new();
@@ -1774,6 +1934,7 @@ pub fn build_module_visibility_map(project_path: &Path) -> HashMap<String, Modul
             ModuleInfo {
                 is_pub_chain: true,
                 is_cfg: false,
+                from_cfg_only: false,
             },
         );
     }
@@ -1833,17 +1994,40 @@ fn walk_mod_declarations(
             if let Some(ref path) = resolved {
                 if let Ok(rel) = path.strip_prefix(project_path) {
                     let key = rel.to_string_lossy().to_string();
-                    let existing = map.get(&key).copied().unwrap_or(ModuleInfo {
-                        is_pub_chain: false,
-                        is_cfg: false,
-                    });
-                    map.insert(
-                        key,
-                        ModuleInfo {
-                            is_pub_chain: existing.is_pub_chain || chain_pub,
-                            is_cfg: existing.is_cfg || chain_cfg,
-                        },
-                    );
+                    let new_info = ModuleInfo {
+                        is_pub_chain: chain_pub,
+                        is_cfg: chain_cfg,
+                        from_cfg_only: mod_has_cfg,
+                    };
+                    let merged = match map.get(&key).copied() {
+                        None => new_info,
+                        Some(existing) => {
+                            if !mod_has_cfg {
+                                // Non-cfg-gated declaration is authoritative.
+                                ModuleInfo {
+                                    is_pub_chain: chain_pub,
+                                    is_cfg: existing.is_cfg || chain_cfg,
+                                    from_cfg_only: false,
+                                }
+                            } else if !existing.from_cfg_only {
+                                // Existing came from a non-cfg-gated declaration;
+                                // keep its pub chain, just merge cfg flag.
+                                ModuleInfo {
+                                    is_pub_chain: existing.is_pub_chain,
+                                    is_cfg: existing.is_cfg || chain_cfg,
+                                    from_cfg_only: false,
+                                }
+                            } else {
+                                // Both cfg-gated: conservative AND for pub chain.
+                                ModuleInfo {
+                                    is_pub_chain: existing.is_pub_chain && chain_pub,
+                                    is_cfg: existing.is_cfg || chain_cfg,
+                                    from_cfg_only: true,
+                                }
+                            }
+                        }
+                    };
+                    map.insert(key, merged);
                 }
                 walk_mod_declarations(project_path, path, chain_pub, chain_cfg, map);
             }
@@ -1857,12 +2041,13 @@ fn walk_mod_declarations(
 /// - External stubs (empty `code_path`) → `None`
 /// - Binary-only crate → `Some(false)`
 /// - spec/proof functions → `Some(false)` (erased at runtime)
-/// - Non-pub function → `Some(false)`
 /// - pub exec function with all-pub module chain → `Some(true)`
+/// - Trait impl method (detected via `code_name`) with all-pub module chain → `Some(true)`
 /// - Otherwise → `Some(false)`
 #[must_use]
 pub fn classify_public_api(
     is_public: bool,
+    code_name: &str,
     code_path: &str,
     kind: DeclKind,
     file_module_pub: &HashMap<String, ModuleInfo>,
@@ -1877,15 +2062,17 @@ pub fn classify_public_api(
     if kind != DeclKind::Exec {
         return Some(false);
     }
-    if !is_public {
-        return Some(false);
+    let module_pub = file_module_pub
+        .get(code_path)
+        .map(|mi| mi.is_pub_chain)
+        .unwrap_or(false);
+    if is_public && module_pub {
+        return Some(true);
     }
-    Some(
-        file_module_pub
-            .get(code_path)
-            .map(|mi| mi.is_pub_chain)
-            .unwrap_or(false),
-    )
+    if is_trait_impl_code_name(code_name) && module_pub {
+        return Some(true);
+    }
+    Some(false)
 }
 
 /// Backfill atoms from `verus_parser` for functions that SCIP missed.
@@ -1903,6 +2090,7 @@ pub fn backfill_atoms_from_parser(
     pkg_version: &str,
     file_module_pub: &HashMap<String, ModuleInfo>,
     is_library: bool,
+    code_path_prefix: &str,
 ) -> usize {
     let src_dir = project_path.join("src");
     let parse_root: &Path = if src_dir.is_dir() {
@@ -1925,6 +2113,12 @@ pub fn backfill_atoms_from_parser(
         let code_path = match &fi.file {
             Some(p) => p.clone(),
             None => continue,
+        };
+
+        let output_code_path = if code_path_prefix.is_empty() {
+            code_path.clone()
+        } else {
+            format!("{}/{}", code_path_prefix, code_path)
         };
 
         let already_present = atoms_dict.values().any(|atom| {
@@ -1982,15 +2176,25 @@ pub fn backfill_atoms_from_parser(
             .as_deref()
             .map(|v| v == "pub")
             .unwrap_or(false);
+        // For RQN, ensure path has "crate-name/src/..." format.
+        let rqn_path = if output_code_path.contains("/src/") {
+            output_code_path.clone()
+        } else if output_code_path.starts_with("src/") {
+            format!("{}/{}", pkg_name, output_code_path)
+        } else {
+            // Backfill paths from verus_parser are relative to src/
+            format!("{}/src/{}", pkg_name, output_code_path)
+        };
+        let rqn = derive_rust_qualified_name(&rqn_path, &fi.name);
         atoms_dict.insert(
             code_name.clone(),
             AtomWithLines {
                 display_name: fi.name.clone(),
-                code_name,
+                code_name: code_name.clone(),
                 dependencies: BTreeSet::new(),
                 dependencies_with_locations: Vec::new(),
                 code_module,
-                code_path: code_path.clone(),
+                code_path: output_code_path.clone(),
                 code_text: CodeTextInfo {
                     lines_start: fi.spec_text.lines_start,
                     lines_end: fi.spec_text.lines_end,
@@ -2002,10 +2206,11 @@ pub fn backfill_atoms_from_parser(
                     "verus"
                 }
                 .to_string(),
-                rust_qualified_name: None,
+                rust_qualified_name: rqn,
                 is_public: Some(vis_public),
                 is_public_api: classify_public_api(
                     vis_public,
+                    &code_name,
                     &code_path,
                     fi.kind,
                     file_module_pub,
@@ -2657,6 +2862,119 @@ mod tests {
     }
 
     // =========================================================================
+    // is_trait_impl_code_name tests
+    // =========================================================================
+
+    #[test]
+    fn test_trait_impl_add() {
+        assert!(is_trait_impl_code_name(
+            "probe:crate/1.0/edwards/EdwardsPoint#Add<&EdwardsPoint>#add()"
+        ));
+    }
+
+    #[test]
+    fn test_trait_impl_mul() {
+        assert!(is_trait_impl_code_name(
+            "probe:crate/1.0/montgomery/MontgomeryPoint#Mul<&Scalar>#mul()"
+        ));
+    }
+
+    #[test]
+    fn test_trait_impl_from() {
+        assert!(is_trait_impl_code_name(
+            "probe:crate/1.0/window/NafLookupTable5<ProjectiveNielsPoint>#From<&EdwardsPoint>#from()"
+        ));
+    }
+
+    #[test]
+    fn test_inherent_impl_not_trait() {
+        assert!(!is_trait_impl_code_name(
+            "probe:crate/1.0/montgomery/MontgomeryPoint#ct_eq()"
+        ));
+    }
+
+    #[test]
+    fn test_inherent_impl_two_hashes_not_trait() {
+        // verus-analyzer encodes inherent impls as SelfType#SelfType<Ret>#method()
+        assert!(!is_trait_impl_code_name(
+            "probe:crate/1.0/scalar/&Scalar#Scalar<Scalar>#reduce()"
+        ));
+    }
+
+    #[test]
+    fn test_inherent_impl_different_return_type_not_trait() {
+        assert!(!is_trait_impl_code_name(
+            "probe:crate/1.0/scalar/&Scalar#Scalar<Choice>#is_canonical()"
+        ));
+    }
+
+    #[test]
+    fn test_inherent_impl_ref_self_not_trait() {
+        assert!(!is_trait_impl_code_name(
+            "probe:crate/1.0/edwards/&EdwardsPoint#EdwardsPoint<EdwardsPoint>#double()"
+        ));
+    }
+
+    #[test]
+    fn test_inherent_impl_generic_self_not_trait() {
+        assert!(!is_trait_impl_code_name(
+            "probe:crate/1.0/window/&LookupTable<AffineNielsPoint>#LookupTable<i8>#select()"
+        ));
+    }
+
+    #[test]
+    fn test_inherent_impl_mut_ref_not_trait() {
+        assert!(!is_trait_impl_code_name(
+            "probe:crate/1.0/scalar/&mut/Scalar52#Scalar52<u64>#conditional_add_l()"
+        ));
+    }
+
+    #[test]
+    fn test_free_function_not_trait() {
+        assert!(!is_trait_impl_code_name("probe:crate/1.0/montgomery/mul()"));
+    }
+
+    #[test]
+    fn test_trait_impl_with_line_suffix() {
+        assert!(is_trait_impl_code_name(
+            "probe:crate/1.0/edwards/EdwardsPoint#Add<&EdwardsPoint>#add()@123"
+        ));
+    }
+
+    #[test]
+    fn test_no_probe_prefix() {
+        assert!(is_trait_impl_code_name(
+            "crate/1.0/edwards/EdwardsPoint#Add#add()"
+        ));
+    }
+
+    #[test]
+    fn test_empty_string_not_trait() {
+        assert!(!is_trait_impl_code_name(""));
+    }
+
+    #[test]
+    fn test_trait_impl_display() {
+        assert!(is_trait_impl_code_name(
+            "probe:crate/1.0/DalekBits#Display<&Formatter<'_>>#fmt()"
+        ));
+    }
+
+    #[test]
+    fn test_trait_impl_clone() {
+        assert!(is_trait_impl_code_name(
+            "probe:crate/1.0/window/LookupTable#Clone#clone()"
+        ));
+    }
+
+    #[test]
+    fn test_trait_impl_index() {
+        assert!(is_trait_impl_code_name(
+            "probe:crate/1.0/scalar/Scalar52#Index<usize>#index()"
+        ));
+    }
+
+    // =========================================================================
     // classify_public_api tests
     // =========================================================================
 
@@ -2664,7 +2982,7 @@ mod tests {
     fn test_classify_public_api_external_stub() {
         let map = HashMap::new();
         assert_eq!(
-            classify_public_api(true, "", DeclKind::Exec, &map, true),
+            classify_public_api(true, "", "", DeclKind::Exec, &map, true),
             None
         );
     }
@@ -2673,7 +2991,7 @@ mod tests {
     fn test_classify_public_api_binary_crate() {
         let map = HashMap::new();
         assert_eq!(
-            classify_public_api(true, "src/main.rs", DeclKind::Exec, &map, false),
+            classify_public_api(true, "", "src/main.rs", DeclKind::Exec, &map, false),
             Some(false)
         );
     }
@@ -2682,6 +3000,7 @@ mod tests {
         ModuleInfo {
             is_pub_chain: is_pub,
             is_cfg: false,
+            from_cfg_only: false,
         }
     }
 
@@ -2690,7 +3009,7 @@ mod tests {
         let mut map = HashMap::new();
         map.insert("src/lib.rs".to_string(), mi(true));
         assert_eq!(
-            classify_public_api(true, "src/lib.rs", DeclKind::Spec, &map, true),
+            classify_public_api(true, "", "src/lib.rs", DeclKind::Spec, &map, true),
             Some(false)
         );
     }
@@ -2700,7 +3019,7 @@ mod tests {
         let mut map = HashMap::new();
         map.insert("src/lib.rs".to_string(), mi(true));
         assert_eq!(
-            classify_public_api(true, "src/lib.rs", DeclKind::Proof, &map, true),
+            classify_public_api(true, "", "src/lib.rs", DeclKind::Proof, &map, true),
             Some(false)
         );
     }
@@ -2710,7 +3029,7 @@ mod tests {
         let mut map = HashMap::new();
         map.insert("src/lib.rs".to_string(), mi(true));
         assert_eq!(
-            classify_public_api(false, "src/lib.rs", DeclKind::Exec, &map, true),
+            classify_public_api(false, "", "src/lib.rs", DeclKind::Exec, &map, true),
             Some(false)
         );
     }
@@ -2720,7 +3039,7 @@ mod tests {
         let mut map = HashMap::new();
         map.insert("src/scalar.rs".to_string(), mi(true));
         assert_eq!(
-            classify_public_api(true, "src/scalar.rs", DeclKind::Exec, &map, true),
+            classify_public_api(true, "", "src/scalar.rs", DeclKind::Exec, &map, true),
             Some(true)
         );
     }
@@ -2730,7 +3049,7 @@ mod tests {
         let mut map = HashMap::new();
         map.insert("src/internal.rs".to_string(), mi(false));
         assert_eq!(
-            classify_public_api(true, "src/internal.rs", DeclKind::Exec, &map, true),
+            classify_public_api(true, "", "src/internal.rs", DeclKind::Exec, &map, true),
             Some(false)
         );
     }
@@ -2739,7 +3058,53 @@ mod tests {
     fn test_classify_public_api_unknown_file() {
         let map = HashMap::new();
         assert_eq!(
-            classify_public_api(true, "src/unknown.rs", DeclKind::Exec, &map, true),
+            classify_public_api(true, "", "src/unknown.rs", DeclKind::Exec, &map, true),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn test_classify_public_api_trait_impl_in_pub_module() {
+        let mut map = HashMap::new();
+        map.insert("src/lib.rs".to_string(), mi(true));
+        let code_name = "probe-verus://mycrate/0.1.0/Counter#Add<Counter>#add()";
+        assert_eq!(
+            classify_public_api(false, code_name, "src/lib.rs", DeclKind::Exec, &map, true),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn test_classify_public_api_trait_impl_in_private_module() {
+        let mut map = HashMap::new();
+        map.insert("src/internal.rs".to_string(), mi(false));
+        let code_name = "probe-verus://mycrate/0.1.0/Counter#Add<Counter>#add()";
+        assert_eq!(
+            classify_public_api(
+                false,
+                code_name,
+                "src/internal.rs",
+                DeclKind::Exec,
+                &map,
+                true
+            ),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn test_classify_public_api_private_fn_not_trait_impl() {
+        let mut map = HashMap::new();
+        map.insert("src/lib.rs".to_string(), mi(true));
+        assert_eq!(
+            classify_public_api(
+                false,
+                "probe-verus://mycrate/0.1.0/regular_fn()",
+                "src/lib.rs",
+                DeclKind::Exec,
+                &map,
+                true
+            ),
             Some(false)
         );
     }

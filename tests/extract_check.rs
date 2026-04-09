@@ -88,6 +88,7 @@ fn live_extract_structural_check() {
         false,
         None,
         vec![],
+        false,
     )
     .expect("probe-verus extract failed");
 

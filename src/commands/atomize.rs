@@ -4,7 +4,7 @@ use crate::{
     add_external_stubs, backfill_atoms_from_parser, build_call_graph, build_module_visibility_map,
     convert_to_atoms_with_parsed_spans, find_duplicate_code_names, is_library_crate,
     metadata::{gather_metadata, get_default_output_path, wrap_in_envelope, AtomizeInternalConfig},
-    parse_scip_json,
+    parse_scip_json, public_api, resolve_package_root,
     scip_cache::{Analyzer, ScipCache},
     AtomWithLines,
 };
@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 /// Execute the atomize command.
 ///
 /// Generates call graph atoms with line numbers from SCIP indexes.
+#[allow(clippy::too_many_arguments)]
 pub fn cmd_atomize(
     project_path: PathBuf,
     output: Option<PathBuf>,
@@ -22,6 +23,7 @@ pub fn cmd_atomize(
     use_rust_analyzer: bool,
     allow_duplicates: bool,
     auto_install: bool,
+    with_public_api: bool,
 ) -> Result<(), String> {
     if auto_install {
         eprintln!(
@@ -60,8 +62,18 @@ pub fn cmd_atomize(
     println!("  ✓ Call graph built with {} functions", call_graph.len());
     println!();
 
-    let file_module_pub = build_module_visibility_map(&project_path);
-    let is_library = is_library_crate(&project_path);
+    let pkg_root = resolve_package_root(&project_path, None);
+    let file_module_pub = build_module_visibility_map(&pkg_root);
+    let is_library = is_library_crate(&pkg_root);
+
+    // Gather metadata early so we can use pkg_name for RQN derivation
+    let metadata = gather_metadata(&project_path);
+
+    let code_path_prefix = pkg_root
+        .strip_prefix(&project_path)
+        .unwrap_or(Path::new(""))
+        .to_string_lossy()
+        .to_string();
 
     // Convert to atoms format with line numbers
     println!("Converting to atoms format with accurate line numbers...");
@@ -70,10 +82,12 @@ pub fn cmd_atomize(
     let atoms = convert_to_atoms_with_parsed_spans(
         &call_graph,
         &symbol_to_display_name,
-        &project_path,
+        &pkg_root,
         with_locations,
         &file_module_pub,
         is_library,
+        &code_path_prefix,
+        &metadata.pkg_name,
     );
     println!("  ✓ Converted {} functions to atoms format", atoms.len());
     if with_locations {
@@ -110,17 +124,15 @@ pub fn cmd_atomize(
         println!("  ✓ Added {} external function stub(s)", stub_count);
     }
 
-    // Gather metadata and resolve output path
-    let metadata = gather_metadata(&project_path);
-
     // Backfill atoms for functions that SCIP missed (e.g. cfg-gated verus! blocks)
     let backfill_count = backfill_atoms_from_parser(
-        &project_path,
+        &pkg_root,
         &mut atoms_dict,
         &metadata.pkg_name,
         &metadata.pkg_version,
         &file_module_pub,
         is_library,
+        &code_path_prefix,
     );
     if backfill_count > 0 {
         println!(
@@ -128,6 +140,24 @@ pub fn cmd_atomize(
             backfill_count
         );
     }
+
+    if with_public_api {
+        match public_api::run_cargo_public_api(&pkg_root) {
+            Ok(public_rqns) => {
+                let (matched, overridden) =
+                    public_api::enrich_atoms_with_public_api(&mut atoms_dict, &public_rqns);
+                println!(
+                    "  ✓ cargo public-api: {} public RQNs, {matched} atoms matched, {overridden} overridden",
+                    public_rqns.len()
+                );
+            }
+            Err(e) => {
+                eprintln!("  ⚠ cargo public-api failed: {e}");
+                eprintln!("    Falling back to SCIP-walk is-public-api values");
+            }
+        }
+    }
+
     let output =
         output.unwrap_or_else(|| get_default_output_path(&project_path, &metadata, "atoms"));
 
@@ -254,16 +284,25 @@ pub fn atomize_internal(config: &AtomizeInternalConfig) -> Result<usize, String>
 
     let (call_graph, symbol_to_display_name) = build_call_graph(&scip_index);
 
-    let file_module_pub = build_module_visibility_map(config.project_path);
-    let is_library = is_library_crate(config.project_path);
+    let pkg_root = resolve_package_root(config.project_path, config.package);
+    let file_module_pub = build_module_visibility_map(&pkg_root);
+    let is_library = is_library_crate(&pkg_root);
+
+    let code_path_prefix = pkg_root
+        .strip_prefix(config.project_path)
+        .unwrap_or(Path::new(""))
+        .to_string_lossy()
+        .to_string();
 
     let atoms = convert_to_atoms_with_parsed_spans(
         &call_graph,
         &symbol_to_display_name,
-        config.project_path,
+        &pkg_root,
         config.with_locations,
         &file_module_pub,
         is_library,
+        &code_path_prefix,
+        &config.metadata.pkg_name,
     );
 
     let duplicates = find_duplicate_code_names(&atoms);
@@ -286,13 +325,31 @@ pub fn atomize_internal(config: &AtomizeInternalConfig) -> Result<usize, String>
     add_external_stubs(&mut atoms_dict);
 
     backfill_atoms_from_parser(
-        config.project_path,
+        &pkg_root,
         &mut atoms_dict,
         &config.metadata.pkg_name,
         &config.metadata.pkg_version,
         &file_module_pub,
         is_library,
+        &code_path_prefix,
     );
+
+    if config.with_public_api {
+        match public_api::run_cargo_public_api(&pkg_root) {
+            Ok(public_rqns) => {
+                let (matched, overridden) =
+                    public_api::enrich_atoms_with_public_api(&mut atoms_dict, &public_rqns);
+                eprintln!(
+                    "  ✓ cargo public-api: {} public RQNs, {matched} atoms matched, {overridden} overridden",
+                    public_rqns.len()
+                );
+            }
+            Err(e) => {
+                eprintln!("  ⚠ cargo public-api failed: {e}");
+                eprintln!("    Falling back to SCIP-walk is-public-api values");
+            }
+        }
+    }
 
     let count = atoms_dict.len();
 

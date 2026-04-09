@@ -90,6 +90,7 @@ pub fn cmd_extract(
     _with_spec_text: bool,
     taxonomy_config: Option<PathBuf>,
     verus_args: Vec<String>,
+    with_public_api: bool,
 ) -> Result<(), String> {
     if auto_install {
         eprintln!(
@@ -135,12 +136,14 @@ pub fn cmd_extract(
         let config = AtomizeInternalConfig {
             project_path: &project_path,
             output: &atoms_path,
+            package: package.as_deref(),
             regenerate_scip,
             verbose,
             use_rust_analyzer,
             allow_duplicates,
             auto_install,
             with_locations: true,
+            with_public_api,
             metadata: &metadata,
         };
         run_atomize_step(&config, &mut result);

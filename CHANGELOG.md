@@ -10,6 +10,25 @@ what constitutes a breaking change.
 
 ## [Unreleased]
 
+## [6.7.0] - 2026-04-09
+
+### Added
+- **`--with-public-api` flag for extract/atomize**: Optional flag that runs `cargo public-api` to override `is-public-api` with ground-truth rustdoc-based public API surface. Matched to atoms via `rust-qualified-name` (RQN). Requires `cargo-public-api` installed. Without the flag, behavior is unchanged (SCIP module-chain walk).
+- **`rust-qualified-name` population for backfilled atoms**: Atoms created by the verus_parser backfill now also receive `rust-qualified-name` values (previously always `null`).
+- **`public_api` module** (`src/public_api.rs`): Runs `cargo public-api` subprocess, parses output, extracts RQNs, filters blanket impls, and enriches atoms.
+- **Cross-tool alignment test** (`tests/public_api_alignment.rs`): `#[ignore]` integration test comparing `is-public-api` between probe-verus and probe-rust via shared RQN keys.
+
+### Changed
+- **Align `is-public` with probe-rust**: `is-public` is now purely signature-based (`pub fn`), matching probe-rust's definition. Trait impl methods (e.g., `Add::add`) have `is-public: false` since their signatures lack `pub`, but get `is-public-api: true` when their type lives in a public module chain. Fixes #27.
+
+### Fixed
+- **Trait impl display names use Self type instead of trait name (P21)**: For single-hash SCIP symbols (verus-analyzer emits `module/Trait#method()` for reference Self types), `display-name` was incorrectly `Trait::method` (e.g., `Add::add`). Now re-enriched to `SelfType::method` (e.g., `EdwardsPoint::add`) using the self-type from the SCIP pre-pass, aligning `rust-qualified-name` with probe-rust and enabling correct `--with-public-api` matching for trait impls.
+- **RQN derivation for non-workspace projects**: `derive_rust_qualified_name` requires `crate-name/src/...` format paths, but non-workspace projects produced `src/...` paths (no crate prefix). Now uses `pkg_name` from Cargo.toml to prepend the crate name for RQN computation, while keeping `code-path` output relative to the project root.
+- **cfg-gated module visibility**: `build_module_visibility_map` previously used "most permissive" visibility for duplicate `mod` declarations (e.g., `#[cfg(docsrs)] pub mod backend` + `pub(crate) mod backend`), inflating `is-public-api` counts. Non-cfg-gated declarations are now authoritative, so `pub(crate) mod backend` correctly prevails.
+- **`is_trait_impl_code_name` false positives on inherent impls**: The `#`-count heuristic incorrectly flagged verus-analyzer's inherent impl encoding (`SelfType#SelfType<Ret>#method()`) as trait impls. Now compares the impl-name segment against the self-type base name to distinguish inherent from trait impls.
+- **Workspace span matching**: In workspace projects, `convert_to_atoms_with_parsed_spans` and `backfill_atoms_from_parser` used the workspace root instead of the package root for file resolution, causing verus_parser to never find source files. All SCIP atoms defaulted to `kind: "exec"` / `language: "rust"`, misclassifying ~738 `pub proof fn` as exec. Now uses `pkg_root` so that `proof fn` and `spec fn` are correctly classified.
+- **Workspace `code-path` prefix**: In workspace projects, atom `code-path` values were relative to the crate root (`src/edwards.rs`) instead of the workspace root (`curve25519-dalek/src/edwards.rs`). This broke `derive_rust_qualified_name`, causing all `rust-qualified-name` values to be `null`. Now computes a prefix from `pkg_root.strip_prefix(project_path)` and prepends it to output `code-path` while keeping internal lookups on the raw SCIP path.
+
 ## [6.6.0] - 2026-04-08
 
 ### Added

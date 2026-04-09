@@ -31,6 +31,7 @@ probe-verus extract <PROJECT_PATH> [OPTIONS]
 | `--with-spec-text` | | Include raw specification text in specify output |
 | `--taxonomy-config <PATH>` | | Path to TOML file for spec classification |
 | `--verus-args <ARGS>...` | | Extra arguments passed to cargo verus |
+| `--with-public-api` | | Use `cargo public-api` to override `is-public-api` (requires `cargo-public-api`) |
 
 ### Examples
 
@@ -64,6 +65,7 @@ probe-verus atomize <PROJECT_PATH> [OPTIONS]
 | `--regenerate-scip` | `-r` | Force regeneration of the SCIP index |
 | `--with-locations` | | Include detailed per-call location info (precondition/postcondition/inner) |
 | `--auto-install` | | **Deprecated.** Use `probe-verus setup --from-project` instead |
+| `--with-public-api` | | Use `cargo public-api` to override `is-public-api` (requires `cargo-public-api`) |
 
 ### Examples
 

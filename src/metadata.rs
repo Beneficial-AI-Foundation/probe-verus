@@ -120,12 +120,14 @@ pub fn gather_metadata(project_path: &Path) -> ProjectMetadata {
 pub struct AtomizeInternalConfig<'a> {
     pub project_path: &'a Path,
     pub output: &'a Path,
+    pub package: Option<&'a str>,
     pub regenerate_scip: bool,
     pub verbose: bool,
     pub use_rust_analyzer: bool,
     pub allow_duplicates: bool,
     pub auto_install: bool,
     pub with_locations: bool,
+    pub with_public_api: bool,
     pub metadata: &'a ProjectMetadata,
 }
 

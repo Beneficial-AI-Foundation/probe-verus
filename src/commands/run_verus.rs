@@ -423,6 +423,14 @@ pub fn run_verus_internal(config: &ExtractInternalConfig) -> Result<VerifySummar
         None,
     );
 
+    if result.status == AnalysisStatus::CompilationFailed {
+        let mut msg = "Compilation failed".to_string();
+        for err in &result.compilation.errors {
+            msg.push_str(&format!("\n  - {}", err.message));
+        }
+        return Err(msg);
+    }
+
     if let Some(parent) = config.output.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("Failed to create output directory: {}", e))?;

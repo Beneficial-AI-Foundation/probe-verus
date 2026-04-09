@@ -8,6 +8,7 @@ Probe Verus projects: generate call graph atoms, extract specifications, and ana
 
 - **Rust toolchain** (`cargo`) -- install via [rustup.rs](https://rustup.rs/)
 - **verus-analyzer, scip & Verus** -- all auto-downloadable via `probe-verus setup`. Use `--from-project` to detect the correct Verus version from a project's `Cargo.toml`. See [tools/INSTALL.md](tools/INSTALL.md) for manual options.
+- **cargo-public-api** *(optional, for `--with-public-api` flag)* -- install with `cargo install cargo-public-api` and `rustup install nightly --profile minimal`. See [docs/USAGE.md](docs/USAGE.md#installing-cargo-public-api-for---with-public-api) for details.
 
 | Command | Required Tools | Notes |
 |---------|----------------|-------|

@@ -208,6 +208,25 @@ curl -s https://api.github.com/repos/verus-lang/verus/releases | jq -r '.[].tag_
 
 Or browse: https://github.com/verus-lang/verus/releases
 
+## Using `--with-public-api` in Docker
+
+The `--with-public-api` flag requires [`cargo-public-api`](https://crates.io/crates/cargo-public-api) and a Rust nightly toolchain (for rustdoc JSON). These are **not** included in the default image. To use this flag, add the following to the Dockerfile after the Rust toolchain install:
+
+```dockerfile
+RUN rustup install nightly --profile minimal \
+    && cargo install cargo-public-api
+```
+
+Then rebuild and run:
+
+```bash
+docker build -t probe-verus -f docker/Dockerfile .
+docker run --rm --user root \
+  -v ~/my-project:/workspace/project \
+  probe-verus \
+  /workspace/project --with-public-api
+```
+
 ## Security
 
 The container image defaults to a non-root user (`verus`, UID 1000) for security.

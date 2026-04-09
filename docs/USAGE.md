@@ -31,13 +31,27 @@ probe-verus extract <PROJECT_PATH> [OPTIONS]
 | `--with-spec-text` | | Include raw specification text in specify output |
 | `--taxonomy-config <PATH>` | | Path to TOML file for spec classification |
 | `--verus-args <ARGS>...` | | Extra arguments passed to cargo verus |
-| `--with-public-api` | | Use `cargo public-api` to override `is-public-api` (requires `cargo-public-api`) |
+| `--with-public-api` | | Use `cargo public-api` to override `is-public-api` (requires `cargo-public-api`; see below) |
+
+#### Installing `cargo-public-api` (for `--with-public-api`)
+
+The `--with-public-api` flag shells out to [`cargo-public-api`](https://crates.io/crates/cargo-public-api), which uses rustdoc JSON (a nightly-only feature). Install both the tool and a nightly toolchain:
+
+```bash
+cargo install cargo-public-api
+rustup install nightly --profile minimal
+```
+
+`cargo-public-api` automatically invokes `rustdoc +nightly` — the nightly toolchain does not need to be your default. In Docker, add these to the Dockerfile before running `probe-verus extract --with-public-api` (see [docker/README.md](../docker/README.md#using---with-public-api-in-docker) for a ready-made snippet).
 
 ### Examples
 
 ```bash
 # Full pipeline on a workspace member
 probe-verus extract ./my-verus-project -p my-crate
+
+# With ground-truth public API detection
+probe-verus extract ./my-verus-project --with-public-api
 
 # Install tools first, then extract
 probe-verus setup --from-project ./my-verus-project
@@ -65,7 +79,7 @@ probe-verus atomize <PROJECT_PATH> [OPTIONS]
 | `--regenerate-scip` | `-r` | Force regeneration of the SCIP index |
 | `--with-locations` | | Include detailed per-call location info (precondition/postcondition/inner) |
 | `--auto-install` | | **Deprecated.** Use `probe-verus setup --from-project` instead |
-| `--with-public-api` | | Use `cargo public-api` to override `is-public-api` (requires `cargo-public-api`) |
+| `--with-public-api` | | Use `cargo public-api` to override `is-public-api` (requires `cargo-public-api`; [install instructions](#installing-cargo-public-api-for---with-public-api)) |
 
 ### Examples
 

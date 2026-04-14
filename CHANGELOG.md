@@ -10,6 +10,12 @@ what constitutes a breaking change.
 
 ## [Unreleased]
 
+## [6.9.1] - 2026-04-14
+
+### Fixed
+- **Backfill path prefix for `src/`-rooted parsing**: When `backfill_atoms_from_parser` parses from `src/`, the parser returns paths relative to `src/` (e.g. `"lemmas/foo.rs"`). Now prepends `"src/"` so code-path matches the SCIP-derived format (`"crate/src/lemmas/foo.rs"`), fixing duplicate atoms and incorrect code-module derivation for backfilled functions.
+- **`derive_module_path_from_code_path` handles bare `src/` prefix**: Paths like `"src/lemmas/foo.rs"` (no crate prefix) now correctly strip the `src/` prefix when deriving the module path, matching the behavior for `"crate/src/lemmas/foo.rs"`.
+
 ## [6.9.0] - 2026-04-14
 
 ### Added
@@ -400,7 +406,8 @@ what constitutes a breaking change.
 
 Initial release. SCIP-based call graph generation for Rust/Verus projects.
 
-[Unreleased]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v6.9.0...HEAD
+[Unreleased]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v6.9.1...HEAD
+[6.9.1]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v6.9.0...v6.9.1
 [6.9.0]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v6.8.0...v6.9.0
 [6.8.0]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v6.7.0...v6.8.0
 [6.7.0]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v6.6.0...v6.7.0

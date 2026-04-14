@@ -2093,7 +2093,8 @@ pub fn backfill_atoms_from_parser(
     code_path_prefix: &str,
 ) -> usize {
     let src_dir = project_path.join("src");
-    let parse_root: &Path = if src_dir.is_dir() {
+    let parsed_from_src = src_dir.is_dir();
+    let parse_root: &Path = if parsed_from_src {
         &src_dir
     } else {
         project_path
@@ -2110,9 +2111,18 @@ pub fn backfill_atoms_from_parser(
     let mut added = 0usize;
 
     for fi in &parsed.functions {
-        let code_path = match &fi.file {
+        let raw_path = match &fi.file {
             Some(p) => p.clone(),
             None => continue,
+        };
+
+        // When the parser is rooted at src/, its paths are relative to src/
+        // (e.g. "lemmas/foo.rs"). Prepend "src/" so code-path matches the
+        // SCIP-derived format ("crate/src/lemmas/foo.rs").
+        let code_path = if parsed_from_src && !raw_path.starts_with("src/") {
+            format!("src/{}", raw_path)
+        } else {
+            raw_path
         };
 
         let output_code_path = if code_path_prefix.is_empty() {
@@ -2239,6 +2249,7 @@ fn derive_module_path_from_code_path(code_path: &str) -> String {
     let after_src = code_path
         .find("/src/")
         .map(|pos| &code_path[pos + 5..])
+        .or_else(|| code_path.strip_prefix("src/"))
         .unwrap_or(code_path);
     after_src.trim_end_matches(".rs").to_string()
 }
@@ -2763,6 +2774,41 @@ mod tests {
     #[test]
     fn test_derive_rust_qualified_name_no_src() {
         assert!(derive_rust_qualified_name("some/path/file.rs", "foo").is_none());
+    }
+
+    // =========================================================================
+    // derive_module_path_from_code_path tests
+    // =========================================================================
+
+    #[test]
+    fn test_derive_module_path_with_crate_src() {
+        assert_eq!(
+            derive_module_path_from_code_path(
+                "curve25519-dalek/src/lemmas/common_lemmas/bit_lemmas.rs"
+            ),
+            "lemmas/common_lemmas/bit_lemmas"
+        );
+    }
+
+    #[test]
+    fn test_derive_module_path_bare_src_prefix() {
+        assert_eq!(
+            derive_module_path_from_code_path("src/lemmas/common_lemmas/bit_lemmas.rs"),
+            "lemmas/common_lemmas/bit_lemmas"
+        );
+    }
+
+    #[test]
+    fn test_derive_module_path_no_src() {
+        assert_eq!(derive_module_path_from_code_path("build.rs"), "build");
+    }
+
+    #[test]
+    fn test_derive_module_path_simple() {
+        assert_eq!(
+            derive_module_path_from_code_path("my-crate/src/field.rs"),
+            "field"
+        );
     }
 
     #[test]

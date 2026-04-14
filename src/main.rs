@@ -306,6 +306,10 @@ enum Commands {
         /// Skip automatic Rust toolchain installation via rustup
         #[arg(long)]
         skip_toolchain: bool,
+
+        /// Force download even if a tool is already found on PATH
+        #[arg(long)]
+        force: bool,
     },
 
     /// Unified pipeline: atomize + specify + run-verus
@@ -543,6 +547,7 @@ fn main() {
             detect_version,
             detect_toolchain,
             skip_toolchain,
+            force,
         } => {
             cmd_setup(
                 status,
@@ -550,6 +555,7 @@ fn main() {
                 detect_version,
                 detect_toolchain,
                 skip_toolchain,
+                force,
             );
         }
         Commands::Extract {

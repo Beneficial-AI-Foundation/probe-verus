@@ -11,6 +11,7 @@ pub fn cmd_setup(
     detect_version: bool,
     detect_toolchain: bool,
     skip_toolchain: bool,
+    force: bool,
 ) {
     // Validate mutually exclusive flags
     if status && (from_project.is_some() || detect_version || detect_toolchain) {
@@ -124,7 +125,7 @@ pub fn cmd_setup(
 
     eprintln!("Installing external tools for probe-verus...\n");
 
-    let errors = tool_manager::install_all();
+    let errors = tool_manager::install_all(force);
 
     if !errors.is_empty() {
         for e in &errors {

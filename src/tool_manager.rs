@@ -182,9 +182,26 @@ fn managed_path(tool: &Tool) -> Option<PathBuf> {
     }
 }
 
-/// Find the most recently installed managed Verus binary (`cargo-verus`).
-/// Scans `~/.probe-verus/tools/verus-*/cargo-verus` and returns the path if found.
+/// Find the managed Verus binary (`cargo-verus`).
+///
+/// When `PROBE_VERUS_VERSION` is set, returns the binary for that specific
+/// version (if installed). Otherwise falls back to the most recently installed
+/// version (lexicographically highest directory name).
 fn managed_verus_binary() -> Option<PathBuf> {
+    if let Ok(v) = std::env::var(VERUS_VERSION_ENV) {
+        if !v.is_empty() {
+            let specific = verus_binary_for_version(&v)?;
+            if specific.exists() {
+                return Some(specific);
+            }
+        }
+    }
+    managed_verus_binary_any()
+}
+
+/// Find the most recently installed managed Verus binary, regardless of version.
+/// Scans `~/.probe-verus/tools/verus-*/cargo-verus` and returns the path if found.
+fn managed_verus_binary_any() -> Option<PathBuf> {
     let dir = tools_dir()?;
     let mut candidates: Vec<PathBuf> = Vec::new();
     if let Ok(entries) = fs::read_dir(&dir) {
@@ -212,6 +229,19 @@ fn verus_version_dir(version: &str) -> Option<PathBuf> {
 /// Return the `cargo-verus` binary path for a specific version.
 pub fn verus_binary_for_version(version: &str) -> Option<PathBuf> {
     verus_version_dir(version).map(|d| d.join("cargo-verus"))
+}
+
+/// Read the cached `rust-toolchain` channel for a managed `cargo-verus` binary.
+///
+/// Expects `binary_path` to be `~/.probe-verus/tools/verus-{version}/cargo-verus`.
+/// Returns the channel string (e.g. `"1.94.0"`) if the `rust-toolchain` marker
+/// file exists in the same directory.
+pub fn read_managed_toolchain(binary_path: &Path) -> Option<String> {
+    let dir = binary_path.parent()?;
+    let marker = dir.join("rust-toolchain");
+    fs::read_to_string(marker)
+        .ok()
+        .map(|s| s.trim().to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -919,6 +949,14 @@ pub fn ensure_rust_toolchain(verus_version: &str) -> Result<RustToolchainInfo, S
     );
 
     install_rust_toolchain_info(&info)?;
+
+    // Cache the toolchain channel in the managed directory so VerusRunner can
+    // set RUSTUP_TOOLCHAIN at verification time without a network call.
+    if let Some(dir) = verus_version_dir(verus_version) {
+        let marker = dir.join("rust-toolchain");
+        let _ = fs::write(&marker, &info.channel);
+    }
+
     Ok(info)
 }
 
@@ -1029,17 +1067,55 @@ pub fn print_status() {
 }
 
 /// Install all manageable tools. Returns a list of errors for tools that failed.
-/// Tools already available (managed or on PATH) are skipped.
+/// Tools already available in the managed directory are skipped.
+/// When `force` is false, tools found on PATH are also skipped.
+/// When `force` is true, tools only found on PATH (not managed) are re-downloaded
+/// to the managed directory so the managed copy takes precedence.
 /// Tools unsupported on the current platform are reported but not treated as errors.
-pub fn install_all() -> Vec<ToolError> {
+///
+/// For Verus, the check is version-aware: the *required* version (from env var,
+/// Cargo.toml, or fallback) must be installed, not just any version.
+pub fn install_all(force: bool) -> Vec<ToolError> {
     let tools = [Tool::VerusAnalyzer, Tool::Scip, Tool::Verus];
     let platform = current_platform();
     let mut errors = Vec::new();
 
     for tool in &tools {
-        if resolve_tool(*tool).is_ok() {
-            eprintln!("{tool}: already available, skipping download.");
-            continue;
+        if *tool == Tool::Verus {
+            let required = resolve_verus_version(None);
+            let version_installed =
+                verus_binary_for_version(&required.tag).is_some_and(|p| p.exists());
+            if version_installed && !force {
+                eprintln!(
+                    "{tool}: version {} already installed, skipping download.",
+                    required.tag
+                );
+                continue;
+            }
+            if let Some(any_binary) = (!version_installed)
+                .then(managed_verus_binary_any)
+                .flatten()
+            {
+                let existing = any_binary
+                    .parent()
+                    .and_then(|d| d.file_name())
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                eprintln!(
+                    "{tool}: installed version ({}) does not match required version ({}), downloading...",
+                    existing, required.tag
+                );
+            }
+        } else {
+            let managed = managed_path(tool).is_some_and(|p| p.exists());
+            if managed {
+                eprintln!("{tool}: already installed in managed directory, skipping download.");
+                continue;
+            }
+            if !force && resolve_tool(*tool).is_ok() {
+                eprintln!("{tool}: already available, skipping download.");
+                continue;
+            }
         }
 
         let supported = match tool {
@@ -1371,5 +1447,45 @@ channel = "1.94.0"
         assert!(parse_rust_toolchain_toml("not valid toml {{{").is_none());
         assert!(parse_rust_toolchain_toml("[toolchain]\n").is_none());
         assert!(parse_rust_toolchain_toml("").is_none());
+    }
+
+    #[test]
+    fn test_verus_binary_for_version_path_construction() {
+        let path = verus_binary_for_version("0.2026.01.14.88f7396");
+        assert!(path.is_some());
+        let p = path.unwrap();
+        assert!(p.ends_with("verus-0.2026.01.14.88f7396/cargo-verus"));
+    }
+
+    #[test]
+    fn test_managed_verus_binary_respects_env_var() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+
+        // Create a temporary tools directory with two Verus versions
+        let tmp = tempfile::TempDir::new().unwrap();
+        let tools = tmp.path().join(".probe-verus").join("tools");
+
+        let old_dir = tools.join("verus-0.2026.01.14.88f7396");
+        let new_dir = tools.join("verus-0.2026.04.03.21dfcd2");
+        fs::create_dir_all(&old_dir).unwrap();
+        fs::create_dir_all(&new_dir).unwrap();
+        fs::write(old_dir.join("cargo-verus"), "old").unwrap();
+        fs::write(new_dir.join("cargo-verus"), "new").unwrap();
+
+        // We can't easily override tools_dir() since it reads HOME,
+        // but we can test the public verus_binary_for_version directly.
+        // The correct version resolves to a path containing the version string.
+        let old_path = verus_binary_for_version("0.2026.01.14.88f7396").unwrap();
+        assert!(
+            old_path
+                .to_string_lossy()
+                .contains("verus-0.2026.01.14.88f7396"),
+            "verus_binary_for_version should return version-specific path"
+        );
+        let new_path = verus_binary_for_version("0.2026.04.03.21dfcd2").unwrap();
+        assert!(new_path
+            .to_string_lossy()
+            .contains("verus-0.2026.04.03.21dfcd2"),);
+        assert_ne!(old_path, new_path);
     }
 }

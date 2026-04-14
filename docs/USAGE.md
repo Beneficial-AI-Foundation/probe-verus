@@ -287,6 +287,7 @@ probe-verus setup [OPTIONS]
 | `--detect-version` | Print detected Verus version without installing (requires `--from-project`) |
 | `--detect-toolchain` | Print the Rust toolchain channel required by the resolved Verus version |
 | `--skip-toolchain` | Skip automatic Rust toolchain installation via rustup |
+| `--force` | Force download to managed directory even if the tool is already found on PATH |
 
 Version resolution uses, in order:
 1. Environment variable overrides (`PROBE_VERUS_ANALYZER_VERSION`, `PROBE_SCIP_VERSION`, `PROBE_VERUS_VERSION`)
@@ -323,6 +324,9 @@ probe-verus setup
 
 # Check what's installed
 probe-verus setup --status
+
+# Force re-download even if tools are found on PATH
+PROBE_VERUS_VERSION=0.2026.04.03.21dfcd2 probe-verus setup --force
 ```
 
 ---

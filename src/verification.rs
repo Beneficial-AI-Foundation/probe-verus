@@ -685,7 +685,12 @@ impl VerusRunner {
         self.setup_environment();
 
         let mut cmd = if let Some(binary) = Self::resolve_binary() {
-            let mut c = Command::new(binary);
+            let mut c = Command::new(&binary);
+            // When using a managed Verus binary, set RUSTUP_TOOLCHAIN so cargo
+            // picks the correct rustc even if the project lacks rust-toolchain.toml.
+            if let Some(channel) = crate::tool_manager::read_managed_toolchain(&binary) {
+                c.env("RUSTUP_TOOLCHAIN", channel);
+            }
             c.arg("verus").arg("verify");
             c
         } else {

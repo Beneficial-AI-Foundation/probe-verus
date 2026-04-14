@@ -10,6 +10,17 @@ what constitutes a breaking change.
 
 ## [Unreleased]
 
+## [6.9.0] - 2026-04-14
+
+### Added
+- **`setup --force`**: Force download tools to the managed directory even when a version is already found on PATH. Fixes the case where a stale or incompatible `cargo-verus` on PATH causes `setup` to skip the managed install.
+
+### Fixed
+- **Version-aware Verus resolution in `setup`**: `setup` now checks that the *required* Verus version (from env var, Cargo.toml, or fallback) is installed, not just any version. If a different version is installed, it downloads the correct one and prints a mismatch diagnostic.
+- **`extract` detects Verus version from project**: The `extract` pipeline now detects the Verus version from the project's `Cargo.toml` and passes it to `VerusRunner`, ensuring the correct managed binary is used (not just the newest installed version).
+- **VerusRunner sets `RUSTUP_TOOLCHAIN` for managed Verus**: When using a managed `cargo-verus`, the runner now sets `RUSTUP_TOOLCHAIN` to the required channel so verification uses the correct Rust compiler even if the project lacks a `rust-toolchain.toml` file. The toolchain channel is cached in the managed directory by `setup`.
+- **`is-disabled` for internal atoms missing from specs**: Internal atoms not matched by the specify step (e.g. functions inside `proptest!` macros) now correctly get `is-disabled: true` and `primary-spec: ""` instead of omitting both fields. External stubs still omit both, as documented.
+
 ## [6.8.0] - 2026-04-09
 
 ### Fixed
@@ -389,7 +400,8 @@ what constitutes a breaking change.
 
 Initial release. SCIP-based call graph generation for Rust/Verus projects.
 
-[Unreleased]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v6.8.0...HEAD
+[Unreleased]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v6.9.0...HEAD
+[6.9.0]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v6.8.0...v6.9.0
 [6.8.0]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v6.7.0...v6.8.0
 [6.7.0]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v6.6.0...v6.7.0
 [6.6.0]: https://github.com/Beneficial-AI-Foundation/probe-verus/compare/v6.5.1...v6.6.0

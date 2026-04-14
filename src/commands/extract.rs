@@ -117,6 +117,18 @@ pub fn cmd_extract(
 
     let metadata = gather_metadata(&project_path);
 
+    // Ensure the Verus version env var is set so VerusRunner resolves the
+    // correct managed binary (not just the newest installed version).
+    if std::env::var(crate::tool_manager::VERUS_VERSION_ENV)
+        .ok()
+        .filter(|v| !v.is_empty())
+        .is_none()
+    {
+        if let Some(v) = crate::metadata::detect_verus_version(&project_path) {
+            unsafe { std::env::set_var(crate::tool_manager::VERUS_VERSION_ENV, &v) };
+        }
+    }
+
     let atoms_path = get_default_output_path(&project_path, &metadata, "atoms");
     let specs_path = get_default_output_path(&project_path, &metadata, "specs");
     let results_path = get_default_output_path(&project_path, &metadata, "proofs");
@@ -603,7 +615,19 @@ pub fn merge_into_unified(
 
         // `is_disabled` semantics: `None` = function was not analyzed for specs;
         // `Some(true)` = function was analyzed but has no spec; `Some(false)` = function has a spec.
-        let is_disabled = spec_text.as_ref().map(String::is_empty);
+        //
+        // When specs were loaded but a particular atom has no matching specs entry,
+        // distinguish external stubs (empty code_path → leave as None) from internal
+        // atoms the parser missed (e.g. functions inside proptest! macros → treat as
+        // analyzed-but-unspecified: primary_spec = "", is_disabled = true).
+        let is_disabled = match &spec_text {
+            Some(text) => Some(text.is_empty()),
+            None if specs.is_some() && !atom.code_path.is_empty() => {
+                spec_text = Some(String::new());
+                Some(true)
+            }
+            None => None,
+        };
 
         // Derive categorized dependencies from location data
         let mut requires_deps = BTreeSet::new();
@@ -1737,5 +1761,102 @@ mod tests {
             Some("requires\n    is_valid(x)\nensures\n    helper(x)")
         );
         assert_eq!(foo.is_disabled, Some(false));
+    }
+
+    /// Internal atoms not matched by specify (e.g. functions inside proptest! macros)
+    /// should get `is-disabled: true` + `primary-spec: ""` rather than omitting both.
+    #[test]
+    fn test_internal_atom_missing_from_specs_gets_disabled() {
+        let dir = TempDir::new().unwrap();
+
+        let atoms = serde_json::json!({
+            "schema": "probe-verus/atoms",
+            "schema-version": "2.0",
+            "tool": {"name": "probe-verus", "version": "6.6.0", "command": "atomize"},
+            "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
+            "timestamp": "2026-04-14T00:00:00Z",
+            "data": {
+                "probe:test/0.1.0/module/specified_fn()": {
+                    "display-name": "specified_fn",
+                    "dependencies": [],
+                    "code-module": "module",
+                    "code-path": "src/module.rs",
+                    "code-text": {"lines-start": 10, "lines-end": 20},
+                    "kind": "exec",
+                    "language": "rust"
+                },
+                "probe:test/0.1.0/test/module/proptest_fn()": {
+                    "display-name": "proptest_fn",
+                    "dependencies": [],
+                    "code-module": "test/module",
+                    "code-path": "src/module.rs",
+                    "code-text": {"lines-start": 100, "lines-end": 110},
+                    "kind": "exec",
+                    "language": "rust"
+                },
+                "probe:external/1.0.0/lib/ext()": {
+                    "display-name": "ext",
+                    "dependencies": [],
+                    "code-module": "lib",
+                    "code-path": "",
+                    "code-text": {"lines-start": 0, "lines-end": 0},
+                    "kind": "exec",
+                    "language": "rust"
+                }
+            }
+        });
+        let atoms_path = write_json(&dir, "atoms.json", &atoms);
+
+        let specs = serde_json::json!({
+            "schema": "probe-verus/specs",
+            "schema-version": "2.0",
+            "tool": {"name": "probe-verus", "version": "6.6.0", "command": "specify"},
+            "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
+            "timestamp": "2026-04-14T00:00:00Z",
+            "data": {
+                "probe:test/0.1.0/module/specified_fn()": {
+                    "spec-text": {"lines-start": 10, "lines-end": 20},
+                    "kind": "exec",
+                    "specified": true,
+                    "has_requires": true,
+                    "has_ensures": true,
+                    "requires_text": "requires\n    x > 0",
+                    "ensures_text": "ensures\n    result > x"
+                }
+            }
+        });
+        let specs_path = write_json(&dir, "specs.json", &specs);
+
+        let result = merge_into_unified(&atoms_path, Some(&specs_path), None).unwrap();
+
+        let specified = &result["probe:test/0.1.0/module/specified_fn()"];
+        assert_eq!(
+            specified.is_disabled,
+            Some(false),
+            "specified function → is-disabled: false"
+        );
+        assert!(!specified.primary_spec.as_ref().unwrap().is_empty());
+
+        let proptest = &result["probe:test/0.1.0/test/module/proptest_fn()"];
+        assert_eq!(
+            proptest.is_disabled,
+            Some(true),
+            "internal atom not in specs should get is-disabled: true"
+        );
+        assert_eq!(
+            proptest.primary_spec.as_deref(),
+            Some(""),
+            "internal atom not in specs should get empty primary-spec"
+        );
+
+        let ext = &result["probe:external/1.0.0/lib/ext()"];
+        assert!(
+            ext.is_disabled.is_none(),
+            "external stub should still have is-disabled absent"
+        );
+        assert!(
+            ext.primary_spec.is_none(),
+            "external stub should still have primary-spec absent"
+        );
     }
 }

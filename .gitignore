@@ -29,4 +29,8 @@ index.scip.json
 # Cache directory
 data/
 
+# Docker (kept locally, not in repo)
+docker/
+.github/workflows/docker-publish.yml
+
 

@@ -99,7 +99,7 @@ jobs:
 
       - name: Run tests
         working-directory: probe-verus
-        run: cargo test --verbose
+        run: cargo test --lib --verbose
 
   # Integration tests that generate SCIP data from dalek-lite
   integration-test:

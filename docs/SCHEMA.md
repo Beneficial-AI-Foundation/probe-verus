@@ -1,7 +1,7 @@
 # probe-verus Data Schemas
 
-Version: 6.9.1
-Date: 2026-04-14
+Version: 6.10.0
+Date: 2026-05-21
 
 This document specifies the concrete JSON `data` payloads produced by each
 probe-verus subcommand.  It complements the language-agnostic

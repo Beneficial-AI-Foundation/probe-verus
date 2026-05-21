@@ -32,6 +32,7 @@ probe-verus extract <PROJECT_PATH> [OPTIONS]
 | `--taxonomy-config <PATH>` | | Path to TOML file for spec classification |
 | `--verus-args <ARGS>...` | | Extra arguments passed to cargo verus |
 | `--with-public-api` | | Use `cargo public-api` to override `is-public-api` (requires `cargo-public-api`; see below) |
+| `--skip-enrich` | | Skip the verification status enrichment step (transitive verification propagation) |
 
 #### Installing `cargo-public-api` (for `--with-public-api`)
 

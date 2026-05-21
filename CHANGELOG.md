@@ -16,6 +16,13 @@ what constitutes a breaking change.
 - Verification status enrichment: `extract` now runs transitive verification propagation as its final step, upgrading `verification-status` from `"verified"` to `"transitively-verified"` on atoms whose entire transitive closure is verified or trusted
 - `--skip-enrich` flag for `extract` to skip the enrichment step
 - `probe` crate dependency for the enrichment algorithm (P23)
+- **Supported Projects** section in README documenting project requirements, Verus version detection, plain Rust support, and known limitations
+
+### Fixed
+- Use `checked_div` to satisfy `clippy::manual_checked_ops` lint
+
+### Changed
+- Remove Docker files from git tracking (kept locally)
 
 ## [6.9.1] - 2026-04-14
 

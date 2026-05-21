@@ -19,6 +19,38 @@ Probe Verus projects: generate call graph atoms, extract specifications, and ana
 | `list-functions` | None | |
 | `setup` | None | Downloads verus-analyzer, scip & Verus |
 
+## Supported Projects
+
+probe-verus can analyze any Rust project that uses [Verus](https://github.com/verus-lang/verus) for formal verification. It also supports plain Rust projects for call graph extraction (without specs or verification) though the user is encouraged to use [probe-rust](https://github.com/Beneficial-AI-Foundation/probe-rust) for pure Rust projects.
+
+| Requirement | Detail |
+|-------------|--------|
+| **Cargo project** | A `Cargo.toml` must exist at the project root. Workspace projects are supported via the `--package` flag |
+| **Verus source conventions** | For spec extraction and verification, the project should use Verus idioms: `verus!{}` blocks, `spec fn`, `proof fn`, `requires`/`ensures` clauses |
+| **Buildable by verus-analyzer** | The `atomize` and `extract` steps run `verus-analyzer scip .` to produce a SCIP index. If verus-analyzer cannot analyze the project (e.g., unresolved dependencies), SCIP generation will fail |
+| **Buildable by cargo verus** | Verification (`run-verus` / `extract`) invokes `cargo verus`. If `cargo verus` cannot build the project, verification results will be incomplete — but `extract` gracefully skips verification and still produces atoms and specs |
+
+### Plain Rust projects
+
+probe-verus can generate call graph atoms for plain Rust projects (no Verus) by passing `--rust-analyzer` to use rust-analyzer instead of verus-analyzer for SCIP generation. In this mode, specs and verification are not available — use `--skip-specify --skip-verify` (or run `atomize` directly).
+
+### Verus version detection
+
+`probe-verus setup --from-project` auto-detects the Verus version from the target project's `Cargo.toml` using this resolution order:
+
+1. `[package.metadata.verus]` section with a `release` field
+2. Workspace member `Cargo.toml` files with the same section
+3. `vstd` or `verus_builtin` git dependency with a `rev` matching a Verus release tag
+4. Override via `PROBE_VERUS_VERSION` env var (takes priority over all of the above)
+
+If no version can be determined, setup falls back to the latest GitHub release.
+
+### What won't work
+
+- **Projects without `Cargo.toml`** — probe-verus requires a standard Cargo project structure
+- **Projects that verus-analyzer cannot analyze** — if SCIP generation fails (e.g., due to missing dependencies or unsupported syntax), the atomize step cannot produce a call graph. Pre-build the project with `cargo build` first to ensure dependencies are resolved
+- **Projects whose Verus version has no matching tools** — `probe-verus setup` downloads pre-built binaries from GitHub releases. If the project pins a Verus version with no corresponding release, setup will fail. Use `PROBE_VERUS_VERSION` to override, or install tools manually via [tools/INSTALL.md](tools/INSTALL.md)
+
 ## Installation
 
 ### Pre-built binaries (recommended)

@@ -119,11 +119,7 @@ pub fn cmd_tracked_csv(
     eprintln!(
         "  With complete proofs: {} ({}%)",
         proof_count,
-        if total > 0 {
-            proof_count * 100 / total
-        } else {
-            0
-        }
+        (proof_count * 100).checked_div(total).unwrap_or(0)
     );
     eprintln!("  Without complete proof: {}", total - proof_count);
     Ok(())

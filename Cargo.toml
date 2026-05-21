@@ -2,7 +2,7 @@
 
 [package]
 name = "probe-verus"
-version = "6.9.1"
+version = "6.10.0"
 edition = "2021"
 description = "Probe Verus projects: generate call graph atoms and analyze verification results"
 license = "MIT OR Apache-2.0"
@@ -34,6 +34,11 @@ tar = "0.4"
 dirs = "5.0"
 zip = { version = "8.1", default-features = false, features = ["deflate"] }
 chrono = { version = "0.4.44", default-features = false, features = ["clock"] }
+probe = { git = "https://github.com/Beneficial-AI-Foundation/probe" }
+
+[patch."https://github.com/Beneficial-AI-Foundation/probe"]
+probe = { path = "../probe" }
+probe-extract-check = { path = "../probe/probe-extract-check" }
 
 [dev-dependencies]
 probe-extract-check = { git = "https://github.com/Beneficial-AI-Foundation/probe" }

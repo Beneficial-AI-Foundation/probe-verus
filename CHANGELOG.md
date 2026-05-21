@@ -10,6 +10,13 @@ what constitutes a breaking change.
 
 ## [Unreleased]
 
+## [6.10.0] - 2026-05-21
+
+### Added
+- Verification status enrichment: `extract` now runs transitive verification propagation as its final step, upgrading `verification-status` from `"verified"` to `"transitively-verified"` on atoms whose entire transitive closure is verified or trusted
+- `--skip-enrich` flag for `extract` to skip the enrichment step
+- `probe` crate dependency for the enrichment algorithm (P23)
+
 ## [6.9.1] - 2026-04-14
 
 ### Fixed

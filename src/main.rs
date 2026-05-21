@@ -377,6 +377,10 @@ enum Commands {
         /// Use `cargo public-api` to override is-public-api (requires cargo-public-api installed)
         #[arg(long)]
         with_public_api: bool,
+
+        /// Skip the verification status enrichment step (transitive verification propagation)
+        #[arg(long)]
+        skip_enrich: bool,
     },
 }
 
@@ -574,6 +578,7 @@ fn main() {
             taxonomy_config,
             verus_args,
             with_public_api,
+            skip_enrich,
         } => {
             if let Err(e) = cmd_extract(
                 project_path,
@@ -591,6 +596,7 @@ fn main() {
                 taxonomy_config,
                 verus_args,
                 with_public_api,
+                skip_enrich,
             ) {
                 eprintln!("Error: {e}");
                 std::process::exit(1);

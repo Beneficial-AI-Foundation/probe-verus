@@ -536,7 +536,7 @@ optional fields are added:
 | `body-dependencies` | array of strings | no | Subset of `dependencies` called in the function body (omitted when empty) |
 | `primary-spec` | string | no | Full spec text (requires + ensures concatenated). Empty string = analyzed, no spec. Absent = not analyzed. |
 | `is-disabled` | bool | no | `false` if the function has a spec; `true` otherwise. Absent for external stubs or when `--skip-specify`. |
-| `verification-status` | string | no | `"verified"`, `"failed"`, `"unverified"`, or `"trusted"`.  Proofs-derived values are absent when `--skip-verify` or when there is no proofs entry for the atom.  `"trusted"` is set by the merge step when a trust-base trigger applies (can appear even without proofs); see Verification Status Mapping. |
+| `verification-status` | string | no | `"transitively-verified"`, `"verified"`, `"failed"`, `"unverified"`, or `"trusted"`.  After enrichment (default, skippable via `--skip-enrich`): `"transitively-verified"` = all transitive deps verified/trusted; `"verified"` = locally verified only.  `"trusted"` is set by the merge step when a trust-base trigger applies; see Verification Status Mapping. |
 | `trusted-reason` | string | no | Present only when `verification-status` is `"trusted"`.  Values: `"admit"` (function uses `admit()`), `"external-body"` (has `#[verifier::external_body]`), or `"assume-specification"` (matched by an `assume_specification` declaration).  Enables automated trust-base classification without consulting specs.json. (v6.5.1) |
 | `spec-labels` | array of strings | no | Taxonomy classification labels from `--taxonomy-config` (omitted when empty or when `--skip-specify`) |
 

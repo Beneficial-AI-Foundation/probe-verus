@@ -91,6 +91,7 @@ pub fn cmd_extract(
     taxonomy_config: Option<PathBuf>,
     verus_args: Vec<String>,
     with_public_api: bool,
+    skip_enrich: bool,
 ) -> Result<(), String> {
     if auto_install {
         eprintln!(
@@ -242,6 +243,13 @@ pub fn cmd_extract(
         &metadata,
     );
     result.trust_base = trust_base;
+
+    // === Step 5: Enrich verification status (transitive propagation) ===
+    if !skip_enrich {
+        if let Some(ref up) = unified_path {
+            enrich_unified_output(up);
+        }
+    }
 
     // === Summary ===
     print_summary(&result);
@@ -826,6 +834,58 @@ fn run_unified_merge(
             (None, None)
         }
     }
+}
+
+/// Read the unified extract JSON, run verification status enrichment (P23),
+/// and write back in-place.
+fn enrich_unified_output(path: &Path) {
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("  Warning: Could not read unified output for enrichment: {e}");
+            return;
+        }
+    };
+
+    let mut raw: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("  Warning: Could not parse unified output for enrichment: {e}");
+            return;
+        }
+    };
+
+    let data_value = match raw.get("data").cloned() {
+        Some(v) => v,
+        None => {
+            eprintln!("  Warning: No \"data\" field in unified output; skipping enrichment");
+            return;
+        }
+    };
+
+    let mut atoms: std::collections::BTreeMap<String, probe::types::Atom> =
+        match serde_json::from_value(data_value) {
+            Ok(a) => a,
+            Err(e) => {
+                eprintln!("  Warning: Could not deserialize atoms for enrichment: {e}");
+                return;
+            }
+        };
+
+    let (transitive, local, _) = probe::commands::propagate::enrich_verification_status(&mut atoms);
+
+    let enriched_data = serde_json::to_value(&atoms).expect("failed to serialize enriched atoms");
+    raw.as_object_mut()
+        .expect("envelope is not a JSON object")
+        .insert("data".to_string(), enriched_data);
+
+    let json = serde_json::to_string_pretty(&raw).expect("failed to serialize enriched output");
+    if let Err(e) = std::fs::write(path, &json) {
+        eprintln!("  Warning: Could not write enriched output: {e}");
+        return;
+    }
+
+    println!("  enrich: ✓ {transitive} transitively-verified, {local} locally verified");
 }
 
 #[cfg(test)]

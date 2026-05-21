@@ -105,6 +105,7 @@ fn extract_backward_compat() {
         None,   // taxonomy_config
         vec![], // verus_args
         false,  // with_public_api
+        false,  // skip_enrich
     )
     .expect("cmd_extract failed");
 

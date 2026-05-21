@@ -29,6 +29,9 @@ index.scip.json
 # Cache directory
 data/
 
+# Local Cargo overrides
+.cargo/
+
 # Docker (kept locally, not in repo)
 docker/
 .github/workflows/docker-publish.yml

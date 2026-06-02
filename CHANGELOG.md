@@ -10,6 +10,11 @@ what constitutes a breaking change.
 
 ## [Unreleased]
 
+## [6.10.1] - 2026-06-02
+
+### Fixed
+- Remove unused `position_encoding` field from SCIP `Document` and `SignatureDocumentation` structs; newer `scip` CLI versions (>= v0.7) omit this field from JSON output, causing `extract`/`atomize` to fail with "missing field `position_encoding`"
+
 ## [6.10.0] - 2026-05-21
 
 ### Added

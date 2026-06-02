@@ -97,7 +97,6 @@ pub struct Document {
     pub occurrences: Vec<Occurrence>,
     #[serde(default)]
     pub symbols: Vec<Symbol>,
-    pub position_encoding: i32,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -124,7 +123,6 @@ pub struct Symbol {
 pub struct SignatureDocumentation {
     pub language: String,
     pub text: String,
-    pub position_encoding: i32,
 }
 
 /// A call from one function to another, with optional type context for disambiguation

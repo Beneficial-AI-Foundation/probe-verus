@@ -10,7 +10,7 @@ use crate::metadata::{
 };
 use crate::verification::VerusRunner;
 use crate::verus_parser::AssumeSpecInfo;
-use crate::{AtomWithLines, CallLocation, UnifiedAtom};
+use crate::{resolve_workspace_root, AtomWithLines, CallLocation, UnifiedAtom};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -115,6 +115,8 @@ pub fn cmd_extract(
             project_path.display()
         ));
     }
+
+    let project_path = resolve_workspace_root(&project_path, package.as_deref())?;
 
     let metadata = gather_metadata(&project_path);
 

@@ -4,7 +4,7 @@ use crate::{
     add_external_stubs, backfill_atoms_from_parser, build_call_graph, build_module_visibility_map,
     convert_to_atoms_with_parsed_spans, find_duplicate_code_names, is_library_crate,
     metadata::{gather_metadata, get_default_output_path, wrap_in_envelope, AtomizeInternalConfig},
-    parse_scip_json, public_api, resolve_package_root,
+    parse_scip_json, public_api, resolve_package_root, resolve_workspace_root,
     scip_cache::{Analyzer, ScipCache},
     AtomWithLines,
 };
@@ -40,6 +40,8 @@ pub fn cmd_atomize(
 
     // Validate project
     validate_project(&project_path)?;
+
+    let project_path = resolve_workspace_root(&project_path, None)?;
     println!("  ✓ Valid Rust project found");
 
     // Get or generate SCIP JSON
@@ -267,13 +269,15 @@ fn print_success_summary(output: &Path, atoms_dict: &BTreeMap<String, AtomWithLi
 /// Internal atomize implementation that returns Result for better error handling.
 /// Used by the `run` command (which pre-gathers metadata to share a timestamp).
 pub fn atomize_internal(config: &AtomizeInternalConfig) -> Result<usize, String> {
+    let project_path = resolve_workspace_root(config.project_path, config.package)?;
+
     let analyzer = if config.use_rust_analyzer {
         Analyzer::RustAnalyzer
     } else {
         Analyzer::VerusAnalyzer
     };
-    let mut cache = ScipCache::with_analyzer(config.project_path, analyzer)
-        .with_auto_install(config.auto_install);
+    let mut cache =
+        ScipCache::with_analyzer(&project_path, analyzer).with_auto_install(config.auto_install);
 
     let json_path = cache
         .get_or_generate(config.regenerate_scip, config.verbose)
@@ -284,12 +288,12 @@ pub fn atomize_internal(config: &AtomizeInternalConfig) -> Result<usize, String>
 
     let (call_graph, symbol_to_display_name) = build_call_graph(&scip_index);
 
-    let pkg_root = resolve_package_root(config.project_path, config.package);
+    let pkg_root = resolve_package_root(&project_path, config.package);
     let file_module_pub = build_module_visibility_map(&pkg_root);
     let is_library = is_library_crate(&pkg_root);
 
     let code_path_prefix = pkg_root
-        .strip_prefix(config.project_path)
+        .strip_prefix(&project_path)
         .unwrap_or(Path::new(""))
         .to_string_lossy()
         .to_string();

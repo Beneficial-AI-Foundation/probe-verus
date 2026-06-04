@@ -10,6 +10,13 @@ what constitutes a breaking change.
 
 ## [Unreleased]
 
+## [6.10.2] - 2026-06-04
+
+### Fixed
+- Auto-resolve workspace roots in `extract` and `atomize`: when pointed at a workspace-only `Cargo.toml` (e.g., `dalek-verus/`), probe-verus now redirects to the correct member package directory before generating the SCIP index. Previously, the SCIP paths and verus parser span map used different roots, silently misclassifying all functions as `language: "rust"` instead of `"verus"`
+- Clear error when pointing at a multi-member workspace without `--package`
+- Clear error when single-member workspace has a missing member directory
+
 ## [6.10.1] - 2026-06-02
 
 ### Fixed

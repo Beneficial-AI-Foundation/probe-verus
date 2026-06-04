@@ -1800,7 +1800,126 @@ pub fn normalize_code_name(code_name: &str) -> String {
 }
 
 // =============================================================================
-// Public-API classification
+// Workspace / package resolution
+// =============================================================================
+
+/// Redirect a workspace-only root to the correct member package directory.
+///
+/// Must be called **before** any work (SCIP generation, metadata, span maps) so
+/// that every downstream path is relative to the package, not the workspace root.
+///
+/// Behavior by `Cargo.toml` shape:
+/// - `[package]` present (with or without `[workspace]`): return `project_path` as-is.
+/// - `[workspace]` only, `package` arg matches a member: return that member dir.
+/// - `[workspace]` only, single member, no `package` arg: auto-resolve to the member.
+/// - `[workspace]` only, multiple members, no `package` arg: return `Err` listing members.
+/// - No `[package]` and no `[workspace]`: return `project_path` as-is (fallback).
+pub fn resolve_workspace_root(
+    project_path: &Path,
+    package: Option<&str>,
+) -> Result<PathBuf, String> {
+    let cargo_toml = project_path.join("Cargo.toml");
+    let contents = match std::fs::read_to_string(&cargo_toml) {
+        Ok(c) => c,
+        Err(_) => return Ok(project_path.to_path_buf()),
+    };
+    let table: toml::Table = match contents.parse() {
+        Ok(t) => t,
+        Err(_) => return Ok(project_path.to_path_buf()),
+    };
+
+    if table.contains_key("package") {
+        return Ok(project_path.to_path_buf());
+    }
+
+    let members = match table
+        .get("workspace")
+        .and_then(|w| w.as_table())
+        .and_then(|w| w.get("members"))
+        .and_then(|m| m.as_array())
+    {
+        Some(m) => m,
+        None => return Ok(project_path.to_path_buf()),
+    };
+
+    let member_strings: Vec<&str> = members.iter().filter_map(|m| m.as_str()).collect();
+
+    if let Some(pkg) = package {
+        for &member_path in &member_strings {
+            let dir = project_path.join(member_path);
+            let member_toml = dir.join("Cargo.toml");
+            if let Ok(mc) = std::fs::read_to_string(&member_toml) {
+                if let Ok(mt) = mc.parse::<toml::Table>() {
+                    let name = mt
+                        .get("package")
+                        .and_then(|p| p.as_table())
+                        .and_then(|p| p.get("name"))
+                        .and_then(|n| n.as_str());
+                    if name == Some(pkg) {
+                        eprintln!(
+                            "  Note: workspace root detected, resolving to member '{}'",
+                            member_path
+                        );
+                        return Ok(dir);
+                    }
+                }
+            }
+        }
+        return Err(format!(
+            "'{}' is a workspace root, but no member matches --package '{}'.\n\n\
+             Workspace members:\n{}\n",
+            project_path.display(),
+            pkg,
+            member_strings
+                .iter()
+                .map(|m| format!("  - {m}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ));
+    }
+
+    if member_strings.len() == 1 {
+        let dir = project_path.join(member_strings[0]);
+        if dir.exists() {
+            eprintln!(
+                "  Note: workspace root detected, auto-resolving to member '{}'",
+                member_strings[0]
+            );
+            return Ok(dir);
+        }
+        return Err(format!(
+            "'{}' is a workspace root with member '{}', \
+             but the member directory does not exist.\n",
+            project_path.display(),
+            member_strings[0],
+        ));
+    }
+
+    let hint = member_strings
+        .iter()
+        .map(|m| format!("  probe-verus extract {}/{m}", project_path.display()))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    Err(format!(
+        "'{}' is a workspace root with multiple members. \
+         Please specify which package to analyze.\n\n\
+         Workspace members:\n{}\n\n\
+         Run one of:\n{hint}\n\n\
+         Or use --package <NAME>:\n  \
+         probe-verus extract {} --package <NAME>\n",
+        project_path.display(),
+        member_strings
+            .iter()
+            .map(|m| format!("  - {m}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        project_path.display(),
+    ))
+}
+
+// =============================================================================
+// Package root resolution (source root within a project)
 // =============================================================================
 
 /// Resolve the source root for a package within a workspace.
@@ -3356,5 +3475,158 @@ mod tests {
         let gated = map.get("src/gated.rs").unwrap();
         assert!(gated.is_pub_chain);
         assert!(gated.is_cfg, "cfg-gated module should have is_cfg=true");
+    }
+
+    // =========================================================================
+    // resolve_workspace_root tests
+    // =========================================================================
+
+    #[test]
+    fn test_resolve_workspace_root_package_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[package]\nname = \"my-crate\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        let result = resolve_workspace_root(tmp.path(), None).unwrap();
+        assert_eq!(result, tmp.path());
+    }
+
+    #[test]
+    fn test_resolve_workspace_root_hybrid() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[workspace]\n\n[package]\nname = \"my-crate\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        let result = resolve_workspace_root(tmp.path(), None).unwrap();
+        assert_eq!(result, tmp.path());
+    }
+
+    #[test]
+    fn test_resolve_workspace_root_single_member_auto() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"my-crate\"]\n",
+        )
+        .unwrap();
+        let member = tmp.path().join("my-crate");
+        std::fs::create_dir_all(&member).unwrap();
+        std::fs::write(
+            member.join("Cargo.toml"),
+            "[package]\nname = \"my-crate\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+
+        let result = resolve_workspace_root(tmp.path(), None).unwrap();
+        assert_eq!(result, member);
+    }
+
+    #[test]
+    fn test_resolve_workspace_root_multi_member_with_package() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crate-a\", \"crate-b\"]\n",
+        )
+        .unwrap();
+        for name in &["crate-a", "crate-b"] {
+            let dir = tmp.path().join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("Cargo.toml"),
+                format!("[package]\nname = \"{name}\"\nversion = \"0.1.0\"\n"),
+            )
+            .unwrap();
+        }
+
+        let result = resolve_workspace_root(tmp.path(), Some("crate-b")).unwrap();
+        assert_eq!(result, tmp.path().join("crate-b"));
+    }
+
+    #[test]
+    fn test_resolve_workspace_root_multi_member_no_package_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crate-a\", \"crate-b\"]\n",
+        )
+        .unwrap();
+        for name in &["crate-a", "crate-b"] {
+            let dir = tmp.path().join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("Cargo.toml"),
+                format!("[package]\nname = \"{name}\"\nversion = \"0.1.0\"\n"),
+            )
+            .unwrap();
+        }
+
+        let err = resolve_workspace_root(tmp.path(), None).unwrap_err();
+        assert!(err.contains("workspace root"), "error: {err}");
+        assert!(err.contains("crate-a"), "error should list members: {err}");
+        assert!(err.contains("crate-b"), "error should list members: {err}");
+    }
+
+    #[test]
+    fn test_resolve_workspace_root_no_cargo_toml() {
+        let tmp = tempfile::tempdir().unwrap();
+        let result = resolve_workspace_root(tmp.path(), None).unwrap();
+        assert_eq!(result, tmp.path());
+    }
+
+    #[test]
+    fn test_resolve_workspace_root_package_not_found() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crate-a\"]\n",
+        )
+        .unwrap();
+        let dir = tmp.path().join("crate-a");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"crate-a\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+
+        let err = resolve_workspace_root(tmp.path(), Some("nonexistent")).unwrap_err();
+        assert!(err.contains("no member matches"), "error: {err}");
+    }
+
+    #[test]
+    fn test_resolve_workspace_root_single_member_missing_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"ghost-crate\"]\n",
+        )
+        .unwrap();
+
+        let err = resolve_workspace_root(tmp.path(), None).unwrap_err();
+        assert!(
+            err.contains("does not exist"),
+            "should mention missing dir: {err}"
+        );
+    }
+
+    #[test]
+    fn test_resolve_workspace_root_invalid_toml() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("Cargo.toml"), "not valid {{ toml").unwrap();
+        let result = resolve_workspace_root(tmp.path(), None).unwrap();
+        assert_eq!(result, tmp.path());
+    }
+
+    #[test]
+    fn test_resolve_workspace_root_workspace_without_members() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("Cargo.toml"), "[workspace]\n").unwrap();
+        let result = resolve_workspace_root(tmp.path(), None).unwrap();
+        assert_eq!(result, tmp.path());
     }
 }

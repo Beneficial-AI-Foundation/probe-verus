@@ -5,7 +5,7 @@ use crate::metadata::{
     find_project_root, gather_metadata, get_default_output_path, unwrap_envelope, wrap_in_envelope,
     SpecifyInternalConfig,
 };
-use crate::path_utils::{extract_src_suffix, paths_match_by_suffix};
+use crate::path_utils::{extract_src_suffix, paths_match_by_suffix_ignoring_src};
 use crate::taxonomy;
 use crate::verus_parser::{self, AssumeSpecInfo, FunctionInfo, ParsedOutput};
 use serde::{Deserialize, Serialize};
@@ -299,8 +299,8 @@ fn find_matching_atom(func: &FunctionInfo, atoms: &BTreeMap<String, AtomEntry>) 
     for (code_name, atom) in atoms {
         let atom_suffix = extract_src_suffix(&atom.code_path);
 
-        let path_matches =
-            paths_match_by_suffix(func_path, &atom.code_path) || func_suffix == atom_suffix;
+        let path_matches = paths_match_by_suffix_ignoring_src(func_path, &atom.code_path)
+            || func_suffix == atom_suffix;
 
         let name_matches = func.name == atom.display_name
             || atom.display_name.ends_with(&format!("::{}", func.name));
@@ -408,6 +408,33 @@ mod tests {
         assert_eq!(
             result,
             Some("probe:crate/1.0/edwards/decompress()".to_string())
+        );
+    }
+
+    /// Atoms from pre-6.9.1 atoms.json files can carry code-paths missing the
+    /// `src/` segment (issue #33); matching must still succeed.
+    #[test]
+    fn test_srcless_atom_path_still_matches() {
+        let func = make_func(
+            "lemma_or_bit",
+            "curve25519-dalek/src/lemmas/common_lemmas/bit_lemmas.rs",
+            129,
+            125,
+            160,
+        );
+        let mut atoms = BTreeMap::new();
+        atoms.insert(
+            "probe:crate/1.0/lemmas/common_lemmas/bit_lemmas/lemma_or_bit()".to_string(),
+            make_atom(
+                "lemma_or_bit",
+                "curve25519-dalek/lemmas/common_lemmas/bit_lemmas.rs",
+                129,
+            ),
+        );
+        let result = find_matching_atom(&func, &atoms);
+        assert_eq!(
+            result,
+            Some("probe:crate/1.0/lemmas/common_lemmas/bit_lemmas/lemma_or_bit()".to_string())
         );
     }
 

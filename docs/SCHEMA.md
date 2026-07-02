@@ -1,7 +1,7 @@
 # probe-verus Data Schemas
 
-Version: 6.10.0
-Date: 2026-05-21
+Version: 6.10.3
+Date: 2026-07-02
 
 This document specifies the concrete JSON `data` payloads produced by each
 probe-verus subcommand.  It complements the language-agnostic
@@ -535,7 +535,7 @@ optional fields are added:
 | `ensures-dependencies` | array of strings | no | Subset of `dependencies` called in `ensures` clauses (omitted when empty) |
 | `body-dependencies` | array of strings | no | Subset of `dependencies` called in the function body (omitted when empty) |
 | `primary-spec` | string | no | Full spec text (requires + ensures concatenated). Empty string = analyzed, no spec. Absent = not analyzed. |
-| `is-disabled` | bool | no | `false` if the function has a spec; `true` otherwise. Absent for external stubs or when `--skip-specify`. |
+| `is-disabled` | bool | no | `false` if the function has a spec; `true` otherwise. Always `false` when `trusted-reason` is present — a trust reason is a deliberate human act that puts the atom in analysis scope, so trusted atoms are never disabled (KB P25). Absent for non-trusted external stubs or when `--skip-specify`. |
 | `verification-status` | string | no | `"transitively-verified"`, `"verified"`, `"failed"`, `"unverified"`, or `"trusted"`.  After enrichment (default, skippable via `--skip-enrich`): `"transitively-verified"` = all transitive deps verified/trusted; `"verified"` = locally verified only.  `"trusted"` is set by the merge step when a trust-base trigger applies; see Verification Status Mapping. |
 | `trusted-reason` | string | no | Present only when `verification-status` is `"trusted"`.  Values: `"admit"` (function uses `admit()`), `"external-body"` (has `#[verifier::external_body]`), or `"assume-specification"` (matched by an `assume_specification` declaration).  Enables automated trust-base classification without consulting specs.json. (v6.5.1) |
 | `spec-labels` | array of strings | no | Taxonomy classification labels from `--taxonomy-config` (omitted when empty or when `--skip-specify`) |
@@ -591,7 +591,9 @@ matched `assume_specification` stub) remain `"unverified"` when proofs report
 - External stubs (empty `code-path`) are not ordinary specify entries, so they
   usually lack `primary-spec`, `is-disabled`, and `spec-labels`, and proofs
   often omit them.  Merge may still set `verification-status` to `"trusted"`
-  when an `assume_specification` declaration matches the stub (v6.5.0).
+  when an `assume_specification` declaration matches the stub (v6.5.0); in
+  that case the stub also gets the declared spec text as `primary-spec` and
+  `is-disabled: false`.
 - When a pipeline step is skipped (`--skip-specify` or `--skip-verify`),
   the corresponding fields are absent from **all** entries.
 - `spec-labels` is only populated when `--taxonomy-config` is provided to

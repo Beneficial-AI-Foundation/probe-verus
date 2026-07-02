@@ -113,6 +113,13 @@ jobs:
         with:
           path: probe-verus
           fetch-depth: 0
+          # Use a PAT so the tag push is attributed to a real token and
+          # triggers the tag-driven Release workflow. Pushes made with the
+          # default GITHUB_TOKEN do not trigger other workflows, which is why
+          # v6.10.2 was tagged but never released. Falls back to GITHUB_TOKEN
+          # if RELEASE_PAT is not configured (tagging still works, but the
+          # Release workflow must then be triggered manually).
+          token: ${{ secrets.RELEASE_PAT || secrets.GITHUB_TOKEN }}
 
       - name: Create tag if version changed
         working-directory: probe-verus

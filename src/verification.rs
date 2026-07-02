@@ -6,7 +6,7 @@
 
 use crate::constants::LINE_TOLERANCE;
 use crate::path_utils::{
-    extract_src_suffix, find_best_matching_path, paths_match_by_suffix, PathMatcher,
+    extract_src_suffix, find_best_matching_path, paths_match_by_suffix_ignoring_src, PathMatcher,
 };
 use crate::CodeTextInfo;
 use regex::Regex;
@@ -1099,8 +1099,8 @@ fn find_code_name_in_atoms(
     for (code_name, atom) in atoms {
         let atom_suffix = extract_src_suffix(&atom.code_path);
 
-        let path_matches =
-            paths_match_by_suffix(&loc.code_path, &atom.code_path) || loc_suffix == atom_suffix;
+        let path_matches = paths_match_by_suffix_ignoring_src(&loc.code_path, &atom.code_path)
+            || loc_suffix == atom_suffix;
 
         let name_matches = loc.display_name == atom.display_name
             || atom
@@ -1350,6 +1350,31 @@ mod tests {
         assert_eq!(
             find_code_name_in_atoms(&loc, &atoms).as_deref(),
             Some("code_bar")
+        );
+    }
+
+    /// Atoms from pre-6.9.1 atoms.json files can carry code-paths missing the
+    /// `src/` segment (issue #33); result matching must still succeed.
+    #[test]
+    fn test_find_code_name_srcless_atom_path() {
+        let loc = make_loc(
+            "lemma_or_bit",
+            "curve25519-dalek/src/lemmas/common_lemmas/bit_lemmas.rs",
+            125,
+            160,
+        );
+        let mut atoms = BTreeMap::new();
+        atoms.insert(
+            "code_lemma_or_bit".to_string(),
+            make_atom_entry(
+                "lemma_or_bit",
+                "curve25519-dalek/lemmas/common_lemmas/bit_lemmas.rs",
+                129,
+            ),
+        );
+        assert_eq!(
+            find_code_name_in_atoms(&loc, &atoms).as_deref(),
+            Some("code_lemma_or_bit")
         );
     }
 

@@ -43,11 +43,13 @@
       "display-name": "checked_add",
       "has-body": true,
       "is-cfg-gated": false,
+      "is-disabled": true,
       "is-external": false,
       "is-public": false,
       "is-public-api": false,
       "kind": "exec",
       "language": "rust",
+      "primary-spec": "",
       "rust-qualified-name": "verus_micro::checked_add"
     },
     "probe:verus-micro/0.1.0/double_checked()": {
@@ -80,11 +82,13 @@
       "display-name": "double_checked",
       "has-body": true,
       "is-cfg-gated": false,
+      "is-disabled": true,
       "is-external": false,
       "is-public": false,
       "is-public-api": false,
       "kind": "exec",
       "language": "rust",
+      "primary-spec": "",
       "rust-qualified-name": "verus_micro::double_checked"
     },
     "probe:verus-micro/0.1.0/is_positive()": {
@@ -98,11 +102,13 @@
       "display-name": "is_positive",
       "has-body": true,
       "is-cfg-gated": false,
+      "is-disabled": true,
       "is-external": false,
       "is-public": false,
       "is-public-api": false,
       "kind": "exec",
       "language": "rust",
+      "primary-spec": "",
       "rust-qualified-name": "verus_micro::is_positive"
     },
     "probe:verus-micro/0.1.0/positive_sum()": {
@@ -138,11 +144,13 @@
       "display-name": "positive_sum",
       "has-body": true,
       "is-cfg-gated": false,
+      "is-disabled": true,
       "is-external": false,
       "is-public": false,
       "is-public-api": false,
       "kind": "exec",
       "language": "rust",
+      "primary-spec": "",
       "rust-qualified-name": "verus_micro::positive_sum"
     }
   },
@@ -155,10 +163,10 @@
     "package-version": "0.1.0",
     "repo": ""
   },
-  "timestamp": "2026-04-09T09:28:10Z",
+  "timestamp": "2026-07-02T18:54:17Z",
   "tool": {
     "command": "extract",
     "name": "probe-verus",
-    "version": "6.6.0"
+    "version": "6.10.2"
   }
 }

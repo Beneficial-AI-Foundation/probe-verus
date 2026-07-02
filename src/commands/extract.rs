@@ -10,7 +10,7 @@ use crate::metadata::{
 };
 use crate::verification::VerusRunner;
 use crate::verus_parser::AssumeSpecInfo;
-use crate::{resolve_workspace_root, AtomWithLines, CallLocation, UnifiedAtom};
+use crate::{resolve_workspace_root, AtomWithLines, CallLocation, DeclKind, UnifiedAtom};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -625,6 +625,8 @@ pub fn merge_into_unified(
 
         // `is_disabled` semantics: `None` = function was not analyzed for specs;
         // `Some(true)` = function was analyzed but has no spec; `Some(false)` = function has a spec.
+        // Trusted atoms are forced to `Some(false)` further below, after the
+        // trust reason is determined.
         //
         // When specs were loaded but a particular atom has no matching specs entry,
         // distinguish external stubs (empty code_path → leave as None) from internal
@@ -679,6 +681,18 @@ pub fn merge_into_unified(
                 .as_ref()
                 .and_then(|p| p.get(&code_name))
                 .map(|e| map_verification_status(&e.status).to_string())
+        };
+
+        // A trust reason is a deliberate human act that puts the atom in
+        // analysis scope, so trusted atoms are never disabled (KB P25:
+        // has-verification-status ⟹ ¬is-disabled). This covers spec-less
+        // `external_body` functions (which would otherwise be Some(true))
+        // and `assume_specification` targets (which would otherwise be None
+        // despite carrying a propagated primary-spec; KB P24).
+        let is_disabled = if trusted_reason.is_some() {
+            Some(false)
+        } else {
+            is_disabled
         };
 
         // For assume_specification targets, propagate the declared spec text
@@ -778,6 +792,37 @@ fn compute_trust_base_summary(unified: &BTreeMap<String, UnifiedAtom>) -> TrustB
     }
 }
 
+/// Warn about proof-kind atoms that ended up without a verification status.
+///
+/// Verus verifies every `proof fn` it compiles, so a proof atom with source
+/// (non-empty `code-path`) but no `verification-status` always indicates a
+/// result-matching failure (e.g. a `code-path` that doesn't line up with the
+/// verify step's paths), never a legitimate state.
+fn warn_proof_atoms_without_status(unified: &BTreeMap<String, UnifiedAtom>) {
+    let missing: Vec<&String> = unified
+        .iter()
+        .filter(|(_, a)| {
+            a.atom.kind == DeclKind::Proof
+                && !a.atom.code_path.is_empty()
+                && a.verification_status.is_none()
+        })
+        .map(|(name, _)| name)
+        .collect();
+
+    if !missing.is_empty() {
+        eprintln!(
+            "  Warning: {} proof atom(s) have no verification-status (result matching likely failed):",
+            missing.len()
+        );
+        for name in missing.iter().take(10) {
+            eprintln!("    - {}", name);
+        }
+        if missing.len() > 10 {
+            eprintln!("    ... and {} more", missing.len() - 10);
+        }
+    }
+}
+
 /// Run the merge step: produce unified output.
 fn run_unified_merge(
     atoms_path: &Path,
@@ -796,6 +841,11 @@ fn run_unified_merge(
 
     match merge_into_unified(atoms_path, specs_opt, proofs_opt) {
         Ok(unified) => {
+            // Only meaningful when verification results were merged; without
+            // proofs.json every proof atom legitimately lacks a status.
+            if proofs_opt.is_some() {
+                warn_proof_atoms_without_status(&unified);
+            }
             let trust_base = compute_trust_base_summary(&unified);
             let unified_path = get_default_output_path(project_path, metadata, "");
             if let Some(parent) = unified_path.parent() {
@@ -1510,6 +1560,11 @@ mod tests {
                 .as_deref(),
             Some("external-body"),
         );
+        assert_eq!(
+            result["probe:test/0.1.0/module/foo()"].is_disabled,
+            Some(false),
+            "spec-less external_body atom must not be disabled (P25: trusted atoms are in scope)"
+        );
     }
 
     #[test]
@@ -1722,6 +1777,11 @@ mod tests {
             stub.primary_spec.as_deref(),
             Some("ensures choice_is_true(*c) ==> u == 1u8"),
             "Spec text from assume_specification should be propagated"
+        );
+        assert_eq!(
+            stub.is_disabled,
+            Some(false),
+            "assume_specification target carries a spec, so it must not be disabled (P24)"
         );
 
         let foo = &result["probe:test/0.1.0/module/foo()"];

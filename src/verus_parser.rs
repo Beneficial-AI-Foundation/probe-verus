@@ -281,6 +281,11 @@ struct FunctionSpanVisitor {
     inside_cfg_mod: usize,
     /// Depth counter: >0 when visiting inside a `cfg_if!` branch
     inside_cfg_if: usize,
+    /// Depth counter: >0 when visiting inside an `impl` block marked
+    /// `#[verifier::external]`. Verus requires trait-impl externals to be
+    /// declared on the impl block (an individual trait-impl item cannot be
+    /// marked external), so the attribute must be propagated to the methods.
+    inside_external_impl: usize,
 }
 
 impl FunctionSpanVisitor {
@@ -291,11 +296,18 @@ impl FunctionSpanVisitor {
             inside_cfg_impl: 0,
             inside_cfg_mod: 0,
             inside_cfg_if: 0,
+            inside_external_impl: 0,
         }
     }
 
     fn is_inside_cfg(&self) -> bool {
         self.inside_cfg_impl > 0 || self.inside_cfg_mod > 0 || self.inside_cfg_if > 0
+    }
+
+    /// Whether the current position inherits `#[verifier::external]` from an
+    /// enclosing impl block.
+    fn is_inside_external_impl(&self) -> bool {
+        self.inside_external_impl > 0
     }
 
     /// Extract requires/ensures line ranges from a signature's spec
@@ -356,7 +368,7 @@ impl<'ast> Visit<'ast> for FunctionSpanVisitor {
             requires_range,
             ensures_range,
             has_body: true,
-            is_external: has_verifier_external(&node.attrs),
+            is_external: has_verifier_external(&node.attrs) || self.is_inside_external_impl(),
             is_cfg: has_any_cfg_attr(&node.attrs) || self.is_inside_cfg(),
         });
 
@@ -392,7 +404,14 @@ impl<'ast> Visit<'ast> for FunctionSpanVisitor {
         if cfg_gated {
             self.inside_cfg_impl += 1;
         }
+        let external_impl = has_verifier_external(&node.attrs);
+        if external_impl {
+            self.inside_external_impl += 1;
+        }
         verus_syn::visit::visit_item_impl(self, node);
+        if external_impl {
+            self.inside_external_impl -= 1;
+        }
         if cfg_gated {
             self.inside_cfg_impl -= 1;
         }
@@ -929,6 +948,10 @@ struct FunctionInfoVisitor {
     inside_cfg_mod: usize,
     /// Depth counter: >0 when visiting inside a `cfg_if!` branch
     inside_cfg_if: usize,
+    /// Depth counter: >0 when visiting inside an `impl` block marked
+    /// `#[verifier::external]`. Verus requires trait-impl externals on the impl
+    /// block, so the attribute is propagated to the enclosed methods.
+    inside_external_impl: usize,
 }
 
 impl FunctionInfoVisitor {
@@ -957,6 +980,7 @@ impl FunctionInfoVisitor {
             inside_cfg_impl: 0,
             inside_cfg_mod: 0,
             inside_cfg_if: 0,
+            inside_external_impl: 0,
         }
     }
 
@@ -1225,6 +1249,12 @@ impl FunctionInfoVisitor {
         self.inside_cfg_impl > 0 || self.inside_cfg_mod > 0 || self.inside_cfg_if > 0
     }
 
+    /// Whether the current position inherits `#[verifier::external]` from an
+    /// enclosing impl block.
+    fn is_inside_external_impl(&self) -> bool {
+        self.inside_external_impl > 0
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn add_function(
         &mut self,
@@ -1266,7 +1296,7 @@ impl FunctionInfoVisitor {
         let has_trusted_assumption = self.has_trusted_assumption(start_line, end_line);
         let contains_admit = self.contains_admit(start_line, end_line);
         let is_external_body = has_verifier_attr(attrs, "external_body");
-        let is_external = has_verifier_external(attrs);
+        let is_external = has_verifier_external(attrs) || self.is_inside_external_impl();
         let is_cfg = has_any_cfg_attr(attrs) || self.is_inside_cfg();
         let has_no_decreases_attr = has_verifier_attr(attrs, "exec_allows_no_decreases_clause");
 
@@ -1477,7 +1507,14 @@ impl<'ast> Visit<'ast> for FunctionInfoVisitor {
         if cfg_gated {
             self.inside_cfg_impl += 1;
         }
+        let external_impl = has_verifier_external(&node.attrs);
+        if external_impl {
+            self.inside_external_impl += 1;
+        }
         verus_syn::visit::visit_item_impl(self, node);
+        if external_impl {
+            self.inside_external_impl -= 1;
+        }
         if cfg_gated {
             self.inside_cfg_impl -= 1;
         }
@@ -2535,6 +2572,50 @@ impl Foo {{
             .find(|f| f.name == "normal_method")
             .unwrap();
         assert!(!normal.is_cfg);
+    }
+
+    #[test]
+    fn test_external_impl_block_propagation() {
+        // Verus forbids marking an individual trait-impl item external, so the
+        // attribute is declared on the impl block. probe-verus must propagate it
+        // to the methods, or they'd be misreported as backlog rather than excluded.
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"
+struct Foo;
+
+#[cfg_attr(verus_keep_ghost, verifier::external)]
+impl core::fmt::Debug for Foo {{
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {{
+        write!(f, "Foo")
+    }}
+}}
+
+impl Foo {{
+    fn normal_method(&self) {{}}
+}}
+"#
+        )
+        .unwrap();
+
+        let functions =
+            parse_file_for_functions(file.path(), true, true, true, true, false).unwrap();
+
+        let fmt = functions.iter().find(|f| f.name == "fmt").unwrap();
+        assert!(
+            fmt.is_external,
+            "method inside an #[verifier::external] impl block must inherit is_external"
+        );
+
+        let normal = functions
+            .iter()
+            .find(|f| f.name == "normal_method")
+            .unwrap();
+        assert!(
+            !normal.is_external,
+            "method in a non-external impl must not be marked external"
+        );
     }
 
     #[test]

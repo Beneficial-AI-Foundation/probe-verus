@@ -114,6 +114,8 @@ fn merge_fixture_files(
                 is_disabled,
                 verification_status,
                 trusted_reason: None,
+                excluded_reason: None,
+                cfg_predicate: None,
                 spec_labels,
             },
         );

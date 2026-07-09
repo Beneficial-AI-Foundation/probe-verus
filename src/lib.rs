@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+pub mod cfg_eval;
 pub mod commands;
 pub mod constants;
 pub mod error;
@@ -358,6 +359,14 @@ pub struct UnifiedAtom {
     /// Values: `"admit"`, `"external-body"`, `"assume-specification"`.
     #[serde(rename = "trusted-reason", skip_serializing_if = "Option::is_none")]
     pub trusted_reason: Option<String>,
+    /// Why this atom is excluded. Present only when `verification-status` is `"excluded"`.
+    /// Values: `"external"` (`#[verifier::external]`), `"cfg-inactive"` (its `#[cfg]`
+    /// predicate is false in the verification build — KB P26).
+    #[serde(rename = "excluded-reason", skip_serializing_if = "Option::is_none")]
+    pub excluded_reason: Option<String>,
+    /// The combined item-gating `#[cfg(...)]` predicate governing this atom, if any.
+    #[serde(rename = "cfg", skip_serializing_if = "Option::is_none")]
+    pub cfg_predicate: Option<String>,
     /// Taxonomy classification labels from the `specify` step (omitted when empty).
     #[serde(rename = "spec-labels", skip_serializing_if = "Vec::is_empty", default)]
     pub spec_labels: Vec<String>,

@@ -353,6 +353,7 @@ mod tests {
             kind: DeclKind::Exec,
             kind_display: None,
             visibility: None,
+            cfg_predicate: None,
             context: None,
             specified: false,
             has_requires: false,

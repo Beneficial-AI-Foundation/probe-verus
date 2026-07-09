@@ -471,6 +471,10 @@ struct SpecsEntry {
     /// is not trusted (Verus ignores it entirely), so it does not enlarge the trust base.
     #[serde(default)]
     is_external: bool,
+    /// Combined `#[cfg(...)]` predicate (own + enclosing impl/mod), if any. Used to
+    /// decide whether the function is compiled in the verification build (KB P26).
+    #[serde(rename = "cfg", default)]
+    cfg_predicate: Option<String>,
 }
 
 /// Deserialization wrapper for the specs.json `data` section.
@@ -704,6 +708,16 @@ pub fn merge_into_unified(
                 .map(|e| map_verification_status(&e.status).to_string())
         };
 
+        // `#[verifier::external]` is an explicit out-of-scope annotation. Cfg-based
+        // exclusion (KB P26) is applied later in `apply_cfg_scope`, once the build
+        // config is known.
+        let excluded_reason = if trusted_reason.is_none() && has_external {
+            Some("external".to_string())
+        } else {
+            None
+        };
+        let cfg_predicate = specs_entry.and_then(|e| e.cfg_predicate.clone());
+
         // KB P25: has-verification-status ⟹ ¬is-disabled. An atom that carries a
         // `verification-status` is in analysis scope and must not be in the
         // `is-disabled: true` backlog.
@@ -747,12 +761,54 @@ pub fn merge_into_unified(
                 is_disabled,
                 verification_status,
                 trusted_reason,
+                excluded_reason,
+                cfg_predicate,
                 spec_labels,
             },
         );
     }
 
     Ok(unified)
+}
+
+/// Apply KB P26: classify atoms whose `#[cfg(...)]` predicate is inactive in the
+/// verification build as out of scope (`verification-status: "excluded"`,
+/// `excluded-reason: "cfg-inactive"`, `is-disabled: false`).
+///
+/// Only atoms that would otherwise be backlog are reclassified: an atom that
+/// already carries a `verification-status` (verified/failed/trusted/an explicit
+/// `external` exclusion) is left untouched. Evaluation is conservative — a
+/// predicate the tool cannot resolve leaves the atom as-is (never hides backlog).
+/// Build the verification-build cfg configuration for KB P26: the package's
+/// resolved default features (from `Cargo.toml`) plus `verus_keep_ghost = true`
+/// (the analyzer/verifier always runs with it set). If `Cargo.toml` is missing or
+/// unparsable, an empty feature set is used — combined with the conservative
+/// evaluator, only `verus_keep_ghost` / `test` / off-feature predicates then
+/// resolve, and unknown ones leave atoms as-is.
+fn build_verify_cfg_config(project_path: &Path) -> crate::cfg_eval::CfgConfig {
+    let features = std::fs::read_to_string(project_path.join("Cargo.toml"))
+        .map(|s| crate::cfg_eval::resolve_default_features(&s))
+        .unwrap_or_default();
+    crate::cfg_eval::CfgConfig {
+        features,
+        verus_keep_ghost: true,
+    }
+}
+
+fn apply_cfg_scope(unified: &mut BTreeMap<String, UnifiedAtom>, cfg: &crate::cfg_eval::CfgConfig) {
+    for atom in unified.values_mut() {
+        if atom.verification_status.is_some() {
+            continue;
+        }
+        let Some(pred) = atom.cfg_predicate.as_deref() else {
+            continue;
+        };
+        if cfg.is_inactive(pred) {
+            atom.verification_status = Some("excluded".to_string());
+            atom.excluded_reason = Some("cfg-inactive".to_string());
+            atom.is_disabled = Some(false);
+        }
+    }
 }
 
 /// Load an enveloped (or bare-dict) JSON file and deserialize its data section as a dict.
@@ -873,7 +929,13 @@ fn run_unified_merge(
     let proofs_opt = proofs_path.filter(|p| p.exists());
 
     match merge_into_unified(atoms_path, specs_opt, proofs_opt) {
-        Ok(unified) => {
+        Ok(mut unified) => {
+            // KB P26: reclassify atoms not compiled in the verification build as
+            // out of scope, using the project's resolved default features + the
+            // verifier's `verus_keep_ghost` cfg.
+            let cfg = build_verify_cfg_config(project_path);
+            apply_cfg_scope(&mut unified, &cfg);
+
             // Only meaningful when verification results were merged; without
             // proofs.json every proof atom legitimately lacks a status.
             if proofs_opt.is_some() {
@@ -1600,6 +1662,61 @@ mod tests {
             Some(false),
             "spec-less external_body atom must not be disabled (P25: trusted atoms are in scope)"
         );
+    }
+
+    #[test]
+    fn test_apply_cfg_scope_marks_inactive_excluded() {
+        use crate::cfg_eval::CfgConfig;
+
+        // Build a unified atom via the merge path so cfg_predicate is populated
+        // from the specs `cfg` field exactly as in production.
+        let dir = TempDir::new().unwrap();
+        let atoms_path = write_json(&dir, "atoms.json", &atoms_json());
+        let specs = serde_json::json!({
+            "schema": "probe-verus/specs", "schema-version": "2.0",
+            "tool": {"name": "probe-verus", "version": "6.5.0", "command": "specify"},
+            "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
+            "timestamp": "2026-04-07T00:00:00Z",
+            "data": {
+                "probe:test/0.1.0/module/foo()": {
+                    "spec-text": {"lines-start": 10, "lines-end": 20},
+                    "kind": "exec", "specified": false,
+                    "cfg": "feature = \"serde\""
+                }
+            }
+        });
+        let specs_path = write_json(&dir, "specs.json", &specs);
+        let mut unified = merge_into_unified(&atoms_path, Some(&specs_path), None).unwrap();
+
+        // Before: spec-less, no status → backlog, with the cfg predicate carried.
+        let before = &unified["probe:test/0.1.0/module/foo()"];
+        assert_eq!(before.is_disabled, Some(true));
+        assert_eq!(
+            before.cfg_predicate.as_deref(),
+            Some(r#"feature = "serde""#)
+        );
+
+        // serde is not in the active feature set → inactive → excluded.
+        let cfg = CfgConfig {
+            features: ["alloc"].iter().map(|s| s.to_string()).collect(),
+            verus_keep_ghost: true,
+        };
+        apply_cfg_scope(&mut unified, &cfg);
+        let after = &unified["probe:test/0.1.0/module/foo()"];
+        assert_eq!(after.verification_status.as_deref(), Some("excluded"));
+        assert_eq!(after.excluded_reason.as_deref(), Some("cfg-inactive"));
+        assert_eq!(after.is_disabled, Some(false));
+
+        // With serde active, the same atom stays backlog.
+        let mut unified2 = merge_into_unified(&atoms_path, Some(&specs_path), None).unwrap();
+        let cfg_serde = CfgConfig {
+            features: ["serde"].iter().map(|s| s.to_string()).collect(),
+            verus_keep_ghost: true,
+        };
+        apply_cfg_scope(&mut unified2, &cfg_serde);
+        let a = &unified2["probe:test/0.1.0/module/foo()"];
+        assert_eq!(a.verification_status, None, "active feature stays backlog");
+        assert_eq!(a.is_disabled, Some(true));
     }
 
     #[test]

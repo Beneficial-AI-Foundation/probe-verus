@@ -147,6 +147,35 @@ fn has_any_cfg_attr(attrs: &[Attribute]) -> bool {
     })
 }
 
+/// Extract the predicate of the first item-gating `#[cfg(...)]` attribute as a
+/// string (e.g. `feature = "alloc"`, `not(verus_keep_ghost)`).
+///
+/// Only true `#[cfg(...)]` is item-gating. `#[cfg_attr(...)]` (which conditionally
+/// adds a *doc/derive/allow* attribute but always compiles the item) is
+/// deliberately ignored — it is not a scope gate (KB P26).
+fn cfg_predicate_of(attrs: &[Attribute]) -> Option<String> {
+    for attr in attrs {
+        let path = attr.path();
+        let segments: Vec<_> = path.segments.iter().collect();
+        if segments.len() == 1 && segments[0].ident == "cfg" {
+            if let verus_syn::Meta::List(list) = &attr.meta {
+                return Some(list.tokens.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Combine several cfg predicates into a single one with `all(...)`.
+/// Returns `None` when there are no predicates.
+fn combine_cfg_predicates(preds: &[String]) -> Option<String> {
+    match preds {
+        [] => None,
+        [single] => Some(single.clone()),
+        many => Some(format!("all({})", many.join(", "))),
+    }
+}
+
 /// Check whether `attrs` contains `#[verifier::external]`, either directly
 /// or wrapped in `#[cfg_attr(_, verifier::external)]`.
 ///
@@ -751,6 +780,11 @@ pub struct FunctionInfo {
     /// Whether the function or an enclosing item has #[cfg(...)]
     #[serde(default)]
     pub is_cfg: bool,
+    /// The combined item-gating `#[cfg(...)]` predicate (own + enclosing impl/mod,
+    /// `all(...)`-joined), if any. Used to decide whether the function is compiled
+    /// in the verification build (KB P26). `None` when there is no `#[cfg]` gate.
+    #[serde(rename = "cfg", skip_serializing_if = "Option::is_none", default)]
+    pub cfg_predicate: Option<String>,
     /// Whether the function has #[verifier::exec_allows_no_decreases_clause] attribute
     #[serde(default)]
     pub has_no_decreases_attr: bool,
@@ -952,6 +986,9 @@ struct FunctionInfoVisitor {
     /// `#[verifier::external]`. Verus requires trait-impl externals on the impl
     /// block, so the attribute is propagated to the enclosed methods.
     inside_external_impl: usize,
+    /// Stack of `#[cfg(...)]` predicates from enclosing `mod`/`impl` blocks.
+    /// A function's effective predicate is `all(stack + own_cfg)`.
+    cfg_stack: Vec<String>,
 }
 
 impl FunctionInfoVisitor {
@@ -981,6 +1018,7 @@ impl FunctionInfoVisitor {
             inside_cfg_mod: 0,
             inside_cfg_if: 0,
             inside_external_impl: 0,
+            cfg_stack: Vec::new(),
         }
     }
 
@@ -1298,6 +1336,13 @@ impl FunctionInfoVisitor {
         let is_external_body = has_verifier_attr(attrs, "external_body");
         let is_external = has_verifier_external(attrs) || self.is_inside_external_impl();
         let is_cfg = has_any_cfg_attr(attrs) || self.is_inside_cfg();
+        // Combined item-gating cfg predicate: enclosing mod/impl gates (stack) plus
+        // the function's own `#[cfg(...)]`, if any (KB P26).
+        let mut cfg_parts = self.cfg_stack.clone();
+        if let Some(own) = cfg_predicate_of(attrs) {
+            cfg_parts.push(own);
+        }
+        let cfg_predicate = combine_cfg_predicates(&cfg_parts);
         let has_no_decreases_attr = has_verifier_attr(attrs, "exec_allows_no_decreases_clause");
 
         // Extract spec text if requested
@@ -1383,6 +1428,7 @@ impl FunctionInfoVisitor {
             kind,
             kind_display,
             visibility,
+            cfg_predicate,
             context,
             specified: has_requires || has_ensures,
             has_requires,
@@ -1507,6 +1553,10 @@ impl<'ast> Visit<'ast> for FunctionInfoVisitor {
         if cfg_gated {
             self.inside_cfg_impl += 1;
         }
+        let pushed_cfg = cfg_predicate_of(&node.attrs);
+        if let Some(pred) = &pushed_cfg {
+            self.cfg_stack.push(pred.clone());
+        }
         let external_impl = has_verifier_external(&node.attrs);
         if external_impl {
             self.inside_external_impl += 1;
@@ -1514,6 +1564,9 @@ impl<'ast> Visit<'ast> for FunctionInfoVisitor {
         verus_syn::visit::visit_item_impl(self, node);
         if external_impl {
             self.inside_external_impl -= 1;
+        }
+        if pushed_cfg.is_some() {
+            self.cfg_stack.pop();
         }
         if cfg_gated {
             self.inside_cfg_impl -= 1;
@@ -1536,7 +1589,14 @@ impl<'ast> Visit<'ast> for FunctionInfoVisitor {
         if cfg_gated {
             self.inside_cfg_mod += 1;
         }
+        let pushed_cfg = cfg_predicate_of(&node.attrs);
+        if let Some(pred) = &pushed_cfg {
+            self.cfg_stack.push(pred.clone());
+        }
         verus_syn::visit::visit_item_mod(self, node);
+        if pushed_cfg.is_some() {
+            self.cfg_stack.pop();
+        }
         if cfg_gated {
             self.inside_cfg_mod -= 1;
         }
@@ -2101,6 +2161,7 @@ impl Bar {{
             kind: DeclKind::Exec,
             kind_display: Some("exec".to_string()),
             visibility: None,
+            cfg_predicate: None,
             context: None,
             specified: has_requires || has_ensures,
             has_requires,

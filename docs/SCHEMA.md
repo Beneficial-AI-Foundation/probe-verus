@@ -536,8 +536,10 @@ optional fields are added:
 | `body-dependencies` | array of strings | no | Subset of `dependencies` called in the function body (omitted when empty) |
 | `primary-spec` | string | no | Full spec text (requires + ensures concatenated). Empty string = analyzed, no spec. Absent = not analyzed. |
 | `is-disabled` | bool | no | `true` = analyzed, in scope, but no spec and no `verification-status` (the verification backlog); `false` = has a spec, or carries any `verification-status`. Any atom with a `verification-status` (verified/failed/unverified/trusted/excluded) is in analysis scope and is never in the backlog (KB P25). Absent for non-trusted external stubs or when `--skip-specify`. |
-| `verification-status` | string | no | `"transitively-verified"`, `"verified"`, `"failed"`, `"unverified"`, `"trusted"`, or `"excluded"`.  After enrichment (default, skippable via `--skip-enrich`): `"transitively-verified"` = all transitive deps verified/trusted; `"verified"` = locally verified only.  `"trusted"` is set by the merge step when a trust-base trigger applies; `"excluded"` marks `#[verifier::external]` functions that are deliberately outside the verification scope (TCB-neutral — does not imply the proofs depend on the function).  See Verification Status Mapping. |
+| `verification-status` | string | no | `"transitively-verified"`, `"verified"`, `"failed"`, `"unverified"`, `"trusted"`, or `"excluded"`.  After enrichment (default, skippable via `--skip-enrich`): `"transitively-verified"` = all transitive deps verified/trusted; `"verified"` = locally verified only.  `"trusted"` is set by the merge step when a trust-base trigger applies; `"excluded"` marks functions deliberately outside the verification scope (TCB-neutral — does not imply the proofs depend on the function), either via `#[verifier::external]` or because their `#[cfg]` predicate is inactive in the verification build (KB P26).  See Verification Status Mapping. |
 | `trusted-reason` | string | no | Present only when `verification-status` is `"trusted"`.  Values: `"admit"` (function uses `admit()`), `"external-body"` (has `#[verifier::external_body]`), or `"assume-specification"` (matched by an `assume_specification` declaration).  Enables automated trust-base classification without consulting specs.json. (v6.5.1) |
+| `excluded-reason` | string | no | Present only when `verification-status` is `"excluded"`.  Values: `"external"` (`#[verifier::external]`) or `"cfg-inactive"` (the atom's `#[cfg]` predicate is false in the verification build — KB P26). (v6.11.0) |
+| `cfg` | string | no | The combined item-gating `#[cfg(...)]` predicate governing the atom (own + enclosing impl/mod, `all(...)`-joined), if any. Omitted when the atom has no `#[cfg]` gate. (v6.11.0) |
 | `spec-labels` | array of strings | no | Taxonomy classification labels from `--taxonomy-config` (omitted when empty or when `--skip-specify`) |
 
 ### Dependency Categorization
@@ -586,14 +588,26 @@ Functions with only `assume()` (no `admit()`, not `external_body`, and not a
 matched `assume_specification` stub) remain `"unverified"` when proofs report
 `sorries`.
 
-**Excluded override (v6.11.0):** independently of the trusted overrides, a
-function marked `#[verifier::external]` (`is_external` in specify output) is set
-to `verification-status: "excluded"` and `is-disabled: false`.  This means the
-function is deliberately outside the verification scope (e.g. `Debug::fmt`, serde
-impls).  It is **TCB-neutral**: unlike `"trusted"`, `"excluded"` does not enlarge
-the trust base — Verus ignores the function entirely rather than assuming its
-spec.  A trust reason takes precedence: an atom that is both `external` and (via
-`external_body`/`admit`) trusted is reported as `"trusted"`.
+**Excluded override (v6.11.0):** independently of the trusted overrides, an atom
+is set to `verification-status: "excluded"`, `is-disabled: false` when it is
+deliberately outside the verification scope. Two mechanisms, recorded in
+`excluded-reason`:
+
+1. **`"external"`** — the function is marked `#[verifier::external]` (`is_external`
+   in specify output; e.g. `Debug::fmt`, serde impls).
+2. **`"cfg-inactive"`** — the atom's `#[cfg(...)]` predicate is false under the
+   verification build's active configuration (resolved default features +
+   `verus_keep_ghost`), so it is not compiled and cannot be verified (KB P26).
+   Applied as a post-merge pass; only atoms that would otherwise be backlog are
+   reclassified, and predicates the tool cannot resolve leave the atom untouched
+   (never hides a real backlog item). Examples: `#[cfg(test)]` code, inactive
+   features (`serde`/`group`/`rand_core`), `#[cfg(not(verus_keep_ghost))]`
+   fallbacks.
+
+`"excluded"` is **TCB-neutral**: unlike `"trusted"`, it does not enlarge the trust
+base. A trust reason takes precedence over `external`, which takes precedence over
+`cfg-inactive` (an atom already carrying a status is never reclassified by the
+cfg-scope pass).
 
 ### Notes
 

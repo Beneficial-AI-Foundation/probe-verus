@@ -21,6 +21,7 @@ what constitutes a breaking change.
 
 ### Fixed
 - **`is-disabled` respects any `verification-status`** ([#38](https://github.com/Beneficial-AI-Foundation/probe-verus/issues/38)): a spec-less exec function that Verus still verifies (e.g. a helper with no `requires`/`ensures` like `read_le_u64_into`) previously kept `is-disabled: true` alongside its `verified`/`transitively-verified` status, violating KB P25. The merge now downgrades `is-disabled` to `false` for any atom carrying a `verification-status`, while preserving `None` ("not analyzed") when specs were not run.
+- **`specify` matches the first documented item of a `verus!{}` block** ([#38](https://github.com/Beneficial-AI-Foundation/probe-verus/issues/38)): SCIP attributes the first item in a `verus!{}` block to the macro invocation line, which sits before the function's span when it carries several doc-comment lines. The `fn`-keyword distance then exceeded `LINE_TOLERANCE` and the function was silently dropped from `specs.json` (so it appeared spec-less despite having a full `requires`/`ensures` and being verified — e.g. `read_le_u64_into`). Matching now also accepts an atom within tolerance of the function's span, as an additional qualifier only (selection still ranks by `fn`-line distance, so same-named functions are not re-routed).
 
 ## [6.10.3] - 2026-07-02
 

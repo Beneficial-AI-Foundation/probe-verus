@@ -313,29 +313,10 @@ fn find_matching_atom(func: &FunctionInfo, atoms: &BTreeMap<String, AtomEntry>) 
             let within_span =
                 atom_line >= func.spec_text.lines_start && atom_line <= func.spec_text.lines_end;
 
-            // Distance from the SCIP line to the `fn` keyword — the selection
-            // metric (unchanged: the closest `fn` line wins among same-named atoms).
             let line_diff = (func.fn_line as isize - atom_line as isize).unsigned_abs();
             let within_tolerance = line_diff <= LINE_TOLERANCE;
 
-            // Additional *qualifier* only (does not change selection): SCIP
-            // attributes the first item of a `verus!{}` block to the macro
-            // invocation line, which sits before the span start (doc comments +
-            // blank lines). For a heavily-documented first item, `line_diff` can
-            // exceed the tolerance even though the atom clearly belongs here.
-            // Accept when the SCIP line is within tolerance of the span too, but
-            // still rank by `line_diff` so common-named functions (fmt/mul/neg/…)
-            // are never re-routed to a nearer-by-span but wrong atom.
-            let span_diff = func
-                .spec_text
-                .lines_start
-                .saturating_sub(atom_line)
-                .max(atom_line.saturating_sub(func.spec_text.lines_end));
-            let within_span_tolerance = span_diff <= LINE_TOLERANCE;
-
-            if (within_span || within_tolerance || within_span_tolerance)
-                && line_diff < best_line_diff
-            {
+            if (within_span || within_tolerance) && line_diff < best_line_diff {
                 best_match = Some(code_name);
                 best_line_diff = line_diff;
 
@@ -410,29 +391,6 @@ mod tests {
             code_path: code_path.to_string(),
             code_text: CodeText { lines_start },
         }
-    }
-
-    /// SCIP attributes the first item of a `verus!{}` block to the macro
-    /// invocation line, which sits before the span start when the function has
-    /// several doc-comment lines. The `fn`-keyword distance then exceeds
-    /// LINE_TOLERANCE (=5), so matching must fall back to the span distance.
-    /// Regression for `read_le_u64_into` (dropped from specs.json entirely).
-    #[test]
-    fn test_verus_block_first_item_with_doc_comments_matches() {
-        // verus! { at 4868, doc comments 4870-4873, `fn` at 4874.
-        // atom (SCIP) points at 4868; |fn_line - atom| = 6 > 5.
-        let func = make_func("read_le_u64_into", "src/scalar.rs", 4874, 4870, 5000);
-        let mut atoms = BTreeMap::new();
-        atoms.insert(
-            "probe:crate/1.0/scalar/read_le_u64_into()".to_string(),
-            make_atom("read_le_u64_into", "src/scalar.rs", 4868),
-        );
-        let result = find_matching_atom(&func, &atoms);
-        assert_eq!(
-            result,
-            Some("probe:crate/1.0/scalar/read_le_u64_into()".to_string()),
-            "first documented item of a verus! block must still match its atom"
-        );
     }
 
     #[test]

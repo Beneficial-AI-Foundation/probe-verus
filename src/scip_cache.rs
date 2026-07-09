@@ -10,7 +10,7 @@
 
 use crate::constants::{DATA_DIR, SCIP_INDEX_FILE, SCIP_INDEX_JSON_FILE};
 use crate::tool_manager::{self, Tool};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 /// Which language server to use for SCIP index generation.
@@ -157,6 +157,15 @@ impl ScipCache {
         self.json_path().exists()
     }
 
+    /// Whether a cached SCIP JSON exists **and** is still current — i.e. no `.rs`
+    /// source file under the project is newer than it. Callers that decide whether
+    /// to reuse the cache should use this rather than [`Self::has_cached_json`], so
+    /// an edited project does not silently reuse a stale index.
+    pub fn has_current_cached_json(&self) -> bool {
+        let json = self.json_path();
+        json.exists() && !self.cache_is_stale(&json)
+    }
+
     /// Get the path to the SCIP JSON, generating it if necessary.
     ///
     /// # Arguments
@@ -172,8 +181,11 @@ impl ScipCache {
     ) -> Result<PathBuf, ScipError> {
         let json_path = self.json_path();
 
-        if json_path.exists() && !regenerate {
+        if json_path.exists() && !regenerate && !self.cache_is_stale(&json_path) {
             return Ok(json_path);
+        }
+        if json_path.exists() && !regenerate && verbose {
+            println!("  SCIP cache is stale (source newer than index); regenerating...");
         }
 
         self.check_prerequisites()?;
@@ -181,6 +193,38 @@ impl ScipCache {
         self.convert_to_json(verbose)?;
 
         Ok(json_path)
+    }
+
+    /// Whether the cached SCIP JSON is older than any `.rs` source file under the
+    /// project, in which case it must be regenerated. The cache is keyed only on
+    /// file existence, so without this check an edited project silently reuses a
+    /// stale index — atom line numbers then diverge from the current source,
+    /// causing span-matching and backfill failures downstream.
+    ///
+    /// Conservative: if mtimes can't be read, returns `false` (keep the cache)
+    /// rather than forcing an expensive regeneration on a metadata hiccup. The
+    /// `data/` and `target/` directories are skipped.
+    fn cache_is_stale(&self, json_path: &Path) -> bool {
+        let Ok(cached_mtime) = std::fs::metadata(json_path).and_then(|m| m.modified()) else {
+            return false;
+        };
+        for entry in walkdir::WalkDir::new(&self.project_path)
+            .into_iter()
+            .filter_entry(|e| {
+                let name = e.file_name().to_string_lossy();
+                name != DATA_DIR && name != "target"
+            })
+            .filter_map(Result::ok)
+        {
+            if entry.path().extension().is_some_and(|ext| ext == "rs") {
+                if let Some(src_mtime) = entry.metadata().ok().and_then(|m| m.modified().ok()) {
+                    if src_mtime > cached_mtime {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
     }
 
     /// Resolve external tools via the tool manager (managed dir -> PATH -> auto-download).
@@ -327,6 +371,8 @@ impl ScipCache {
     pub fn generation_reason(&self, regenerate: bool) -> &'static str {
         if regenerate {
             "(regeneration requested)"
+        } else if self.has_cached_json() {
+            "(cached index is stale — source changed)"
         } else {
             "(no existing SCIP data found)"
         }
@@ -348,6 +394,55 @@ mod tests {
         assert_eq!(
             cache.json_path(),
             PathBuf::from("/path/to/project/data/index.scip.json")
+        );
+    }
+
+    #[test]
+    fn test_cache_is_stale_on_source_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("data")).unwrap();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+
+        // Source written first, cache JSON after → cache is current.
+        std::fs::write(root.join("src/lib.rs"), "fn a() {}").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let json = root.join("data/index.scip.json");
+        std::fs::write(&json, "{}").unwrap();
+
+        let cache = ScipCache::new(root);
+        assert!(
+            !cache.cache_is_stale(&json),
+            "cache newer than every source file must not be stale"
+        );
+
+        // Edit a source file after the cache → cache is stale.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(root.join("src/lib.rs"), "fn a() { /* edited */ }").unwrap();
+        assert!(
+            cache.cache_is_stale(&json),
+            "a source file newer than the cache must mark it stale"
+        );
+    }
+
+    #[test]
+    fn test_cache_not_stale_when_only_data_dir_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("data")).unwrap();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/lib.rs"), "fn a() {}").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let json = root.join("data/index.scip.json");
+        std::fs::write(&json, "{}").unwrap();
+        // A newer .rs under data/ (e.g. a generated artifact) must be ignored.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(root.join("data/generated.rs"), "fn g() {}").unwrap();
+
+        let cache = ScipCache::new(root);
+        assert!(
+            !cache.cache_is_stale(&json),
+            "changes under data/ must not invalidate the cache"
         );
     }
 

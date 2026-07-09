@@ -198,7 +198,19 @@ fn has_verifier_external(attrs: &[Attribute]) -> bool {
             _ => return false,
         };
         let s = tokens.to_string();
-        s.contains("verifier") && s.contains("external")
+        s.contains("verifier") && has_standalone_external(&s)
+    })
+}
+
+/// Whether `s` contains `external` as a complete identifier — i.e. the applied
+/// attribute is `verifier::external`, not `verifier::external_body` /
+/// `external_fn_specification` / `external_type_specification` / etc. The next
+/// character after `external` must not continue the identifier (`_` or
+/// alphanumeric).
+fn has_standalone_external(s: &str) -> bool {
+    s.match_indices("external").any(|(i, m)| {
+        let next = s.as_bytes().get(i + m.len());
+        !matches!(next, Some(b) if b.is_ascii_alphanumeric() || *b == b'_')
     })
 }
 
@@ -2534,6 +2546,44 @@ verus! {
         assert_eq!(name, "normal");
         assert!(!is_ext);
         assert!(!is_cfg);
+    }
+
+    #[test]
+    fn test_cfg_attr_external_body_not_treated_as_external() {
+        // A cfg_attr-wrapped verifier::external_body (or other external_* attr)
+        // must NOT be detected as `external` — "external" is a substring of
+        // "external_body".
+        let src = r#"
+verus! {
+    #[cfg_attr(verus_keep_ghost, verifier::external_body)]
+    pub fn body_trusted() {}
+
+    #[cfg_attr(verus_keep_ghost, verifier::external_fn_specification)]
+    pub fn fn_spec() {}
+}
+"#;
+        let parsed = verus_syn::parse_file(src).unwrap();
+        for item in &parsed.items {
+            if let verus_syn::Item::Macro(mac) = item {
+                let body: verus_syn::File = verus_syn::parse2(mac.mac.tokens.clone()).unwrap();
+                for inner in &body.items {
+                    if let verus_syn::Item::Fn(item_fn) = inner {
+                        assert!(
+                            !has_verifier_external(&item_fn.attrs),
+                            "{} must not be classified as verifier::external",
+                            item_fn.sig.ident
+                        );
+                    }
+                }
+            }
+        }
+        // Unit-level guard on the token helper.
+        assert!(has_standalone_external(
+            "verus_keep_ghost , verifier :: external"
+        ));
+        assert!(!has_standalone_external(
+            "verus_keep_ghost , verifier :: external_body"
+        ));
     }
 
     #[test]

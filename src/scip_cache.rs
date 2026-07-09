@@ -203,17 +203,17 @@ impl ScipCache {
     ///
     /// Conservative: if mtimes can't be read, returns `false` (keep the cache)
     /// rather than forcing an expensive regeneration on a metadata hiccup. The
-    /// `data/` and `target/` directories are skipped.
+    /// project-root `data/` and `target/` directories are skipped (only at the
+    /// root — a nested `src/data/` with real sources is still scanned).
     fn cache_is_stale(&self, json_path: &Path) -> bool {
         let Ok(cached_mtime) = std::fs::metadata(json_path).and_then(|m| m.modified()) else {
             return false;
         };
+        let skip_data = self.project_path.join(DATA_DIR);
+        let skip_target = self.project_path.join("target");
         for entry in walkdir::WalkDir::new(&self.project_path)
             .into_iter()
-            .filter_entry(|e| {
-                let name = e.file_name().to_string_lossy();
-                name != DATA_DIR && name != "target"
-            })
+            .filter_entry(|e| e.path() != skip_data && e.path() != skip_target)
             .filter_map(Result::ok)
         {
             if entry.path().extension().is_some_and(|ext| ext == "rs") {
@@ -397,28 +397,39 @@ mod tests {
         );
     }
 
+    /// Set a file's mtime deterministically (avoids sleep-based test flakiness
+    /// on coarse-granularity filesystems).
+    fn set_mtime(path: &Path, secs: u64) {
+        let t = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(secs);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(t)
+            .unwrap();
+    }
+
     #[test]
     fn test_cache_is_stale_on_source_change() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         std::fs::create_dir_all(root.join("data")).unwrap();
         std::fs::create_dir_all(root.join("src")).unwrap();
-
-        // Source written first, cache JSON after → cache is current.
         std::fs::write(root.join("src/lib.rs"), "fn a() {}").unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(20));
         let json = root.join("data/index.scip.json");
         std::fs::write(&json, "{}").unwrap();
-
         let cache = ScipCache::new(root);
+
+        // Cache newer than every source file → not stale.
+        set_mtime(&root.join("src/lib.rs"), 1_000);
+        set_mtime(&json, 2_000);
         assert!(
             !cache.cache_is_stale(&json),
             "cache newer than every source file must not be stale"
         );
 
-        // Edit a source file after the cache → cache is stale.
-        std::thread::sleep(std::time::Duration::from_millis(20));
-        std::fs::write(root.join("src/lib.rs"), "fn a() { /* edited */ }").unwrap();
+        // A source file newer than the cache → stale.
+        set_mtime(&root.join("src/lib.rs"), 3_000);
         assert!(
             cache.cache_is_stale(&json),
             "a source file newer than the cache must mark it stale"
@@ -426,23 +437,45 @@ mod tests {
     }
 
     #[test]
-    fn test_cache_not_stale_when_only_data_dir_changes() {
+    fn test_cache_not_stale_when_only_root_data_dir_changes() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         std::fs::create_dir_all(root.join("data")).unwrap();
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::write(root.join("src/lib.rs"), "fn a() {}").unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(20));
         let json = root.join("data/index.scip.json");
         std::fs::write(&json, "{}").unwrap();
-        // A newer .rs under data/ (e.g. a generated artifact) must be ignored.
-        std::thread::sleep(std::time::Duration::from_millis(20));
         std::fs::write(root.join("data/generated.rs"), "fn g() {}").unwrap();
 
         let cache = ScipCache::new(root);
+        set_mtime(&root.join("src/lib.rs"), 1_000);
+        set_mtime(&json, 2_000);
+        // A newer .rs under the root data/ (a generated artifact) is ignored.
+        set_mtime(&root.join("data/generated.rs"), 3_000);
         assert!(
             !cache.cache_is_stale(&json),
-            "changes under data/ must not invalidate the cache"
+            "changes under the root data/ must not invalidate the cache"
+        );
+    }
+
+    #[test]
+    fn test_cache_stale_for_nested_data_dir_sources() {
+        // A nested `src/data/` holds real sources and must still be scanned
+        // (only the project-root data/ is skipped).
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("data")).unwrap();
+        std::fs::create_dir_all(root.join("src/data")).unwrap();
+        std::fs::write(root.join("src/data/real.rs"), "fn r() {}").unwrap();
+        let json = root.join("data/index.scip.json");
+        std::fs::write(&json, "{}").unwrap();
+
+        let cache = ScipCache::new(root);
+        set_mtime(&json, 2_000);
+        set_mtime(&root.join("src/data/real.rs"), 3_000);
+        assert!(
+            cache.cache_is_stale(&json),
+            "a newer source under a nested src/data/ must mark the cache stale"
         );
     }
 

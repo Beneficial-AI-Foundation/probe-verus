@@ -339,9 +339,10 @@ pub struct UnifiedAtom {
     /// Full spec text (requires + ensures). Empty string = analyzed, no spec. Absent = not analyzed.
     #[serde(rename = "primary-spec", skip_serializing_if = "Option::is_none")]
     pub primary_spec: Option<String>,
-    /// `true` = in scope but no spec yet (the verification backlog); `false` = has a
-    /// spec, or is trusted/excluded (any atom with a `verification-status`). Absent =
-    /// not analyzed. Note: `true` no longer includes out-of-scope functions — those
+    /// `true` = analyzed, in scope, but no spec and no `verification-status` yet (the
+    /// verification backlog); `false` = has a spec, or carries any
+    /// `verification-status` (verified/failed/unverified/trusted/excluded — KB P25).
+    /// Absent = not analyzed for specs. Out-of-scope functions are not `true`; they
     /// carry `verification-status: "excluded"` and are `false` here.
     #[serde(rename = "is-disabled", skip_serializing_if = "Option::is_none")]
     pub is_disabled: Option<bool>,

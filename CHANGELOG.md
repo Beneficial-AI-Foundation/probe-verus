@@ -19,6 +19,9 @@ what constitutes a breaking change.
 ### Changed
 - **`is-disabled: true` now means strictly "in scope, no spec yet"** (the verification backlog). Out-of-scope `#[verifier::external]` functions, previously emitted as `is-disabled: true`, are now `is-disabled: false` with `verification-status: "excluded"` (KB P25: `has-verification-status ⟹ ¬is-disabled`). Consumers that counted `is-disabled: true` as "not verified" will see excluded functions move out of that set.
 
+### Fixed
+- **`is-disabled` respects any `verification-status`** ([#38](https://github.com/Beneficial-AI-Foundation/probe-verus/issues/38)): a spec-less exec function that Verus still verifies (e.g. a helper with no `requires`/`ensures` like `read_le_u64_into`) previously kept `is-disabled: true` alongside its `verified`/`transitively-verified` status, violating KB P25. The merge now downgrades `is-disabled` to `false` for any atom carrying a `verification-status`, while preserving `None` ("not analyzed") when specs were not run.
+
 ## [6.10.3] - 2026-07-02
 
 ### Fixed

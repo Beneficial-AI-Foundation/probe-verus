@@ -704,16 +704,22 @@ pub fn merge_into_unified(
                 .map(|e| map_verification_status(&e.status).to_string())
         };
 
-        // A trust reason or an `excluded` classification is a deliberate human
-        // act that puts the atom in analysis scope, so such atoms are never
-        // disabled (KB P25: has-verification-status ⟹ ¬is-disabled). This covers
-        // spec-less `external_body` functions (which would otherwise be
-        // Some(true)), `assume_specification` targets (which would otherwise be
-        // None despite carrying a propagated primary-spec; KB P24), and
-        // `#[verifier::external]` functions (out-of-scope, otherwise Some(true)).
-        // As a result `is-disabled: true` means strictly "in scope, no spec yet"
-        // — the verification backlog.
-        let is_disabled = if trusted_reason.is_some() || has_external {
+        // KB P25: has-verification-status ⟹ ¬is-disabled. An atom that carries a
+        // `verification-status` is in analysis scope and must not be in the
+        // `is-disabled: true` backlog.
+        //   * `trusted`/`excluded` are deliberate classifications from the specify
+        //     step; force `Some(false)` even for external stubs whose `is-disabled`
+        //     started `None` (KB P24).
+        //   * verified/failed/unverified come from proofs; only downgrade a
+        //     `Some(true)` (analyzed, spec-less — e.g. `read_le_u64_into`, which
+        //     Verus trivially verifies) to `Some(false)`. A `None` means specs were
+        //     not analyzed for this atom (e.g. atoms+proofs merge with no specs), so
+        //     it is preserved rather than fabricated to `false`.
+        // As a result `is-disabled: true` means strictly "in scope, no spec yet".
+        let is_disabled = if trusted_reason.is_some()
+            || has_external
+            || (verification_status.is_some() && is_disabled == Some(true))
+        {
             Some(false)
         } else {
             is_disabled
@@ -1187,7 +1193,8 @@ mod tests {
 
         let bar = &result["probe:test/0.1.0/module/bar()"];
         assert_eq!(bar.primary_spec.as_deref(), Some(""));
-        assert_eq!(bar.is_disabled, Some(true));
+        // Spec-less but carries a verification-status ⟹ not in the backlog (KB P25).
+        assert_eq!(bar.is_disabled, Some(false));
         assert_eq!(bar.verification_status.as_deref(), Some("failed"));
         assert!(bar.spec_labels.is_empty());
 
@@ -1235,7 +1242,8 @@ mod tests {
 
         let bar_json = &json["probe:test/0.1.0/module/bar()"];
         assert_eq!(bar_json["primary-spec"], "");
-        assert_eq!(bar_json["is-disabled"], true);
+        // Spec-less but has a verification-status ⟹ not disabled (KB P25).
+        assert_eq!(bar_json["is-disabled"], false);
         assert_eq!(bar_json["language"], "verus");
         assert!(
             bar_json.get("spec-labels").is_none(),
@@ -1632,6 +1640,51 @@ mod tests {
             atom.is_disabled,
             Some(false),
             "excluded (out-of-scope) atoms must not be in the is-disabled backlog"
+        );
+    }
+
+    #[test]
+    fn test_specless_verified_is_not_disabled() {
+        // A spec-less exec function that Verus trivially verifies (proofs "success")
+        // must not remain in the is-disabled backlog (KB P25). Regression for
+        // read_le_u64_into.
+        let dir = TempDir::new().unwrap();
+        let atoms_path = write_json(&dir, "atoms.json", &atoms_json());
+
+        let specs_specless = serde_json::json!({
+            "schema": "probe-verus/specs", "schema-version": "2.0",
+            "tool": {"name": "probe-verus", "version": "6.5.0", "command": "specify"},
+            "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
+            "timestamp": "2026-04-07T00:00:00Z",
+            "data": {
+                "probe:test/0.1.0/module/foo()": {
+                    "spec-text": {"lines-start": 10, "lines-end": 20},
+                    "kind": "exec", "specified": false
+                }
+            }
+        });
+        let specs_path = write_json(&dir, "specs.json", &specs_specless);
+        let proofs_success = serde_json::json!({
+            "schema": "probe-verus/proofs", "schema-version": "2.0",
+            "tool": {"name": "probe-verus", "version": "6.5.0", "command": "run-verus"},
+            "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
+            "timestamp": "2026-04-07T00:00:00Z",
+            "data": {
+                "probe:test/0.1.0/module/foo()": {
+                    "code-path": "src/module.rs", "code-line": 10, "verified": true, "status": "success"
+                }
+            }
+        });
+        let proofs_path = write_json(&dir, "proofs.json", &proofs_success);
+
+        let result =
+            merge_into_unified(&atoms_path, Some(&specs_path), Some(&proofs_path)).unwrap();
+        let atom = &result["probe:test/0.1.0/module/foo()"];
+        assert_eq!(atom.verification_status.as_deref(), Some("verified"));
+        assert_eq!(
+            atom.is_disabled,
+            Some(false),
+            "spec-less but verified atom must not be in the is-disabled backlog (P25)"
         );
     }
 

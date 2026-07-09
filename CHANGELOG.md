@@ -10,6 +10,14 @@ what constitutes a breaking change.
 
 ## [Unreleased]
 
+## [6.11.0] - 2026-07-09
+
+### Added
+- **Out-of-scope verification state** ([#38](https://github.com/Beneficial-AI-Foundation/probe-verus/issues/38)): functions marked `#[verifier::external]` now surface as `verification-status: "excluded"` — deliberately outside the verification scope (e.g. `Debug::fmt`, serde impls). Unlike `"trusted"`, `"excluded"` is TCB-neutral: it does not imply the proofs depend on the function. The `is_external` flag was already emitted into `specs.json` by the parser but was previously dropped by the extract merge, so such functions were indistinguishable from the backlog.
+
+### Changed
+- **`is-disabled: true` now means strictly "in scope, no spec yet"** (the verification backlog). Out-of-scope `#[verifier::external]` functions, previously emitted as `is-disabled: true`, are now `is-disabled: false` with `verification-status: "excluded"` (KB P25: `has-verification-status ⟹ ¬is-disabled`). Consumers that counted `is-disabled: true` as "not verified" will see excluded functions move out of that set.
+
 ## [6.10.3] - 2026-07-02
 
 ### Fixed

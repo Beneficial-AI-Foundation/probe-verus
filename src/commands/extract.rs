@@ -30,9 +30,17 @@ struct ExtractPipelineResult {
 struct TrustBaseSummary {
     verified: usize,
     trusted: usize,
+    #[serde(skip_serializing_if = "is_zero")]
+    excluded: usize,
     unverified: usize,
     failed: usize,
     absent: usize,
+}
+
+/// Serde helper: omit a count field when it is zero (keeps `excluded` additive —
+/// existing summaries without any excluded atoms serialize unchanged).
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 #[derive(Serialize)]
@@ -458,6 +466,11 @@ struct SpecsEntry {
     /// Whether the function has `#[verifier::external_body]` — trusted without proof.
     #[serde(default)]
     is_external_body: bool,
+    /// Whether the function has `#[verifier::external]` — deliberately outside the
+    /// verification scope. TCB-neutral: unlike `external_body`, an `external` function
+    /// is not trusted (Verus ignores it entirely), so it does not enlarge the trust base.
+    #[serde(default)]
+    is_external: bool,
 }
 
 /// Deserialization wrapper for the specs.json `data` section.
@@ -662,6 +675,7 @@ pub fn merge_into_unified(
         // Determine trusted status and reason
         let has_admit = specs_entry.is_some_and(|e| e.contains_admit);
         let has_external_body = specs_entry.is_some_and(|e| e.is_external_body);
+        let has_external = specs_entry.is_some_and(|e| e.is_external);
         let assume_spec_match = assume_spec_matched.get(&code_name);
 
         let trusted_reason = if has_admit {
@@ -674,8 +688,15 @@ pub fn merge_into_unified(
             None
         };
 
+        // `#[verifier::external]` marks a function as deliberately outside the
+        // verification scope (e.g. `Debug::fmt`, serde impls). Unlike a trusted
+        // atom it is TCB-neutral — the proofs do not depend on it. It takes lower
+        // precedence than a trust reason: an atom that is both `external` and
+        // (somehow) trusted is reported as trusted.
         let verification_status = if trusted_reason.is_some() {
             Some("trusted".to_string())
+        } else if has_external {
+            Some("excluded".to_string())
         } else {
             proofs
                 .as_ref()
@@ -683,13 +704,16 @@ pub fn merge_into_unified(
                 .map(|e| map_verification_status(&e.status).to_string())
         };
 
-        // A trust reason is a deliberate human act that puts the atom in
-        // analysis scope, so trusted atoms are never disabled (KB P25:
-        // has-verification-status ⟹ ¬is-disabled). This covers spec-less
-        // `external_body` functions (which would otherwise be Some(true))
-        // and `assume_specification` targets (which would otherwise be None
-        // despite carrying a propagated primary-spec; KB P24).
-        let is_disabled = if trusted_reason.is_some() {
+        // A trust reason or an `excluded` classification is a deliberate human
+        // act that puts the atom in analysis scope, so such atoms are never
+        // disabled (KB P25: has-verification-status ⟹ ¬is-disabled). This covers
+        // spec-less `external_body` functions (which would otherwise be
+        // Some(true)), `assume_specification` targets (which would otherwise be
+        // None despite carrying a propagated primary-spec; KB P24), and
+        // `#[verifier::external]` functions (out-of-scope, otherwise Some(true)).
+        // As a result `is-disabled: true` means strictly "in scope, no spec yet"
+        // — the verification backlog.
+        let is_disabled = if trusted_reason.is_some() || has_external {
             Some(false)
         } else {
             is_disabled
@@ -769,6 +793,7 @@ fn load_enveloped_data_single<T: serde::de::DeserializeOwned>(
 fn compute_trust_base_summary(unified: &BTreeMap<String, UnifiedAtom>) -> TrustBaseSummary {
     let mut verified = 0;
     let mut trusted = 0;
+    let mut excluded = 0;
     let mut unverified = 0;
     let mut failed = 0;
     let mut absent = 0;
@@ -777,6 +802,7 @@ fn compute_trust_base_summary(unified: &BTreeMap<String, UnifiedAtom>) -> TrustB
         match atom.verification_status.as_deref() {
             Some("verified") => verified += 1,
             Some("trusted") => trusted += 1,
+            Some("excluded") => excluded += 1,
             Some("unverified") => unverified += 1,
             Some("failed") => failed += 1,
             _ => absent += 1,
@@ -786,6 +812,7 @@ fn compute_trust_base_summary(unified: &BTreeMap<String, UnifiedAtom>) -> TrustB
     TrustBaseSummary {
         verified,
         trusted,
+        excluded,
         unverified,
         failed,
         absent,
@@ -1565,6 +1592,81 @@ mod tests {
             Some(false),
             "spec-less external_body atom must not be disabled (P25: trusted atoms are in scope)"
         );
+    }
+
+    #[test]
+    fn test_external_marks_excluded_not_disabled() {
+        let dir = TempDir::new().unwrap();
+        let atoms_path = write_json(&dir, "atoms.json", &atoms_json());
+
+        let specs_ext = serde_json::json!({
+            "schema": "probe-verus/specs",
+            "schema-version": "2.0",
+            "tool": {"name": "probe-verus", "version": "6.5.0", "command": "specify"},
+            "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
+            "timestamp": "2026-04-07T00:00:00Z",
+            "data": {
+                "probe:test/0.1.0/module/foo()": {
+                    "spec-text": {"lines-start": 10, "lines-end": 20},
+                    "kind": "exec",
+                    "specified": false,
+                    "is_external": true
+                }
+            }
+        });
+        let specs_path = write_json(&dir, "specs.json", &specs_ext);
+
+        let result = merge_into_unified(&atoms_path, Some(&specs_path), None).unwrap();
+        let atom = &result["probe:test/0.1.0/module/foo()"];
+
+        assert_eq!(
+            atom.verification_status.as_deref(),
+            Some("excluded"),
+            "#[verifier::external] should map to verification-status 'excluded'"
+        );
+        assert_eq!(
+            atom.trusted_reason, None,
+            "excluded atoms are TCB-neutral and must not carry a trusted-reason"
+        );
+        assert_eq!(
+            atom.is_disabled,
+            Some(false),
+            "excluded (out-of-scope) atoms must not be in the is-disabled backlog"
+        );
+    }
+
+    #[test]
+    fn test_external_body_takes_precedence_over_external() {
+        let dir = TempDir::new().unwrap();
+        let atoms_path = write_json(&dir, "atoms.json", &atoms_json());
+
+        let specs_both = serde_json::json!({
+            "schema": "probe-verus/specs",
+            "schema-version": "2.0",
+            "tool": {"name": "probe-verus", "version": "6.5.0", "command": "specify"},
+            "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
+            "timestamp": "2026-04-07T00:00:00Z",
+            "data": {
+                "probe:test/0.1.0/module/foo()": {
+                    "spec-text": {"lines-start": 10, "lines-end": 20},
+                    "kind": "exec",
+                    "specified": false,
+                    "is_external": true,
+                    "is_external_body": true
+                }
+            }
+        });
+        let specs_path = write_json(&dir, "specs.json", &specs_both);
+
+        let result = merge_into_unified(&atoms_path, Some(&specs_path), None).unwrap();
+        let atom = &result["probe:test/0.1.0/module/foo()"];
+
+        assert_eq!(
+            atom.verification_status.as_deref(),
+            Some("trusted"),
+            "a trust reason takes precedence over 'excluded'"
+        );
+        assert_eq!(atom.trusted_reason.as_deref(), Some("external-body"));
     }
 
     #[test]

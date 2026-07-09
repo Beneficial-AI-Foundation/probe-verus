@@ -535,8 +535,8 @@ optional fields are added:
 | `ensures-dependencies` | array of strings | no | Subset of `dependencies` called in `ensures` clauses (omitted when empty) |
 | `body-dependencies` | array of strings | no | Subset of `dependencies` called in the function body (omitted when empty) |
 | `primary-spec` | string | no | Full spec text (requires + ensures concatenated). Empty string = analyzed, no spec. Absent = not analyzed. |
-| `is-disabled` | bool | no | `false` if the function has a spec; `true` otherwise. Always `false` when `trusted-reason` is present — a trust reason is a deliberate human act that puts the atom in analysis scope, so trusted atoms are never disabled (KB P25). Absent for non-trusted external stubs or when `--skip-specify`. |
-| `verification-status` | string | no | `"transitively-verified"`, `"verified"`, `"failed"`, `"unverified"`, or `"trusted"`.  After enrichment (default, skippable via `--skip-enrich`): `"transitively-verified"` = all transitive deps verified/trusted; `"verified"` = locally verified only.  `"trusted"` is set by the merge step when a trust-base trigger applies; see Verification Status Mapping. |
+| `is-disabled` | bool | no | `true` = in scope but no spec yet (the verification backlog); `false` = has a spec, or is trusted/excluded. Always `false` when a `verification-status` of `"trusted"` or `"excluded"` is present — such a state is a deliberate human act that puts the atom in analysis scope, so it is never in the backlog (KB P25). Absent for non-trusted external stubs or when `--skip-specify`. |
+| `verification-status` | string | no | `"transitively-verified"`, `"verified"`, `"failed"`, `"unverified"`, `"trusted"`, or `"excluded"`.  After enrichment (default, skippable via `--skip-enrich`): `"transitively-verified"` = all transitive deps verified/trusted; `"verified"` = locally verified only.  `"trusted"` is set by the merge step when a trust-base trigger applies; `"excluded"` marks `#[verifier::external]` functions that are deliberately outside the verification scope (TCB-neutral — does not imply the proofs depend on the function).  See Verification Status Mapping. |
 | `trusted-reason` | string | no | Present only when `verification-status` is `"trusted"`.  Values: `"admit"` (function uses `admit()`), `"external-body"` (has `#[verifier::external_body]`), or `"assume-specification"` (matched by an `assume_specification` declaration).  Enables automated trust-base classification without consulting specs.json. (v6.5.1) |
 | `spec-labels` | array of strings | no | Taxonomy classification labels from `--taxonomy-config` (omitted when empty or when `--skip-specify`) |
 
@@ -585,6 +585,15 @@ atoms):
 Functions with only `assume()` (no `admit()`, not `external_body`, and not a
 matched `assume_specification` stub) remain `"unverified"` when proofs report
 `sorries`.
+
+**Excluded override (v6.11.0):** independently of the trusted overrides, a
+function marked `#[verifier::external]` (`is_external` in specify output) is set
+to `verification-status: "excluded"` and `is-disabled: false`.  This means the
+function is deliberately outside the verification scope (e.g. `Debug::fmt`, serde
+impls).  It is **TCB-neutral**: unlike `"trusted"`, `"excluded"` does not enlarge
+the trust base — Verus ignores the function entirely rather than assuming its
+spec.  A trust reason takes precedence: an atom that is both `external` and (via
+`external_body`/`admit`) trusted is reported as `"trusted"`.
 
 ### Notes
 
@@ -668,6 +677,7 @@ Counts of atoms by final `verification-status` after merge overrides.  Keys:
 |-------|------|-------------|
 | `verified` | integer | Atoms with `"verified"` |
 | `trusted` | integer | Atoms with `"trusted"` |
+| `excluded` | integer | Atoms with `"excluded"` (`#[verifier::external]`, out of scope). Omitted when zero (v6.11.0) |
 | `unverified` | integer | Atoms with `"unverified"` |
 | `failed` | integer | Atoms with `"failed"` |
 | `absent` | integer | Atoms with no `verification-status` (e.g. stubs skipped by verify, or `--skip-verify`) |

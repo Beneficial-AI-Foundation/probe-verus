@@ -203,17 +203,22 @@ impl ScipCache {
     ///
     /// Conservative: if mtimes can't be read, returns `false` (keep the cache)
     /// rather than forcing an expensive regeneration on a metadata hiccup. The
-    /// project-root `data/` and `target/` directories are skipped (only at the
-    /// root — a nested `src/data/` with real sources is still scanned).
+    /// project-root `data/`, `target/`, and `.git/` directories are skipped (only
+    /// at the root — a nested `src/data/` with real sources is still scanned).
+    /// Skipping `.git/` avoids walking a potentially huge object store that can
+    /// never hold a `.rs` source.
     fn cache_is_stale(&self, json_path: &Path) -> bool {
         let Ok(cached_mtime) = std::fs::metadata(json_path).and_then(|m| m.modified()) else {
             return false;
         };
         let skip_data = self.project_path.join(DATA_DIR);
         let skip_target = self.project_path.join("target");
+        let skip_git = self.project_path.join(".git");
         for entry in walkdir::WalkDir::new(&self.project_path)
             .into_iter()
-            .filter_entry(|e| e.path() != skip_data && e.path() != skip_target)
+            .filter_entry(|e| {
+                e.path() != skip_data && e.path() != skip_target && e.path() != skip_git
+            })
             .filter_map(Result::ok)
         {
             if entry.path().extension().is_some_and(|ext| ext == "rs") {

@@ -775,10 +775,16 @@ pub fn merge_into_unified(
 /// verification build as out of scope (`verification-status: "excluded"`,
 /// `excluded-reason: "cfg-inactive"`, `is-disabled: false`).
 ///
-/// Only atoms that would otherwise be backlog are reclassified: an atom that
-/// already carries a `verification-status` (verified/failed/trusted/an explicit
-/// `external` exclusion) is left untouched. Evaluation is conservative — a
-/// predicate the tool cannot resolve leaves the atom as-is (never hides backlog).
+/// cfg-inactivity is a structural out-of-scope property: a function the
+/// verification build never compiles is out of scope whether or not it carries
+/// specs, and independent of whether `run-verus` was executed. So this pass keys
+/// on the *absence of a terminal `verification-status`* — not on `is-disabled`.
+/// Any atom still lacking a status is "would-be backlog" and is reclassified;
+/// an atom that already carries one (verified/failed/trusted/an explicit
+/// `external` exclusion) is left untouched. Gating instead on `is-disabled ==
+/// Some(true)` would wrongly leave cfg-inactive *specced* atoms in the backlog.
+/// Evaluation is conservative — a predicate the tool cannot resolve leaves the
+/// atom as-is (never hides backlog).
 /// Build the verification-build cfg configuration for KB P26: the package's
 /// resolved default features (from `Cargo.toml`) plus `verus_keep_ghost = true`
 /// (the analyzer/verifier always runs with it set). If `Cargo.toml` is missing or

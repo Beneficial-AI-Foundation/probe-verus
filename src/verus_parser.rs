@@ -147,23 +147,30 @@ fn has_any_cfg_attr(attrs: &[Attribute]) -> bool {
     })
 }
 
-/// Extract the predicate of the first item-gating `#[cfg(...)]` attribute as a
-/// string (e.g. `feature = "alloc"`, `not(verus_keep_ghost)`).
+/// Extract the predicates of every item-gating `#[cfg(...)]` attribute as
+/// strings (e.g. `feature = "alloc"`, `not(verus_keep_ghost)`).
+///
+/// Multiple `#[cfg(...)]` attributes on one item compose as a logical AND, so
+/// all of them are returned; callers combine them (with the enclosing scope's
+/// predicates) via [`combine_cfg_predicates`].
 ///
 /// Only true `#[cfg(...)]` is item-gating. `#[cfg_attr(...)]` (which conditionally
 /// adds a *doc/derive/allow* attribute but always compiles the item) is
 /// deliberately ignored — it is not a scope gate (KB P26).
-fn cfg_predicate_of(attrs: &[Attribute]) -> Option<String> {
-    for attr in attrs {
-        let path = attr.path();
-        let segments: Vec<_> = path.segments.iter().collect();
-        if segments.len() == 1 && segments[0].ident == "cfg" {
-            if let verus_syn::Meta::List(list) = &attr.meta {
-                return Some(list.tokens.to_string());
+fn cfg_predicates_of(attrs: &[Attribute]) -> Vec<String> {
+    attrs
+        .iter()
+        .filter_map(|attr| {
+            let path = attr.path();
+            let segments: Vec<_> = path.segments.iter().collect();
+            if segments.len() == 1 && segments[0].ident == "cfg" {
+                if let verus_syn::Meta::List(list) = &attr.meta {
+                    return Some(list.tokens.to_string());
+                }
             }
-        }
-    }
-    None
+            None
+        })
+        .collect()
 }
 
 /// Combine several cfg predicates into a single one with `all(...)`.
@@ -1351,9 +1358,7 @@ impl FunctionInfoVisitor {
         // Combined item-gating cfg predicate: enclosing mod/impl gates (stack) plus
         // the function's own `#[cfg(...)]`, if any (KB P26).
         let mut cfg_parts = self.cfg_stack.clone();
-        if let Some(own) = cfg_predicate_of(attrs) {
-            cfg_parts.push(own);
-        }
+        cfg_parts.extend(cfg_predicates_of(attrs));
         let cfg_predicate = combine_cfg_predicates(&cfg_parts);
         let has_no_decreases_attr = has_verifier_attr(attrs, "exec_allows_no_decreases_clause");
 
@@ -1565,7 +1570,7 @@ impl<'ast> Visit<'ast> for FunctionInfoVisitor {
         if cfg_gated {
             self.inside_cfg_impl += 1;
         }
-        let pushed_cfg = cfg_predicate_of(&node.attrs);
+        let pushed_cfg = combine_cfg_predicates(&cfg_predicates_of(&node.attrs));
         if let Some(pred) = &pushed_cfg {
             self.cfg_stack.push(pred.clone());
         }
@@ -1601,7 +1606,7 @@ impl<'ast> Visit<'ast> for FunctionInfoVisitor {
         if cfg_gated {
             self.inside_cfg_mod += 1;
         }
-        let pushed_cfg = cfg_predicate_of(&node.attrs);
+        let pushed_cfg = combine_cfg_predicates(&cfg_predicates_of(&node.attrs));
         if let Some(pred) = &pushed_cfg {
             self.cfg_stack.push(pred.clone());
         }
@@ -2683,6 +2688,42 @@ impl Foo {{
             .find(|f| f.name == "normal_method")
             .unwrap();
         assert!(!normal.is_cfg);
+    }
+
+    #[test]
+    fn test_multiple_cfg_attrs_combined_with_all() {
+        // Multiple `#[cfg(...)]` on one item compose as a logical AND; every
+        // predicate must be captured, not just the first (KB P26).
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"
+#[cfg(feature = "alloc")]
+#[cfg(not(verus_keep_ghost))]
+pub fn double_gated() {{}}
+
+#[cfg(feature = "alloc")]
+pub fn single_gated() {{}}
+"#
+        )
+        .unwrap();
+
+        let functions =
+            parse_file_for_functions(file.path(), true, true, true, true, false).unwrap();
+
+        let double = functions.iter().find(|f| f.name == "double_gated").unwrap();
+        assert_eq!(
+            double.cfg_predicate.as_deref(),
+            Some(r#"all(feature = "alloc", not (verus_keep_ghost))"#),
+            "both item-level #[cfg] predicates must be AND-combined"
+        );
+
+        let single = functions.iter().find(|f| f.name == "single_gated").unwrap();
+        assert_eq!(
+            single.cfg_predicate.as_deref(),
+            Some(r#"feature = "alloc""#),
+            "a lone #[cfg] predicate is passed through without an all(...) wrapper"
+        );
     }
 
     #[test]

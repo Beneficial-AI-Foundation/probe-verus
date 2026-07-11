@@ -340,16 +340,16 @@ pub struct UnifiedAtom {
     /// Full spec text (requires + ensures). Empty string = analyzed, no spec. Absent = not analyzed.
     #[serde(rename = "primary-spec", skip_serializing_if = "Option::is_none")]
     pub primary_spec: Option<String>,
-    /// `true` = analyzed, in scope, but no spec and no `verification-status` yet (the
-    /// verification backlog); `false` = has a spec, or carries any
-    /// `verification-status` (verified/failed/unverified/trusted/excluded — KB P25).
-    /// Absent = not analyzed for specs. Out-of-scope functions are not `true`; they
-    /// carry `verification-status: "excluded"` and are `false` here.
+    /// `true` = out of verification scope (KB P25): `#[verifier::external]`,
+    /// cfg-inactive in the verification build, or an external-crate stub. Such atoms
+    /// carry no `verification-status`. `false` = in scope: a specified function, a
+    /// trusted axiom, or the spec-less backlog. Absent = scope not analyzed (specs
+    /// not loaded). `has-verification-status ⟹ ¬is-disabled` (KB P24).
     #[serde(rename = "is-disabled", skip_serializing_if = "Option::is_none")]
     pub is_disabled: Option<bool>,
-    /// Verification outcome. Values: `"verified"`, `"failed"`, `"unverified"`,
-    /// `"trusted"` (in the trust base), or `"excluded"` (`#[verifier::external]`:
-    /// deliberately out of verification scope, TCB-neutral).
+    /// Verification outcome for an in-scope atom. Values: `"verified"`,
+    /// `"transitively-verified"`, `"failed"`, `"unverified"`, or `"trusted"` (in the
+    /// trust base). Absent for the backlog and for out-of-scope atoms (`is-disabled: true`).
     #[serde(
         rename = "verification-status",
         skip_serializing_if = "Option::is_none"
@@ -359,11 +359,6 @@ pub struct UnifiedAtom {
     /// Values: `"admit"`, `"external-body"`, `"assume-specification"`.
     #[serde(rename = "trusted-reason", skip_serializing_if = "Option::is_none")]
     pub trusted_reason: Option<String>,
-    /// Why this atom is excluded. Present only when `verification-status` is `"excluded"`.
-    /// Values: `"external"` (`#[verifier::external]`), `"cfg-inactive"` (its `#[cfg]`
-    /// predicate is false in the verification build — KB P26).
-    #[serde(rename = "excluded-reason", skip_serializing_if = "Option::is_none")]
-    pub excluded_reason: Option<String>,
     /// The combined item-gating `#[cfg(...)]` predicate governing this atom, if any.
     #[serde(rename = "cfg", skip_serializing_if = "Option::is_none")]
     pub cfg_predicate: Option<String>,

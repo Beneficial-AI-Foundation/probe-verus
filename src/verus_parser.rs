@@ -2730,7 +2730,7 @@ pub fn single_gated() {{}}
     fn test_external_impl_block_propagation() {
         // Verus forbids marking an individual trait-impl item external, so the
         // attribute is declared on the impl block. probe-verus must propagate it
-        // to the methods, or they'd be misreported as backlog rather than excluded.
+        // to the methods, or they'd be misreported as backlog rather than out of scope.
         let mut file = NamedTempFile::new().unwrap();
         writeln!(
             file,

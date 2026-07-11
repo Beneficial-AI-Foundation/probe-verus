@@ -28,7 +28,10 @@ pub enum CfgExpr {
 #[derive(Debug, Clone, Default)]
 pub struct CfgConfig {
     /// Resolved active cargo features (transitive closure of the default set).
-    pub features: HashSet<String>,
+    /// `None` = features could not be resolved (e.g. unreadable/unparseable
+    /// `Cargo.toml`), in which case `feature = "..."` predicates are undecidable
+    /// (`None`) rather than false — so we never hide backlog on a guess (P26).
+    pub features: Option<HashSet<String>>,
     /// Whether `verus_keep_ghost` is set (true for `cargo verus verify`).
     pub verus_keep_ghost: bool,
 }
@@ -48,7 +51,8 @@ impl CfgConfig {
             },
             CfgExpr::KeyValue(key, value) => {
                 if key == "feature" {
-                    Some(self.features.contains(value))
+                    // Undecidable when the feature set could not be resolved.
+                    self.features.as_ref().map(|f| f.contains(value))
                 } else {
                     // target_arch / backend / bits / diagnostics: not resolved here.
                     None
@@ -99,7 +103,7 @@ impl CfgConfig {
 /// `all(feature = "alloc", not(verus_keep_ghost))`). Returns `None` on malformed
 /// input, which callers treat as "cannot decide" (conservative).
 pub fn parse_cfg(s: &str) -> Option<CfgExpr> {
-    let tokens = tokenize(s);
+    let tokens = tokenize(s)?;
     let mut p = Parser { tokens, pos: 0 };
     let expr = p.parse_expr()?;
     if p.pos == p.tokens.len() {
@@ -119,7 +123,9 @@ enum Tok {
     Eq,
 }
 
-fn tokenize(s: &str) -> Vec<Tok> {
+/// Tokenize a cfg predicate. Returns `None` on any unexpected character, so a
+/// malformed predicate yields `parse_cfg(..) == None` (conservative: undecidable).
+fn tokenize(s: &str) -> Option<Vec<Tok>> {
     let mut out = Vec::new();
     let mut chars = s.chars().peekable();
     while let Some(&c) = chars.peek() {
@@ -168,12 +174,11 @@ fn tokenize(s: &str) -> Vec<Tok> {
             }
             _ => {
                 // Unexpected character: bail (whole parse fails → conservative).
-                chars.next();
-                out.push(Tok::Ident("\u{0}bad".to_string()));
+                return None;
             }
         }
     }
-    out
+    Some(out)
 }
 
 struct Parser {
@@ -262,12 +267,13 @@ impl Parser {
 /// keys in `[features]`). Edges of the form `dep:x`, `x/y`, and `x?/y` enable
 /// dependencies or dependency features, not local features, so they are ignored
 /// for scope purposes.
-pub fn resolve_default_features(cargo_toml: &str) -> HashSet<String> {
-    let Ok(value) = cargo_toml.parse::<toml::Value>() else {
-        return HashSet::new();
-    };
+pub fn resolve_default_features(cargo_toml: &str) -> Option<HashSet<String>> {
+    // Unparseable manifest → features unknown (None), not "no features".
+    let value = cargo_toml.parse::<toml::Value>().ok()?;
     let Some(features) = value.get("features").and_then(|f| f.as_table()) else {
-        return HashSet::new();
+        // Parsed, but no `[features]` table → known-empty (every `feature = "x"`
+        // is inactive because no feature is declared).
+        return Some(HashSet::new());
     };
 
     // feature -> list of edge strings
@@ -304,7 +310,7 @@ pub fn resolve_default_features(cargo_toml: &str) -> HashSet<String> {
             }
         }
     }
-    active
+    Some(active)
 }
 
 #[cfg(test)]
@@ -313,7 +319,7 @@ mod tests {
 
     fn cfg(features: &[&str]) -> CfgConfig {
         CfgConfig {
-            features: features.iter().map(|s| s.to_string()).collect(),
+            features: Some(features.iter().map(|s| s.to_string()).collect()),
             verus_keep_ghost: true,
         }
     }
@@ -389,7 +395,7 @@ digest = ["dep:digest", "dep:sha2"]
 lizard = ["digest"]
 group = ["dep:group", "rand_core"]
 "#;
-        let active = resolve_default_features(toml);
+        let active = resolve_default_features(toml).unwrap();
         assert!(active.contains("alloc"));
         assert!(active.contains("precomputed-tables"));
         assert!(active.contains("zeroize"));
@@ -398,5 +404,33 @@ group = ["dep:group", "rand_core"]
         assert!(!active.contains("group")); // not default
         assert!(!active.contains("rand_core")); // only via group
         assert!(!active.contains("serde"));
+    }
+
+    #[test]
+    fn test_features_known_empty_vs_unknown() {
+        // Parsed manifest with no [features] → known-empty → feature = "x" is false.
+        let known_empty = resolve_default_features("[package]\nname=\"x\"\nversion=\"0.1.0\"");
+        assert_eq!(known_empty, Some(HashSet::new()));
+        // Unparseable manifest → unknown (None).
+        assert_eq!(resolve_default_features("this is not : valid toml ["), None);
+
+        // Unknown features ⟹ feature predicates are undecidable (not false), so a
+        // feature-gated atom is never marked out of scope on a guess (P26).
+        let unknown = CfgConfig {
+            features: None,
+            verus_keep_ghost: true,
+        };
+        assert_eq!(
+            unknown.eval(&parse_cfg(r#"feature = "alloc""#).unwrap()),
+            None
+        );
+        assert!(!unknown.is_inactive(r#"feature = "serde""#));
+
+        // Known-empty ⟹ feature = "x" is definitively inactive.
+        let empty = CfgConfig {
+            features: Some(HashSet::new()),
+            verus_keep_ghost: true,
+        };
+        assert!(empty.is_inactive(r#"feature = "serde""#));
     }
 }

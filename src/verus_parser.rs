@@ -205,20 +205,39 @@ fn has_verifier_external(attrs: &[Attribute]) -> bool {
             _ => return false,
         };
         let s = tokens.to_string();
-        s.contains("verifier") && has_standalone_external(&s)
+        applies_verifier_external(&s)
     })
 }
 
-/// Whether `s` contains `external` as a complete identifier — i.e. the applied
-/// attribute is `verifier::external`, not `verifier::external_body` /
-/// `external_fn_specification` / `external_type_specification` / etc. The next
-/// character after `external` must not continue the identifier (`_` or
-/// alphanumeric).
-fn has_standalone_external(s: &str) -> bool {
-    s.match_indices("external").any(|(i, m)| {
-        let next = s.as_bytes().get(i + m.len());
-        !matches!(next, Some(b) if b.is_ascii_alphanumeric() || *b == b'_')
-    })
+/// Whether the `cfg_attr(...)` token string applies the attribute
+/// `verifier::external` — i.e. the path `verifier :: external` with `external` as
+/// a complete identifier. This deliberately anchors on the `verifier` path so a
+/// bare `external` elsewhere in the tokens is not matched: neither the predicate
+/// (`cfg_attr(feature = "external", verifier::external_body)`) nor a longer attr
+/// (`verifier::external_body` / `external_fn_specification`) counts.
+fn applies_verifier_external(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    for (i, _) in s.match_indices("verifier") {
+        // `verifier` must start a path segment (not the tail of another ident).
+        let prev_ok = match i.checked_sub(1) {
+            Some(j) => !(bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_'),
+            None => true,
+        };
+        if !prev_ok {
+            continue;
+        }
+        let after_verifier = s[i + "verifier".len()..].trim_start();
+        let Some(rest) = after_verifier.strip_prefix("::") else {
+            continue;
+        };
+        if let Some(after) = rest.trim_start().strip_prefix("external") {
+            let next = after.as_bytes().first();
+            if !matches!(next, Some(b) if b.is_ascii_alphanumeric() || *b == b'_') {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// A collected function call from a spec clause.
@@ -2583,11 +2602,18 @@ verus! {
             }
         }
         // Unit-level guard on the token helper.
-        assert!(has_standalone_external(
+        assert!(applies_verifier_external(
             "verus_keep_ghost , verifier :: external"
         ));
-        assert!(!has_standalone_external(
+        assert!(!applies_verifier_external(
             "verus_keep_ghost , verifier :: external_body"
+        ));
+        // `external` in the predicate (not the applied attr) must not match.
+        assert!(!applies_verifier_external(
+            "feature = \"external\" , verifier :: external_body"
+        ));
+        assert!(applies_verifier_external(
+            "feature = \"external\" , verifier :: external"
         ));
     }
 

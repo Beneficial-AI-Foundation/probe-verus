@@ -800,13 +800,14 @@ pub fn merge_into_unified(
 /// Build the verification-build cfg configuration for KB P26: the package's
 /// resolved default features (from `Cargo.toml`) plus `verus_keep_ghost = true`
 /// (the analyzer/verifier always runs with it set). If `Cargo.toml` is missing or
-/// unparsable, an empty feature set is used — combined with the conservative
-/// evaluator, only `verus_keep_ghost` / `test` / off-feature predicates then
-/// resolve, and unknown ones leave atoms as-is.
+/// unparsable, features are left **unknown** (`None`) so every `feature = "..."`
+/// predicate is undecidable rather than false — the conservative choice that never
+/// hides real backlog (only `verus_keep_ghost` / `test` / non-feature predicates
+/// then resolve).
 fn build_verify_cfg_config(project_path: &Path) -> crate::cfg_eval::CfgConfig {
     let features = std::fs::read_to_string(project_path.join("Cargo.toml"))
-        .map(|s| crate::cfg_eval::resolve_default_features(&s))
-        .unwrap_or_default();
+        .ok()
+        .and_then(|s| crate::cfg_eval::resolve_default_features(&s));
     crate::cfg_eval::CfgConfig {
         features,
         verus_keep_ghost: true,
@@ -1760,7 +1761,7 @@ mod tests {
 
         // serde is not in the active feature set → inactive → out of scope.
         let cfg = CfgConfig {
-            features: ["alloc"].iter().map(|s| s.to_string()).collect(),
+            features: Some(["alloc"].iter().map(|s| s.to_string()).collect()),
             verus_keep_ghost: true,
         };
         apply_cfg_scope(&mut unified, &cfg);
@@ -1778,7 +1779,7 @@ mod tests {
         // With serde active, the same atom stays in-scope backlog.
         let mut unified2 = merge_into_unified(&atoms_path, Some(&specs_path), None).unwrap();
         let cfg_serde = CfgConfig {
-            features: ["serde"].iter().map(|s| s.to_string()).collect(),
+            features: Some(["serde"].iter().map(|s| s.to_string()).collect()),
             verus_keep_ghost: true,
         };
         apply_cfg_scope(&mut unified2, &cfg_serde);

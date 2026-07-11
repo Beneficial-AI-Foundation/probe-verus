@@ -705,10 +705,17 @@ pub fn merge_into_unified(
         // is reported trusted, in scope).
         let is_stub = atom.code_path.is_empty();
         let is_bodiless = atom.has_body == Some(false);
-        let is_non_lib_target = matches!(
-            atom.code_path.split('/').next(),
-            Some("build.rs" | "tests" | "examples" | "benches")
-        );
+        // Non-library target: code outside the verified `src/` tree — `build.rs`,
+        // `tests/`, `examples/`, `benches/`. Key on path *components* (not just the
+        // first): `code_path` may carry a workspace-member prefix like
+        // `crate-name/tests/foo.rs` when extract runs from a workspace root. The
+        // absence of a `src` component distinguishes these from in-`src` modules that
+        // merely happen to be named `tests` (e.g. `src/foo/tests.rs`).
+        let is_non_lib_target = {
+            let mut components = atom.code_path.split('/');
+            !atom.code_path.split('/').any(|c| c == "src")
+                && components.any(|c| matches!(c, "build.rs" | "tests" | "examples" | "benches"))
+        };
         let out_of_scope = has_external || is_stub || is_bodiless || is_non_lib_target;
 
         let verification_status = if trusted_reason.is_some() {
@@ -1866,6 +1873,56 @@ mod tests {
             "build.rs function → out of scope (is-disabled: true)"
         );
         assert_eq!(atom.verification_status, None);
+    }
+
+    #[test]
+    fn test_non_lib_target_detection_handles_workspace_prefix() {
+        // `code_path` may carry a workspace-member prefix when extract runs from a
+        // workspace root. A `tests/` function must still be out of scope, while a
+        // `src/` module merely named `tests` stays in scope.
+        let dir = TempDir::new().unwrap();
+        let atoms = serde_json::json!({
+            "schema": "probe-verus/atoms", "schema-version": "2.0",
+            "tool": {"name": "probe-verus", "version": "7.0.0", "command": "atomize"},
+            "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
+            "timestamp": "2026-07-11T00:00:00Z",
+            "data": {
+                "probe:test/0.1.0/tests/helper()": {
+                    "display-name": "helper",
+                    "dependencies": [], "code-module": "tests",
+                    "code-path": "curve25519-dalek/tests/integration.rs",
+                    "code-text": {"lines-start": 1, "lines-end": 5},
+                    "kind": "exec", "language": "rust", "has-body": true
+                },
+                "probe:test/0.1.0/module/in_src()": {
+                    "display-name": "in_src",
+                    "dependencies": [], "code-module": "tests",
+                    "code-path": "curve25519-dalek/src/tests.rs",
+                    "code-text": {"lines-start": 1, "lines-end": 5},
+                    "kind": "exec", "language": "rust", "has-body": true
+                }
+            }
+        });
+        let atoms_path = write_json(&dir, "atoms.json", &atoms);
+        let specs = serde_json::json!({
+            "schema": "probe-verus/specs", "schema-version": "2.0",
+            "tool": {"name": "probe-verus", "version": "7.0.0", "command": "specify"},
+            "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
+            "timestamp": "2026-07-11T00:00:00Z", "data": {}
+        });
+        let specs_path = write_json(&dir, "specs.json", &specs);
+
+        let result = merge_into_unified(&atoms_path, Some(&specs_path), None).unwrap();
+        assert_eq!(
+            result["probe:test/0.1.0/tests/helper()"].is_disabled,
+            Some(true),
+            "prefixed tests/ target → out of scope even with a workspace prefix"
+        );
+        assert_eq!(
+            result["probe:test/0.1.0/module/in_src()"].is_disabled,
+            Some(false),
+            "a src/ module named tests.rs is in scope (backlog)"
+        );
     }
 
     #[test]

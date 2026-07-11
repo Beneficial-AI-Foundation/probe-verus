@@ -10,6 +10,29 @@ what constitutes a breaking change.
 
 ## [Unreleased]
 
+## [7.0.0] - 2026-07-10
+
+Out-of-scope verification state, aligned to the shared KB two-state scope model
+(properties.md P24/P25): `is-disabled: true` marks a function as out of
+verification scope; the in-scope spec-less backlog is `is-disabled: false` with no
+`verification-status`.
+
+### Breaking
+- **`is-disabled` now encodes verification scope, not spec presence** (KB P24/P25). `is-disabled: true` ⟺ **out of scope**: `#[verifier::external]`, cfg-inactive in the verification build, an external-crate stub (empty `code-path`), a bodiless declaration (a trait-method signature with no body), or code outside the verified library target (`build.rs`, `tests/`, `examples/`, `benches/`). `is-disabled: false` = in scope (a specified function, a trusted axiom, or the spec-less backlog). Previously `is-disabled: true` meant the in-scope backlog. Consumers that read `is-disabled: true` as "unverified work to do" must invert: the backlog is now `is-disabled: false` with no `verification-status`.
+- **Removed the `"excluded"` `verification-status` value and the `excluded-reason` field.** Out-of-scope functions (`#[verifier::external]`, cfg-inactive) no longer carry `verification-status: "excluded"`/`excluded-reason`; they are `is-disabled: true` with no status. `verification-status` is again one of `"transitively-verified"`, `"verified"`, `"failed"`, `"unverified"`, `"trusted"`.
+- **`trust-base` summary: `excluded` count renamed to `out-of-scope`**, now counting atoms with `is-disabled: true` (`#[verifier::external]`, cfg-inactive, external-crate stub). Omitted when zero.
+- **Spec-less functions no longer receive a `verification-status`** (KB P16/P24): verification is *against a spec*, so a function with no `requires`/`ensures` is the in-scope backlog (`is-disabled: false`, no status) even when Verus reports `success` — the body-safety pass against a defaulted `ensures true` is vacuous, not `verified`. Previously such functions (e.g. `read_le_u64_into`) were emitted as `verified`. (Applies when specs are available; an atoms+proofs merge without specs still trusts the proofs result.)
+
+### Added
+- **cfg-inactive functions are classified out of scope** ([#38](https://github.com/Beneficial-AI-Foundation/probe-verus/issues/38), KB P25/P26): a function whose `#[cfg(...)]` predicate is false in the verification build (resolved default features + `verus_keep_ghost`) is not compiled and cannot be verified, so it is now `is-disabled: true` (no status) — no longer polluting the backlog. Covers `#[cfg(test)]` code, inactive features (`serde`/`group`/`rand_core`), and `#[cfg(not(verus_keep_ghost))]` fallbacks. New `cfg` (predicate) output field; new `cfg_eval` module resolves the feature graph and evaluates predicates conservatively (an unresolvable predicate leaves the atom as-is, never hiding real backlog). Inclusion gates (`verus_keep_ghost`, active features like `alloc`/`precomputed-tables`/`zeroize`/`digest`) are correctly kept in scope.
+- **`#[verifier::external]` and external-crate stubs are out of scope** ([#38](https://github.com/Beneficial-AI-Foundation/probe-verus/issues/38), KB P25): `is-disabled: true`, no `verification-status`. The `is_external` flag (already emitted into `specs.json`) was previously dropped by the extract merge, so such functions were indistinguishable from the backlog.
+- **Bodiless declarations and non-library targets are out of scope** (KB P25): a trait-method signature with no body (`has-body: false`) has nothing to verify, and code outside the verified `src/` tree (`build.rs`, `tests/`, `examples/`, `benches/`) is not part of the verification target. Both are now `is-disabled: true` with no status, instead of being reported as spec-less backlog.
+- **Propagate `#[verifier::external]` from impl blocks to methods** ([#38](https://github.com/Beneficial-AI-Foundation/probe-verus/issues/38)): Verus forbids marking an individual trait-impl item external, so the attribute must be declared on the `impl` block. The parser now propagates an impl block's `#[verifier::external]` to its methods, so trait-impl methods (e.g. `Debug`/`Serialize` impls) are correctly classified out of scope.
+
+### Fixed
+- **SCIP cache is invalidated when source changes** ([#38](https://github.com/Beneficial-AI-Foundation/probe-verus/issues/38)): the SCIP index cached under `data/` was reused whenever `index.scip.json` existed, with no check that it was still current. Re-running `extract`/`atomize` after editing source silently reused a stale index, so atom line numbers diverged from the current source — causing span-matching and backfill failures (spurious unmatched functions, duplicate/degenerate atoms, functions missing from `specs.json`). The cache is now regenerated when any `.rs` file under the project is newer than the cached JSON.
+- **`is-disabled` respects any `verification-status`** ([#38](https://github.com/Beneficial-AI-Foundation/probe-verus/issues/38)): an atom carrying a `verification-status` is always `is-disabled: false` (KB P24), including a genuinely spec-less exec function that Verus still verifies.
+
 ## [6.10.3] - 2026-07-02
 
 ### Fixed

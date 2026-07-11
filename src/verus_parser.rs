@@ -147,6 +147,42 @@ fn has_any_cfg_attr(attrs: &[Attribute]) -> bool {
     })
 }
 
+/// Extract the predicates of every item-gating `#[cfg(...)]` attribute as
+/// strings (e.g. `feature = "alloc"`, `not(verus_keep_ghost)`).
+///
+/// Multiple `#[cfg(...)]` attributes on one item compose as a logical AND, so
+/// all of them are returned; callers combine them (with the enclosing scope's
+/// predicates) via [`combine_cfg_predicates`].
+///
+/// Only true `#[cfg(...)]` is item-gating. `#[cfg_attr(...)]` (which conditionally
+/// adds a *doc/derive/allow* attribute but always compiles the item) is
+/// deliberately ignored — it is not a scope gate (KB P26).
+fn cfg_predicates_of(attrs: &[Attribute]) -> Vec<String> {
+    attrs
+        .iter()
+        .filter_map(|attr| {
+            let path = attr.path();
+            let segments: Vec<_> = path.segments.iter().collect();
+            if segments.len() == 1 && segments[0].ident == "cfg" {
+                if let verus_syn::Meta::List(list) = &attr.meta {
+                    return Some(list.tokens.to_string());
+                }
+            }
+            None
+        })
+        .collect()
+}
+
+/// Combine several cfg predicates into a single one with `all(...)`.
+/// Returns `None` when there are no predicates.
+fn combine_cfg_predicates(preds: &[String]) -> Option<String> {
+    match preds {
+        [] => None,
+        [single] => Some(single.clone()),
+        many => Some(format!("all({})", many.join(", "))),
+    }
+}
+
 /// Check whether `attrs` contains `#[verifier::external]`, either directly
 /// or wrapped in `#[cfg_attr(_, verifier::external)]`.
 ///
@@ -169,8 +205,39 @@ fn has_verifier_external(attrs: &[Attribute]) -> bool {
             _ => return false,
         };
         let s = tokens.to_string();
-        s.contains("verifier") && s.contains("external")
+        applies_verifier_external(&s)
     })
+}
+
+/// Whether the `cfg_attr(...)` token string applies the attribute
+/// `verifier::external` — i.e. the path `verifier :: external` with `external` as
+/// a complete identifier. This deliberately anchors on the `verifier` path so a
+/// bare `external` elsewhere in the tokens is not matched: neither the predicate
+/// (`cfg_attr(feature = "external", verifier::external_body)`) nor a longer attr
+/// (`verifier::external_body` / `external_fn_specification`) counts.
+fn applies_verifier_external(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    for (i, _) in s.match_indices("verifier") {
+        // `verifier` must start a path segment (not the tail of another ident).
+        let prev_ok = match i.checked_sub(1) {
+            Some(j) => !(bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_'),
+            None => true,
+        };
+        if !prev_ok {
+            continue;
+        }
+        let after_verifier = s[i + "verifier".len()..].trim_start();
+        let Some(rest) = after_verifier.strip_prefix("::") else {
+            continue;
+        };
+        if let Some(after) = rest.trim_start().strip_prefix("external") {
+            let next = after.as_bytes().first();
+            if !matches!(next, Some(b) if b.is_ascii_alphanumeric() || *b == b'_') {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// A collected function call from a spec clause.
@@ -281,6 +348,11 @@ struct FunctionSpanVisitor {
     inside_cfg_mod: usize,
     /// Depth counter: >0 when visiting inside a `cfg_if!` branch
     inside_cfg_if: usize,
+    /// Depth counter: >0 when visiting inside an `impl` block marked
+    /// `#[verifier::external]`. Verus requires trait-impl externals to be
+    /// declared on the impl block (an individual trait-impl item cannot be
+    /// marked external), so the attribute must be propagated to the methods.
+    inside_external_impl: usize,
 }
 
 impl FunctionSpanVisitor {
@@ -291,11 +363,18 @@ impl FunctionSpanVisitor {
             inside_cfg_impl: 0,
             inside_cfg_mod: 0,
             inside_cfg_if: 0,
+            inside_external_impl: 0,
         }
     }
 
     fn is_inside_cfg(&self) -> bool {
         self.inside_cfg_impl > 0 || self.inside_cfg_mod > 0 || self.inside_cfg_if > 0
+    }
+
+    /// Whether the current position inherits `#[verifier::external]` from an
+    /// enclosing impl block.
+    fn is_inside_external_impl(&self) -> bool {
+        self.inside_external_impl > 0
     }
 
     /// Extract requires/ensures line ranges from a signature's spec
@@ -356,7 +435,7 @@ impl<'ast> Visit<'ast> for FunctionSpanVisitor {
             requires_range,
             ensures_range,
             has_body: true,
-            is_external: has_verifier_external(&node.attrs),
+            is_external: has_verifier_external(&node.attrs) || self.is_inside_external_impl(),
             is_cfg: has_any_cfg_attr(&node.attrs) || self.is_inside_cfg(),
         });
 
@@ -392,7 +471,14 @@ impl<'ast> Visit<'ast> for FunctionSpanVisitor {
         if cfg_gated {
             self.inside_cfg_impl += 1;
         }
+        let external_impl = has_verifier_external(&node.attrs);
+        if external_impl {
+            self.inside_external_impl += 1;
+        }
         verus_syn::visit::visit_item_impl(self, node);
+        if external_impl {
+            self.inside_external_impl -= 1;
+        }
         if cfg_gated {
             self.inside_cfg_impl -= 1;
         }
@@ -732,6 +818,11 @@ pub struct FunctionInfo {
     /// Whether the function or an enclosing item has #[cfg(...)]
     #[serde(default)]
     pub is_cfg: bool,
+    /// The combined item-gating `#[cfg(...)]` predicate (own + enclosing impl/mod,
+    /// `all(...)`-joined), if any. Used to decide whether the function is compiled
+    /// in the verification build (KB P26). `None` when there is no `#[cfg]` gate.
+    #[serde(rename = "cfg", skip_serializing_if = "Option::is_none", default)]
+    pub cfg_predicate: Option<String>,
     /// Whether the function has #[verifier::exec_allows_no_decreases_clause] attribute
     #[serde(default)]
     pub has_no_decreases_attr: bool,
@@ -929,6 +1020,13 @@ struct FunctionInfoVisitor {
     inside_cfg_mod: usize,
     /// Depth counter: >0 when visiting inside a `cfg_if!` branch
     inside_cfg_if: usize,
+    /// Depth counter: >0 when visiting inside an `impl` block marked
+    /// `#[verifier::external]`. Verus requires trait-impl externals on the impl
+    /// block, so the attribute is propagated to the enclosed methods.
+    inside_external_impl: usize,
+    /// Stack of `#[cfg(...)]` predicates from enclosing `mod`/`impl` blocks.
+    /// A function's effective predicate is `all(stack + own_cfg)`.
+    cfg_stack: Vec<String>,
 }
 
 impl FunctionInfoVisitor {
@@ -957,6 +1055,8 @@ impl FunctionInfoVisitor {
             inside_cfg_impl: 0,
             inside_cfg_mod: 0,
             inside_cfg_if: 0,
+            inside_external_impl: 0,
+            cfg_stack: Vec::new(),
         }
     }
 
@@ -1225,6 +1325,12 @@ impl FunctionInfoVisitor {
         self.inside_cfg_impl > 0 || self.inside_cfg_mod > 0 || self.inside_cfg_if > 0
     }
 
+    /// Whether the current position inherits `#[verifier::external]` from an
+    /// enclosing impl block.
+    fn is_inside_external_impl(&self) -> bool {
+        self.inside_external_impl > 0
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn add_function(
         &mut self,
@@ -1266,8 +1372,13 @@ impl FunctionInfoVisitor {
         let has_trusted_assumption = self.has_trusted_assumption(start_line, end_line);
         let contains_admit = self.contains_admit(start_line, end_line);
         let is_external_body = has_verifier_attr(attrs, "external_body");
-        let is_external = has_verifier_external(attrs);
+        let is_external = has_verifier_external(attrs) || self.is_inside_external_impl();
         let is_cfg = has_any_cfg_attr(attrs) || self.is_inside_cfg();
+        // Combined item-gating cfg predicate: enclosing mod/impl gates (stack) plus
+        // the function's own `#[cfg(...)]`, if any (KB P26).
+        let mut cfg_parts = self.cfg_stack.clone();
+        cfg_parts.extend(cfg_predicates_of(attrs));
+        let cfg_predicate = combine_cfg_predicates(&cfg_parts);
         let has_no_decreases_attr = has_verifier_attr(attrs, "exec_allows_no_decreases_clause");
 
         // Extract spec text if requested
@@ -1353,6 +1464,7 @@ impl FunctionInfoVisitor {
             kind,
             kind_display,
             visibility,
+            cfg_predicate,
             context,
             specified: has_requires || has_ensures,
             has_requires,
@@ -1477,7 +1589,21 @@ impl<'ast> Visit<'ast> for FunctionInfoVisitor {
         if cfg_gated {
             self.inside_cfg_impl += 1;
         }
+        let pushed_cfg = combine_cfg_predicates(&cfg_predicates_of(&node.attrs));
+        if let Some(pred) = &pushed_cfg {
+            self.cfg_stack.push(pred.clone());
+        }
+        let external_impl = has_verifier_external(&node.attrs);
+        if external_impl {
+            self.inside_external_impl += 1;
+        }
         verus_syn::visit::visit_item_impl(self, node);
+        if external_impl {
+            self.inside_external_impl -= 1;
+        }
+        if pushed_cfg.is_some() {
+            self.cfg_stack.pop();
+        }
         if cfg_gated {
             self.inside_cfg_impl -= 1;
         }
@@ -1499,7 +1625,14 @@ impl<'ast> Visit<'ast> for FunctionInfoVisitor {
         if cfg_gated {
             self.inside_cfg_mod += 1;
         }
+        let pushed_cfg = combine_cfg_predicates(&cfg_predicates_of(&node.attrs));
+        if let Some(pred) = &pushed_cfg {
+            self.cfg_stack.push(pred.clone());
+        }
         verus_syn::visit::visit_item_mod(self, node);
+        if pushed_cfg.is_some() {
+            self.cfg_stack.pop();
+        }
         if cfg_gated {
             self.inside_cfg_mod -= 1;
         }
@@ -2064,6 +2197,7 @@ impl Bar {{
             kind: DeclKind::Exec,
             kind_display: Some("exec".to_string()),
             visibility: None,
+            cfg_predicate: None,
             context: None,
             specified: has_requires || has_ensures,
             has_requires,
@@ -2439,6 +2573,51 @@ verus! {
     }
 
     #[test]
+    fn test_cfg_attr_external_body_not_treated_as_external() {
+        // A cfg_attr-wrapped verifier::external_body (or other external_* attr)
+        // must NOT be detected as `external` — "external" is a substring of
+        // "external_body".
+        let src = r#"
+verus! {
+    #[cfg_attr(verus_keep_ghost, verifier::external_body)]
+    pub fn body_trusted() {}
+
+    #[cfg_attr(verus_keep_ghost, verifier::external_fn_specification)]
+    pub fn fn_spec() {}
+}
+"#;
+        let parsed = verus_syn::parse_file(src).unwrap();
+        for item in &parsed.items {
+            if let verus_syn::Item::Macro(mac) = item {
+                let body: verus_syn::File = verus_syn::parse2(mac.mac.tokens.clone()).unwrap();
+                for inner in &body.items {
+                    if let verus_syn::Item::Fn(item_fn) = inner {
+                        assert!(
+                            !has_verifier_external(&item_fn.attrs),
+                            "{} must not be classified as verifier::external",
+                            item_fn.sig.ident
+                        );
+                    }
+                }
+            }
+        }
+        // Unit-level guard on the token helper.
+        assert!(applies_verifier_external(
+            "verus_keep_ghost , verifier :: external"
+        ));
+        assert!(!applies_verifier_external(
+            "verus_keep_ghost , verifier :: external_body"
+        ));
+        // `external` in the predicate (not the applied attr) must not match.
+        assert!(!applies_verifier_external(
+            "feature = \"external\" , verifier :: external_body"
+        ));
+        assert!(applies_verifier_external(
+            "feature = \"external\" , verifier :: external"
+        ));
+    }
+
+    #[test]
     fn test_has_body_trait_methods() {
         let mut file = NamedTempFile::new().unwrap();
         writeln!(
@@ -2535,6 +2714,86 @@ impl Foo {{
             .find(|f| f.name == "normal_method")
             .unwrap();
         assert!(!normal.is_cfg);
+    }
+
+    #[test]
+    fn test_multiple_cfg_attrs_combined_with_all() {
+        // Multiple `#[cfg(...)]` on one item compose as a logical AND; every
+        // predicate must be captured, not just the first (KB P26).
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"
+#[cfg(feature = "alloc")]
+#[cfg(not(verus_keep_ghost))]
+pub fn double_gated() {{}}
+
+#[cfg(feature = "alloc")]
+pub fn single_gated() {{}}
+"#
+        )
+        .unwrap();
+
+        let functions =
+            parse_file_for_functions(file.path(), true, true, true, true, false).unwrap();
+
+        let double = functions.iter().find(|f| f.name == "double_gated").unwrap();
+        assert_eq!(
+            double.cfg_predicate.as_deref(),
+            Some(r#"all(feature = "alloc", not (verus_keep_ghost))"#),
+            "both item-level #[cfg] predicates must be AND-combined"
+        );
+
+        let single = functions.iter().find(|f| f.name == "single_gated").unwrap();
+        assert_eq!(
+            single.cfg_predicate.as_deref(),
+            Some(r#"feature = "alloc""#),
+            "a lone #[cfg] predicate is passed through without an all(...) wrapper"
+        );
+    }
+
+    #[test]
+    fn test_external_impl_block_propagation() {
+        // Verus forbids marking an individual trait-impl item external, so the
+        // attribute is declared on the impl block. probe-verus must propagate it
+        // to the methods, or they'd be misreported as backlog rather than out of scope.
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"
+struct Foo;
+
+#[cfg_attr(verus_keep_ghost, verifier::external)]
+impl core::fmt::Debug for Foo {{
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {{
+        write!(f, "Foo")
+    }}
+}}
+
+impl Foo {{
+    fn normal_method(&self) {{}}
+}}
+"#
+        )
+        .unwrap();
+
+        let functions =
+            parse_file_for_functions(file.path(), true, true, true, true, false).unwrap();
+
+        let fmt = functions.iter().find(|f| f.name == "fmt").unwrap();
+        assert!(
+            fmt.is_external,
+            "method inside an #[verifier::external] impl block must inherit is_external"
+        );
+
+        let normal = functions
+            .iter()
+            .find(|f| f.name == "normal_method")
+            .unwrap();
+        assert!(
+            !normal.is_external,
+            "method in a non-external impl must not be marked external"
+        );
     }
 
     #[test]

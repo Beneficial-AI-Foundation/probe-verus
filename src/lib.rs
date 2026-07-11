@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+pub mod cfg_eval;
 pub mod commands;
 pub mod constants;
 pub mod error;
@@ -339,9 +340,19 @@ pub struct UnifiedAtom {
     /// Full spec text (requires + ensures). Empty string = analyzed, no spec. Absent = not analyzed.
     #[serde(rename = "primary-spec", skip_serializing_if = "Option::is_none")]
     pub primary_spec: Option<String>,
-    /// `true` when the function has no spec, `false` when it does. Absent = not analyzed.
+    /// `true` = out of verification scope (KB P25): `#[verifier::external]`,
+    /// cfg-inactive in the verification build, an external-crate stub, a bodiless
+    /// declaration (a trait-method signature with no body), or a non-library target
+    /// (`build.rs`, `tests/`, `examples/`, `benches/`). Such atoms carry no
+    /// `verification-status`. `false` = in scope: a specified function, a trusted
+    /// axiom, an atom carrying any `verification-status`, or the spec-less backlog.
+    /// Absent = scope not analyzed (neither specs nor proofs loaded for this atom).
+    /// `has-verification-status ⟹ ¬is-disabled` (KB P24).
     #[serde(rename = "is-disabled", skip_serializing_if = "Option::is_none")]
     pub is_disabled: Option<bool>,
+    /// Verification outcome for an in-scope atom. Values: `"verified"`,
+    /// `"transitively-verified"`, `"failed"`, `"unverified"`, or `"trusted"` (in the
+    /// trust base). Absent for the backlog and for out-of-scope atoms (`is-disabled: true`).
     #[serde(
         rename = "verification-status",
         skip_serializing_if = "Option::is_none"
@@ -351,6 +362,9 @@ pub struct UnifiedAtom {
     /// Values: `"admit"`, `"external-body"`, `"assume-specification"`.
     #[serde(rename = "trusted-reason", skip_serializing_if = "Option::is_none")]
     pub trusted_reason: Option<String>,
+    /// The combined item-gating `#[cfg(...)]` predicate governing this atom, if any.
+    #[serde(rename = "cfg", skip_serializing_if = "Option::is_none")]
+    pub cfg_predicate: Option<String>,
     /// Taxonomy classification labels from the `specify` step (omitted when empty).
     #[serde(rename = "spec-labels", skip_serializing_if = "Vec::is_empty", default)]
     pub spec_labels: Vec<String>,

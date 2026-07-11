@@ -1,0 +1,57 @@
+---
+description: Release commit workflow - when the user asks to commit, follow the full Ralph Loop + version bump + push pipeline
+alwaysApply: true
+---
+
+# Release Commit Workflow
+
+When the user asks to "commit" (and the changes are non-trivial), follow this pipeline in order. For trivial changes (typo fix, comment edit), ask whether a full release cycle is intended.
+
+## 1. Ralph Loop (audit until clean)
+
+Run the three auditor skills from the probe repo against the working tree.
+Repeat: audit → fix → audit until all three pass cleanly.
+
+- **Code quality**: Read and follow `/home/lacra/git_repos/baif/probe/.claude/skills/code-quality-auditor.md`
+- **Test quality**: Read and follow `/home/lacra/git_repos/baif/probe/.claude/skills/test-quality-auditor.md`
+- **Ambiguity**: Read and follow `/home/lacra/git_repos/baif/probe/.claude/skills/ambiguity-auditor.md`
+
+After auditors pass, run: `cargo fmt --all && cargo clippy --all-targets -- -D warnings && cargo test`
+
+## 2. Version bump
+
+Determine the bump level from the changes (see CLAUDE.md § Versioning Policy):
+- **major**: breaking CLI/output changes
+- **minor**: new additive features
+- **patch**: bug fixes, docs, perf
+
+Update `version` in `Cargo.toml` and move the `[Unreleased]` section in `CHANGELOG.md` under a new `[X.Y.Z] - YYYY-MM-DD` header, leaving an empty `[Unreleased]` above it.
+
+## 3. Documentation staleness check
+
+Audit docs listed in CLAUDE.md § Documentation Quality Audit for stale info caused by the current changes. Update any stale docs.
+
+## 4. Commit
+
+Stage all relevant files and commit with a conventional-commit message.
+
+## 5. Push
+
+```bash
+git push
+```
+
+CI (`ci.yml`) detects the version bump, creates the `vX.Y.Z` tag, and triggers the release workflow which builds binaries and creates a GitHub Release.
+
+## 6. GitHub issue
+
+Create a GitHub issue assigned to `astefano` describing the problem that was fixed (or feature that was added), then close it referencing the release version and commit.
+
+```bash
+gh issue create --title "<short description>" --assignee astefano --body "<problem + fix summary>"
+gh issue close <number> --reason completed --comment "Fixed in vX.Y.Z (commit <sha>)."
+```
+
+## Confirmation gate
+
+Before starting step 4, show the user a summary: version bump rationale, files changed, and the proposed commit message. Wait for approval before committing.

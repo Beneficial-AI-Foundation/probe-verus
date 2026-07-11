@@ -10,7 +10,7 @@
 
 use crate::constants::{DATA_DIR, SCIP_INDEX_FILE, SCIP_INDEX_JSON_FILE};
 use crate::tool_manager::{self, Tool};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 /// Which language server to use for SCIP index generation.
@@ -157,6 +157,15 @@ impl ScipCache {
         self.json_path().exists()
     }
 
+    /// Whether a cached SCIP JSON exists **and** is still current — i.e. no `.rs`
+    /// source file under the project is newer than it. Callers that decide whether
+    /// to reuse the cache should use this rather than [`Self::has_cached_json`], so
+    /// an edited project does not silently reuse a stale index.
+    pub fn has_current_cached_json(&self) -> bool {
+        let json = self.json_path();
+        json.exists() && !self.cache_is_stale(&json)
+    }
+
     /// Get the path to the SCIP JSON, generating it if necessary.
     ///
     /// # Arguments
@@ -172,8 +181,11 @@ impl ScipCache {
     ) -> Result<PathBuf, ScipError> {
         let json_path = self.json_path();
 
-        if json_path.exists() && !regenerate {
+        if json_path.exists() && !regenerate && !self.cache_is_stale(&json_path) {
             return Ok(json_path);
+        }
+        if json_path.exists() && !regenerate && verbose {
+            println!("  SCIP cache is stale (source newer than index); regenerating...");
         }
 
         self.check_prerequisites()?;
@@ -181,6 +193,43 @@ impl ScipCache {
         self.convert_to_json(verbose)?;
 
         Ok(json_path)
+    }
+
+    /// Whether the cached SCIP JSON is older than any `.rs` source file under the
+    /// project, in which case it must be regenerated. The cache is keyed only on
+    /// file existence, so without this check an edited project silently reuses a
+    /// stale index — atom line numbers then diverge from the current source,
+    /// causing span-matching and backfill failures downstream.
+    ///
+    /// Conservative: if mtimes can't be read, returns `false` (keep the cache)
+    /// rather than forcing an expensive regeneration on a metadata hiccup. The
+    /// project-root `data/`, `target/`, and `.git/` directories are skipped (only
+    /// at the root — a nested `src/data/` with real sources is still scanned).
+    /// Skipping `.git/` avoids walking a potentially huge object store that can
+    /// never hold a `.rs` source.
+    fn cache_is_stale(&self, json_path: &Path) -> bool {
+        let Ok(cached_mtime) = std::fs::metadata(json_path).and_then(|m| m.modified()) else {
+            return false;
+        };
+        let skip_data = self.project_path.join(DATA_DIR);
+        let skip_target = self.project_path.join("target");
+        let skip_git = self.project_path.join(".git");
+        for entry in walkdir::WalkDir::new(&self.project_path)
+            .into_iter()
+            .filter_entry(|e| {
+                e.path() != skip_data && e.path() != skip_target && e.path() != skip_git
+            })
+            .filter_map(Result::ok)
+        {
+            if entry.path().extension().is_some_and(|ext| ext == "rs") {
+                if let Some(src_mtime) = entry.metadata().ok().and_then(|m| m.modified().ok()) {
+                    if src_mtime > cached_mtime {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
     }
 
     /// Resolve external tools via the tool manager (managed dir -> PATH -> auto-download).
@@ -327,6 +376,8 @@ impl ScipCache {
     pub fn generation_reason(&self, regenerate: bool) -> &'static str {
         if regenerate {
             "(regeneration requested)"
+        } else if self.has_cached_json() {
+            "(cached index is stale — source changed)"
         } else {
             "(no existing SCIP data found)"
         }
@@ -348,6 +399,88 @@ mod tests {
         assert_eq!(
             cache.json_path(),
             PathBuf::from("/path/to/project/data/index.scip.json")
+        );
+    }
+
+    /// Set a file's mtime deterministically (avoids sleep-based test flakiness
+    /// on coarse-granularity filesystems).
+    fn set_mtime(path: &Path, secs: u64) {
+        let t = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(secs);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(t)
+            .unwrap();
+    }
+
+    #[test]
+    fn test_cache_is_stale_on_source_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("data")).unwrap();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/lib.rs"), "fn a() {}").unwrap();
+        let json = root.join("data/index.scip.json");
+        std::fs::write(&json, "{}").unwrap();
+        let cache = ScipCache::new(root);
+
+        // Cache newer than every source file → not stale.
+        set_mtime(&root.join("src/lib.rs"), 1_000);
+        set_mtime(&json, 2_000);
+        assert!(
+            !cache.cache_is_stale(&json),
+            "cache newer than every source file must not be stale"
+        );
+
+        // A source file newer than the cache → stale.
+        set_mtime(&root.join("src/lib.rs"), 3_000);
+        assert!(
+            cache.cache_is_stale(&json),
+            "a source file newer than the cache must mark it stale"
+        );
+    }
+
+    #[test]
+    fn test_cache_not_stale_when_only_root_data_dir_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("data")).unwrap();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/lib.rs"), "fn a() {}").unwrap();
+        let json = root.join("data/index.scip.json");
+        std::fs::write(&json, "{}").unwrap();
+        std::fs::write(root.join("data/generated.rs"), "fn g() {}").unwrap();
+
+        let cache = ScipCache::new(root);
+        set_mtime(&root.join("src/lib.rs"), 1_000);
+        set_mtime(&json, 2_000);
+        // A newer .rs under the root data/ (a generated artifact) is ignored.
+        set_mtime(&root.join("data/generated.rs"), 3_000);
+        assert!(
+            !cache.cache_is_stale(&json),
+            "changes under the root data/ must not invalidate the cache"
+        );
+    }
+
+    #[test]
+    fn test_cache_stale_for_nested_data_dir_sources() {
+        // A nested `src/data/` holds real sources and must still be scanned
+        // (only the project-root data/ is skipped).
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("data")).unwrap();
+        std::fs::create_dir_all(root.join("src/data")).unwrap();
+        std::fs::write(root.join("src/data/real.rs"), "fn r() {}").unwrap();
+        let json = root.join("data/index.scip.json");
+        std::fs::write(&json, "{}").unwrap();
+
+        let cache = ScipCache::new(root);
+        set_mtime(&json, 2_000);
+        set_mtime(&root.join("src/data/real.rs"), 3_000);
+        assert!(
+            cache.cache_is_stale(&json),
+            "a newer source under a nested src/data/ must mark the cache stale"
         );
     }
 

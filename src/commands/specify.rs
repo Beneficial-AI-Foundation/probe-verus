@@ -316,15 +316,12 @@ fn find_matching_atom(func: &FunctionInfo, atoms: &BTreeMap<String, AtomEntry>) 
             let line_diff = (func.fn_line as isize - atom_line as isize).unsigned_abs();
             let within_tolerance = line_diff <= LINE_TOLERANCE;
 
-            if within_span || within_tolerance {
-                let effective_diff = line_diff;
-                if effective_diff < best_line_diff {
-                    best_match = Some(code_name);
-                    best_line_diff = effective_diff;
+            if (within_span || within_tolerance) && line_diff < best_line_diff {
+                best_match = Some(code_name);
+                best_line_diff = line_diff;
 
-                    if effective_diff == 0 {
-                        break;
-                    }
+                if line_diff == 0 {
+                    break;
                 }
             }
         }
@@ -356,6 +353,7 @@ mod tests {
             kind: DeclKind::Exec,
             kind_display: None,
             visibility: None,
+            cfg_predicate: None,
             context: None,
             specified: false,
             has_requires: false,

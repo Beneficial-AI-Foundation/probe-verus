@@ -30,9 +30,17 @@ struct ExtractPipelineResult {
 struct TrustBaseSummary {
     verified: usize,
     trusted: usize,
+    #[serde(rename = "out-of-scope", skip_serializing_if = "is_zero")]
+    out_of_scope: usize,
     unverified: usize,
     failed: usize,
     absent: usize,
+}
+
+/// Serde helper: omit a count field when it is zero (keeps `out-of-scope` additive —
+/// summaries without any out-of-scope atoms serialize unchanged).
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 #[derive(Serialize)]
@@ -458,6 +466,15 @@ struct SpecsEntry {
     /// Whether the function has `#[verifier::external_body]` — trusted without proof.
     #[serde(default)]
     is_external_body: bool,
+    /// Whether the function has `#[verifier::external]` — deliberately outside the
+    /// verification scope. TCB-neutral: unlike `external_body`, an `external` function
+    /// is not trusted (Verus ignores it entirely), so it does not enlarge the trust base.
+    #[serde(default)]
+    is_external: bool,
+    /// Combined `#[cfg(...)]` predicate (own + enclosing impl/mod), if any. Used to
+    /// decide whether the function is compiled in the verification build (KB P26).
+    #[serde(rename = "cfg", default)]
+    cfg_predicate: Option<String>,
 }
 
 /// Deserialization wrapper for the specs.json `data` section.
@@ -623,23 +640,20 @@ pub fn merge_into_unified(
 
         let mut spec_text: Option<String> = specs_entry.map(build_spec_text);
 
-        // `is_disabled` semantics: `None` = function was not analyzed for specs;
-        // `Some(true)` = function was analyzed but has no spec; `Some(false)` = function has a spec.
-        // Trusted atoms are forced to `Some(false)` further below, after the
-        // trust reason is determined.
-        //
-        // When specs were loaded but a particular atom has no matching specs entry,
-        // distinguish external stubs (empty code_path → leave as None) from internal
-        // atoms the parser missed (e.g. functions inside proptest! macros → treat as
-        // analyzed-but-unspecified: primary_spec = "", is_disabled = true).
-        let is_disabled = match &spec_text {
-            Some(text) => Some(text.is_empty()),
-            None if specs.is_some() && !atom.code_path.is_empty() => {
-                spec_text = Some(String::new());
-                Some(true)
-            }
-            None => None,
-        };
+        // Spec-bearing ⟺ a non-empty requires/ensures contract. Verification is
+        // *against a spec* (KB P16/P24), so a spec-less function never earns a
+        // `verification-status` — Verus's body-safety "success" against a defaulted
+        // `ensures true` is vacuous, not a verified claim.
+        let has_spec = spec_text.as_deref().is_some_and(|s| !s.is_empty());
+
+        // primary-spec text: an analyzed-but-unspecified internal atom (specs were
+        // loaded, non-empty code_path, but no matching specs entry — e.g. a function
+        // inside a proptest! macro the parser missed) gets an empty spec string so it
+        // reads as analyzed-with-no-spec rather than not-analyzed. External-crate
+        // stubs (empty code_path) keep `None`.
+        if spec_text.is_none() && specs.is_some() && !atom.code_path.is_empty() {
+            spec_text = Some(String::new());
+        }
 
         // Derive categorized dependencies from location data
         let mut requires_deps = BTreeSet::new();
@@ -662,6 +676,7 @@ pub fn merge_into_unified(
         // Determine trusted status and reason
         let has_admit = specs_entry.is_some_and(|e| e.contains_admit);
         let has_external_body = specs_entry.is_some_and(|e| e.is_external_body);
+        let has_external = specs_entry.is_some_and(|e| e.is_external);
         let assume_spec_match = assume_spec_matched.get(&code_name);
 
         let trusted_reason = if has_admit {
@@ -674,8 +689,45 @@ pub fn merge_into_unified(
             None
         };
 
+        // Out-of-scope atoms (KB P25) carry no `verification-status`. A trust
+        // reason takes precedence: an atom that is both `#[verifier::external]`
+        // and (somehow) trusted is reported as trusted.
+        // Out of verification scope (KB P25): a function Verus never compiles and
+        // checks in this build. Four structural cases (cfg-inactivity is applied
+        // later in `apply_cfg_scope`):
+        //   * `#[verifier::external]`
+        //   * external-crate stub (empty code_path)
+        //   * bodiless declaration — a trait-method signature with no body: there is
+        //     nothing to verify (implementations carry the proof)
+        //   * code outside the verified library target — `build.rs`, `tests/`,
+        //     `examples/`, `benches/` (Verus verifies the `src/` lib tree)
+        // A trust reason takes precedence (an out-of-scope atom that is also trusted
+        // is reported trusted, in scope).
+        let is_stub = atom.code_path.is_empty();
+        let is_bodiless = atom.has_body == Some(false);
+        // Non-library target: code outside the verified `src/` tree — `build.rs`,
+        // `tests/`, `examples/`, `benches/`. Key on path *components* (not just the
+        // first): `code_path` may carry a workspace-member prefix like
+        // `crate-name/tests/foo.rs` when extract runs from a workspace root. The
+        // absence of a `src` component distinguishes these from in-`src` modules that
+        // merely happen to be named `tests` (e.g. `src/foo/tests.rs`).
+        let is_non_lib_target = {
+            let mut components = atom.code_path.split('/');
+            !atom.code_path.split('/').any(|c| c == "src")
+                && components.any(|c| matches!(c, "build.rs" | "tests" | "examples" | "benches"))
+        };
+        let out_of_scope = has_external || is_stub || is_bodiless || is_non_lib_target;
+
         let verification_status = if trusted_reason.is_some() {
             Some("trusted".to_string())
+        } else if out_of_scope {
+            // Out of scope: Verus never checks it, so it gets no status.
+            None
+        } else if specs.is_some() && !has_spec {
+            // Spec-less in-scope function: it stays in the backlog with no status
+            // (KB P16/P24) — there is no spec to have verified against. (When specs
+            // were not loaded at all we cannot tell, so the proofs result is trusted.)
+            None
         } else {
             proofs
                 .as_ref()
@@ -683,16 +735,23 @@ pub fn merge_into_unified(
                 .map(|e| map_verification_status(&e.status).to_string())
         };
 
-        // A trust reason is a deliberate human act that puts the atom in
-        // analysis scope, so trusted atoms are never disabled (KB P25:
-        // has-verification-status ⟹ ¬is-disabled). This covers spec-less
-        // `external_body` functions (which would otherwise be Some(true))
-        // and `assume_specification` targets (which would otherwise be None
-        // despite carrying a propagated primary-spec; KB P24).
+        let cfg_predicate = specs_entry.and_then(|e| e.cfg_predicate.clone());
+
+        // Scope (KB P24/P25): `is-disabled: true` ⟺ out of verification scope (the
+        // `out_of_scope` cases above; cfg-inactive is added later in `apply_cfg_scope`).
+        // Trusted atoms (`#[verifier::external_body]` / `admit()` / `assume_specification`),
+        // any atom carrying a `verification-status` (P24: has-status ⟹ in scope), and
+        // every compiled in-scope function — the spec-less backlog *and* specified
+        // functions alike — are `is-disabled: false`. `None` means scope was not
+        // analyzed (neither specs nor proofs for this atom).
         let is_disabled = if trusted_reason.is_some() {
             Some(false)
+        } else if out_of_scope {
+            Some(true)
+        } else if verification_status.is_some() || specs.is_some() {
+            Some(false)
         } else {
-            is_disabled
+            None
         };
 
         // For assume_specification targets, propagate the declared spec text
@@ -717,12 +776,56 @@ pub fn merge_into_unified(
                 is_disabled,
                 verification_status,
                 trusted_reason,
+                cfg_predicate,
                 spec_labels,
             },
         );
     }
 
     Ok(unified)
+}
+
+/// Apply KB P25/P26: classify atoms whose `#[cfg(...)]` predicate is inactive in
+/// the verification build as out of scope (`is-disabled: true`, no
+/// `verification-status`).
+///
+/// cfg-inactivity is a structural out-of-scope property: a function the
+/// verification build never compiles is out of scope whether or not it carries
+/// specs, and independent of whether `run-verus` was executed. So this pass keys
+/// on the *absence of a terminal `verification-status`* — an atom that already
+/// carries one (verified/failed/trusted) is left untouched. Any other atom whose
+/// cfg predicate is inactive is marked `is-disabled: true`. Evaluation is
+/// conservative — a predicate the tool cannot resolve leaves the atom as-is
+/// (never hides backlog).
+/// Build the verification-build cfg configuration for KB P26: the package's
+/// resolved default features (from `Cargo.toml`) plus `verus_keep_ghost = true`
+/// (the analyzer/verifier always runs with it set). If `Cargo.toml` is missing or
+/// unparsable, features are left **unknown** (`None`) so every `feature = "..."`
+/// predicate is undecidable rather than false — the conservative choice that never
+/// hides real backlog (only `verus_keep_ghost` / `test` / non-feature predicates
+/// then resolve).
+fn build_verify_cfg_config(project_path: &Path) -> crate::cfg_eval::CfgConfig {
+    let features = std::fs::read_to_string(project_path.join("Cargo.toml"))
+        .ok()
+        .and_then(|s| crate::cfg_eval::resolve_default_features(&s));
+    crate::cfg_eval::CfgConfig {
+        features,
+        verus_keep_ghost: true,
+    }
+}
+
+fn apply_cfg_scope(unified: &mut BTreeMap<String, UnifiedAtom>, cfg: &crate::cfg_eval::CfgConfig) {
+    for atom in unified.values_mut() {
+        if atom.verification_status.is_some() {
+            continue;
+        }
+        let Some(pred) = atom.cfg_predicate.as_deref() else {
+            continue;
+        };
+        if cfg.is_inactive(pred) {
+            atom.is_disabled = Some(true);
+        }
+    }
 }
 
 /// Load an enveloped (or bare-dict) JSON file and deserialize its data section as a dict.
@@ -769,13 +872,20 @@ fn load_enveloped_data_single<T: serde::de::DeserializeOwned>(
 fn compute_trust_base_summary(unified: &BTreeMap<String, UnifiedAtom>) -> TrustBaseSummary {
     let mut verified = 0;
     let mut trusted = 0;
+    let mut out_of_scope = 0;
     let mut unverified = 0;
     let mut failed = 0;
     let mut absent = 0;
 
     for atom in unified.values() {
+        // Out-of-scope atoms (KB P25) carry no `verification-status`, so count them
+        // by `is-disabled` before matching on status.
+        if atom.is_disabled == Some(true) {
+            out_of_scope += 1;
+            continue;
+        }
         match atom.verification_status.as_deref() {
-            Some("verified") => verified += 1,
+            Some("verified") | Some("transitively-verified") => verified += 1,
             Some("trusted") => trusted += 1,
             Some("unverified") => unverified += 1,
             Some("failed") => failed += 1,
@@ -786,6 +896,7 @@ fn compute_trust_base_summary(unified: &BTreeMap<String, UnifiedAtom>) -> TrustB
     TrustBaseSummary {
         verified,
         trusted,
+        out_of_scope,
         unverified,
         failed,
         absent,
@@ -840,7 +951,13 @@ fn run_unified_merge(
     let proofs_opt = proofs_path.filter(|p| p.exists());
 
     match merge_into_unified(atoms_path, specs_opt, proofs_opt) {
-        Ok(unified) => {
+        Ok(mut unified) => {
+            // KB P26: reclassify atoms not compiled in the verification build as
+            // out of scope, using the project's resolved default features + the
+            // verifier's `verus_keep_ghost` cfg.
+            let cfg = build_verify_cfg_config(project_path);
+            apply_cfg_scope(&mut unified, &cfg);
+
             // Only meaningful when verification results were merged; without
             // proofs.json every proof atom legitimately lacks a status.
             if proofs_opt.is_some() {
@@ -1064,9 +1181,20 @@ mod tests {
         for entry in result.values() {
             assert!(entry.verification_status.is_none());
             assert!(entry.primary_spec.is_none());
-            assert!(entry.is_disabled.is_none());
             assert!(entry.spec_labels.is_empty());
         }
+        // Real atoms without specs/proofs: scope not analyzed → is-disabled absent.
+        assert!(result["probe:test/0.1.0/module/foo()"]
+            .is_disabled
+            .is_none());
+        assert!(result["probe:test/0.1.0/module/bar()"]
+            .is_disabled
+            .is_none());
+        // External-crate stub (empty code-path) is out of scope regardless (KB P25).
+        assert_eq!(
+            result["probe:external/1.0.0/lib/ext()"].is_disabled,
+            Some(true)
+        );
         assert_eq!(
             result["probe:test/0.1.0/module/foo()"].atom.display_name,
             "foo"
@@ -1093,13 +1221,14 @@ mod tests {
 
         let bar = &result["probe:test/0.1.0/module/bar()"];
         assert_eq!(bar.primary_spec.as_deref(), Some(""));
-        assert_eq!(bar.is_disabled, Some(true));
+        // Spec-less, compiled, in-scope → the backlog: is-disabled false (KB P24).
+        assert_eq!(bar.is_disabled, Some(false));
         assert!(bar.spec_labels.is_empty());
 
-        // External stub has no spec match
+        // External-crate stub has no spec match and is out of scope (KB P25).
         let ext = &result["probe:external/1.0.0/lib/ext()"];
         assert!(ext.primary_spec.is_none());
-        assert!(ext.is_disabled.is_none());
+        assert_eq!(ext.is_disabled, Some(true));
         assert!(ext.spec_labels.is_empty());
 
         // No proofs -> no verification-status
@@ -1134,9 +1263,22 @@ mod tests {
             .is_none());
         for entry in result.values() {
             assert!(entry.primary_spec.is_none());
-            assert!(entry.is_disabled.is_none());
             assert!(entry.spec_labels.is_empty());
         }
+        // A proof-derived status implies in scope (KB P24): is-disabled false.
+        assert_eq!(
+            result["probe:test/0.1.0/module/foo()"].is_disabled,
+            Some(false)
+        );
+        assert_eq!(
+            result["probe:test/0.1.0/module/bar()"].is_disabled,
+            Some(false)
+        );
+        // External-crate stub is out of scope (KB P25).
+        assert_eq!(
+            result["probe:external/1.0.0/lib/ext()"].is_disabled,
+            Some(true)
+        );
     }
 
     #[test]
@@ -1160,13 +1302,19 @@ mod tests {
 
         let bar = &result["probe:test/0.1.0/module/bar()"];
         assert_eq!(bar.primary_spec.as_deref(), Some(""));
-        assert_eq!(bar.is_disabled, Some(true));
-        assert_eq!(bar.verification_status.as_deref(), Some("failed"));
+        // Spec-less in-scope function: no spec to verify against, so no status even
+        // though proofs report a result — it stays in the backlog (KB P16/P24).
+        assert_eq!(bar.is_disabled, Some(false));
+        assert_eq!(bar.verification_status, None);
         assert!(bar.spec_labels.is_empty());
 
         let ext = &result["probe:external/1.0.0/lib/ext()"];
         assert!(ext.primary_spec.is_none());
-        assert!(ext.is_disabled.is_none());
+        assert_eq!(
+            ext.is_disabled,
+            Some(true),
+            "external-crate stub is out of scope"
+        );
         assert!(ext.verification_status.is_none());
         assert!(ext.spec_labels.is_empty());
     }
@@ -1208,7 +1356,10 @@ mod tests {
 
         let bar_json = &json["probe:test/0.1.0/module/bar()"];
         assert_eq!(bar_json["primary-spec"], "");
-        assert_eq!(bar_json["is-disabled"], true);
+        // Spec-less in-scope backlog: is-disabled false, and no verification-status
+        // even though proofs reported one (KB P16/P24).
+        assert_eq!(bar_json["is-disabled"], false);
+        assert!(bar_json.get("verification-status").is_none());
         assert_eq!(bar_json["language"], "verus");
         assert!(
             bar_json.get("spec-labels").is_none(),
@@ -1223,7 +1374,8 @@ mod tests {
         assert!(ext_json.get("verification-status").is_none());
         assert!(ext_json.get("trusted-reason").is_none());
         assert!(ext_json.get("primary-spec").is_none());
-        assert!(ext_json.get("is-disabled").is_none());
+        // External-crate stub is out of scope (KB P25): is-disabled: true, no status.
+        assert_eq!(ext_json["is-disabled"], true);
         assert!(ext_json.get("spec-labels").is_none());
         assert_eq!(ext_json["language"], "rust");
     }
@@ -1253,8 +1405,11 @@ mod tests {
                 "probe:test/0.1.0/module/bar()": {
                     "spec-text": {"lines-start": 30, "lines-end": 40},
                     "kind": "proof",
-                    "specified": false,
-                    "contains_admit": false
+                    "specified": true,
+                    "has_requires": false,
+                    "has_ensures": true,
+                    "contains_admit": false,
+                    "ensures_text": "ensures\n    foo_property()"
                 }
             }
         });
@@ -1328,8 +1483,12 @@ mod tests {
                     "spec-text": {"lines-start": 10, "lines-end": 20},
                     "kind": "exec",
                     "specified": true,
+                    "has_requires": true,
+                    "has_ensures": true,
                     "has_trusted_assumption": true,
-                    "contains_admit": false
+                    "contains_admit": false,
+                    "requires_text": "requires\n    x > 0",
+                    "ensures_text": "ensures\n    result > x"
                 }
             }
         });
@@ -1568,6 +1727,329 @@ mod tests {
     }
 
     #[test]
+    fn test_apply_cfg_scope_marks_inactive_disabled() {
+        use crate::cfg_eval::CfgConfig;
+
+        // Build a unified atom via the merge path so cfg_predicate is populated
+        // from the specs `cfg` field exactly as in production.
+        let dir = TempDir::new().unwrap();
+        let atoms_path = write_json(&dir, "atoms.json", &atoms_json());
+        let specs = serde_json::json!({
+            "schema": "probe-verus/specs", "schema-version": "2.0",
+            "tool": {"name": "probe-verus", "version": "6.5.0", "command": "specify"},
+            "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
+            "timestamp": "2026-04-07T00:00:00Z",
+            "data": {
+                "probe:test/0.1.0/module/foo()": {
+                    "spec-text": {"lines-start": 10, "lines-end": 20},
+                    "kind": "exec", "specified": false,
+                    "cfg": "feature = \"serde\""
+                }
+            }
+        });
+        let specs_path = write_json(&dir, "specs.json", &specs);
+        let mut unified = merge_into_unified(&atoms_path, Some(&specs_path), None).unwrap();
+
+        // Before: spec-less, in-scope backlog (is-disabled: false), cfg predicate carried.
+        let before = &unified["probe:test/0.1.0/module/foo()"];
+        assert_eq!(before.is_disabled, Some(false));
+        assert_eq!(before.verification_status, None);
+        assert_eq!(
+            before.cfg_predicate.as_deref(),
+            Some(r#"feature = "serde""#)
+        );
+
+        // serde is not in the active feature set → inactive → out of scope.
+        let cfg = CfgConfig {
+            features: Some(["alloc"].iter().map(|s| s.to_string()).collect()),
+            verus_keep_ghost: true,
+        };
+        apply_cfg_scope(&mut unified, &cfg);
+        let after = &unified["probe:test/0.1.0/module/foo()"];
+        assert_eq!(
+            after.is_disabled,
+            Some(true),
+            "cfg-inactive → out of scope (is-disabled: true)"
+        );
+        assert_eq!(
+            after.verification_status, None,
+            "out-of-scope atoms carry no verification-status"
+        );
+
+        // With serde active, the same atom stays in-scope backlog.
+        let mut unified2 = merge_into_unified(&atoms_path, Some(&specs_path), None).unwrap();
+        let cfg_serde = CfgConfig {
+            features: Some(["serde"].iter().map(|s| s.to_string()).collect()),
+            verus_keep_ghost: true,
+        };
+        apply_cfg_scope(&mut unified2, &cfg_serde);
+        let a = &unified2["probe:test/0.1.0/module/foo()"];
+        assert_eq!(a.verification_status, None, "active feature stays backlog");
+        assert_eq!(a.is_disabled, Some(false), "active feature stays in scope");
+    }
+
+    #[test]
+    fn test_bodiless_declaration_is_out_of_scope() {
+        // A bodiless exec atom (e.g. a trait-method declaration) has no body to
+        // verify, so it is out of scope (is-disabled: true, no status), not backlog.
+        let dir = TempDir::new().unwrap();
+        let atoms = serde_json::json!({
+            "schema": "probe-verus/atoms", "schema-version": "2.0",
+            "tool": {"name": "probe-verus", "version": "7.0.0", "command": "atomize"},
+            "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
+            "timestamp": "2026-07-11T00:00:00Z",
+            "data": {
+                "probe:test/0.1.0/traits/Identity#identity()": {
+                    "display-name": "Identity::identity",
+                    "dependencies": [],
+                    "code-module": "traits",
+                    "code-path": "src/traits.rs",
+                    "code-text": {"lines-start": 46, "lines-end": 46},
+                    "kind": "exec", "language": "rust",
+                    "has-body": false
+                }
+            }
+        });
+        let atoms_path = write_json(&dir, "atoms.json", &atoms);
+        // Provide specs so specs.is_some(); the atom has no matching entry.
+        let specs = serde_json::json!({
+            "schema": "probe-verus/specs", "schema-version": "2.0",
+            "tool": {"name": "probe-verus", "version": "7.0.0", "command": "specify"},
+            "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
+            "timestamp": "2026-07-11T00:00:00Z",
+            "data": {}
+        });
+        let specs_path = write_json(&dir, "specs.json", &specs);
+
+        let result = merge_into_unified(&atoms_path, Some(&specs_path), None).unwrap();
+        let atom = &result["probe:test/0.1.0/traits/Identity#identity()"];
+        assert_eq!(
+            atom.is_disabled,
+            Some(true),
+            "bodiless declaration → out of scope (is-disabled: true)"
+        );
+        assert_eq!(
+            atom.verification_status, None,
+            "bodiless declaration carries no verification-status"
+        );
+    }
+
+    #[test]
+    fn test_build_rs_is_out_of_scope() {
+        // Functions in build.rs (or tests/examples/benches) are not part of the
+        // verified library target, so they are out of scope (KB P25).
+        let dir = TempDir::new().unwrap();
+        let atoms = serde_json::json!({
+            "schema": "probe-verus/atoms", "schema-version": "2.0",
+            "tool": {"name": "probe-verus", "version": "7.0.0", "command": "atomize"},
+            "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
+            "timestamp": "2026-07-11T00:00:00Z",
+            "data": {
+                "probe:test/0.1.0/main()": {
+                    "display-name": "main",
+                    "dependencies": [],
+                    "code-module": "",
+                    "code-path": "build.rs",
+                    "code-text": {"lines-start": 1, "lines-end": 10},
+                    "kind": "exec", "language": "rust",
+                    "has-body": true
+                }
+            }
+        });
+        let atoms_path = write_json(&dir, "atoms.json", &atoms);
+        let specs = serde_json::json!({
+            "schema": "probe-verus/specs", "schema-version": "2.0",
+            "tool": {"name": "probe-verus", "version": "7.0.0", "command": "specify"},
+            "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
+            "timestamp": "2026-07-11T00:00:00Z",
+            "data": {}
+        });
+        let specs_path = write_json(&dir, "specs.json", &specs);
+
+        let result = merge_into_unified(&atoms_path, Some(&specs_path), None).unwrap();
+        let atom = &result["probe:test/0.1.0/main()"];
+        assert_eq!(
+            atom.is_disabled,
+            Some(true),
+            "build.rs function → out of scope (is-disabled: true)"
+        );
+        assert_eq!(atom.verification_status, None);
+    }
+
+    #[test]
+    fn test_non_lib_target_detection_handles_workspace_prefix() {
+        // `code_path` may carry a workspace-member prefix when extract runs from a
+        // workspace root. A `tests/` function must still be out of scope, while a
+        // `src/` module merely named `tests` stays in scope.
+        let dir = TempDir::new().unwrap();
+        let atoms = serde_json::json!({
+            "schema": "probe-verus/atoms", "schema-version": "2.0",
+            "tool": {"name": "probe-verus", "version": "7.0.0", "command": "atomize"},
+            "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
+            "timestamp": "2026-07-11T00:00:00Z",
+            "data": {
+                "probe:test/0.1.0/tests/helper()": {
+                    "display-name": "helper",
+                    "dependencies": [], "code-module": "tests",
+                    "code-path": "curve25519-dalek/tests/integration.rs",
+                    "code-text": {"lines-start": 1, "lines-end": 5},
+                    "kind": "exec", "language": "rust", "has-body": true
+                },
+                "probe:test/0.1.0/module/in_src()": {
+                    "display-name": "in_src",
+                    "dependencies": [], "code-module": "tests",
+                    "code-path": "curve25519-dalek/src/tests.rs",
+                    "code-text": {"lines-start": 1, "lines-end": 5},
+                    "kind": "exec", "language": "rust", "has-body": true
+                }
+            }
+        });
+        let atoms_path = write_json(&dir, "atoms.json", &atoms);
+        let specs = serde_json::json!({
+            "schema": "probe-verus/specs", "schema-version": "2.0",
+            "tool": {"name": "probe-verus", "version": "7.0.0", "command": "specify"},
+            "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
+            "timestamp": "2026-07-11T00:00:00Z", "data": {}
+        });
+        let specs_path = write_json(&dir, "specs.json", &specs);
+
+        let result = merge_into_unified(&atoms_path, Some(&specs_path), None).unwrap();
+        assert_eq!(
+            result["probe:test/0.1.0/tests/helper()"].is_disabled,
+            Some(true),
+            "prefixed tests/ target → out of scope even with a workspace prefix"
+        );
+        assert_eq!(
+            result["probe:test/0.1.0/module/in_src()"].is_disabled,
+            Some(false),
+            "a src/ module named tests.rs is in scope (backlog)"
+        );
+    }
+
+    #[test]
+    fn test_external_marks_disabled() {
+        let dir = TempDir::new().unwrap();
+        let atoms_path = write_json(&dir, "atoms.json", &atoms_json());
+
+        let specs_ext = serde_json::json!({
+            "schema": "probe-verus/specs",
+            "schema-version": "2.0",
+            "tool": {"name": "probe-verus", "version": "6.5.0", "command": "specify"},
+            "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
+            "timestamp": "2026-04-07T00:00:00Z",
+            "data": {
+                "probe:test/0.1.0/module/foo()": {
+                    "spec-text": {"lines-start": 10, "lines-end": 20},
+                    "kind": "exec",
+                    "specified": false,
+                    "is_external": true
+                }
+            }
+        });
+        let specs_path = write_json(&dir, "specs.json", &specs_ext);
+
+        let result = merge_into_unified(&atoms_path, Some(&specs_path), None).unwrap();
+        let atom = &result["probe:test/0.1.0/module/foo()"];
+
+        assert_eq!(
+            atom.verification_status, None,
+            "#[verifier::external] is out of scope: no verification-status (KB P25)"
+        );
+        assert_eq!(
+            atom.trusted_reason, None,
+            "out-of-scope atoms are TCB-neutral and must not carry a trusted-reason"
+        );
+        assert_eq!(
+            atom.is_disabled,
+            Some(true),
+            "#[verifier::external] → out of scope (is-disabled: true)"
+        );
+    }
+
+    #[test]
+    fn test_specless_exec_stays_backlog() {
+        // A spec-less exec function that Verus trivially discharges (proofs "success")
+        // is NOT `verified`: verification is against a spec, and it has none, so the
+        // "success" is vacuous (KB P16/P24). It stays in the in-scope backlog:
+        // is-disabled false, no verification-status. Regression for read_le_u64_into.
+        let dir = TempDir::new().unwrap();
+        let atoms_path = write_json(&dir, "atoms.json", &atoms_json());
+
+        let specs_specless = serde_json::json!({
+            "schema": "probe-verus/specs", "schema-version": "2.0",
+            "tool": {"name": "probe-verus", "version": "6.5.0", "command": "specify"},
+            "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
+            "timestamp": "2026-04-07T00:00:00Z",
+            "data": {
+                "probe:test/0.1.0/module/foo()": {
+                    "spec-text": {"lines-start": 10, "lines-end": 20},
+                    "kind": "exec", "specified": false
+                }
+            }
+        });
+        let specs_path = write_json(&dir, "specs.json", &specs_specless);
+        let proofs_success = serde_json::json!({
+            "schema": "probe-verus/proofs", "schema-version": "2.0",
+            "tool": {"name": "probe-verus", "version": "6.5.0", "command": "run-verus"},
+            "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
+            "timestamp": "2026-04-07T00:00:00Z",
+            "data": {
+                "probe:test/0.1.0/module/foo()": {
+                    "code-path": "src/module.rs", "code-line": 10, "verified": true, "status": "success"
+                }
+            }
+        });
+        let proofs_path = write_json(&dir, "proofs.json", &proofs_success);
+
+        let result =
+            merge_into_unified(&atoms_path, Some(&specs_path), Some(&proofs_path)).unwrap();
+        let atom = &result["probe:test/0.1.0/module/foo()"];
+        assert_eq!(
+            atom.verification_status, None,
+            "spec-less function earns no verification-status (KB P16/P24)"
+        );
+        assert_eq!(
+            atom.is_disabled,
+            Some(false),
+            "spec-less in-scope function is backlog: is-disabled false (KB P24)"
+        );
+    }
+
+    #[test]
+    fn test_external_body_takes_precedence_over_external() {
+        let dir = TempDir::new().unwrap();
+        let atoms_path = write_json(&dir, "atoms.json", &atoms_json());
+
+        let specs_both = serde_json::json!({
+            "schema": "probe-verus/specs",
+            "schema-version": "2.0",
+            "tool": {"name": "probe-verus", "version": "6.5.0", "command": "specify"},
+            "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
+            "timestamp": "2026-04-07T00:00:00Z",
+            "data": {
+                "probe:test/0.1.0/module/foo()": {
+                    "spec-text": {"lines-start": 10, "lines-end": 20},
+                    "kind": "exec",
+                    "specified": false,
+                    "is_external": true,
+                    "is_external_body": true
+                }
+            }
+        });
+        let specs_path = write_json(&dir, "specs.json", &specs_both);
+
+        let result = merge_into_unified(&atoms_path, Some(&specs_path), None).unwrap();
+        let atom = &result["probe:test/0.1.0/module/foo()"];
+
+        assert_eq!(
+            atom.verification_status.as_deref(),
+            Some("trusted"),
+            "a trust reason takes precedence over out-of-scope external"
+        );
+        assert_eq!(atom.trusted_reason.as_deref(), Some("external-body"));
+    }
+
+    #[test]
     fn test_non_external_body_unaffected() {
         let dir = TempDir::new().unwrap();
         let atoms_path = write_json(&dir, "atoms.json", &atoms_json());
@@ -1583,8 +2065,12 @@ mod tests {
                     "spec-text": {"lines-start": 10, "lines-end": 20},
                     "kind": "exec",
                     "specified": true,
+                    "has_requires": true,
+                    "has_ensures": true,
                     "is_external_body": false,
-                    "contains_admit": false
+                    "contains_admit": false,
+                    "requires_text": "requires\n    x > 0",
+                    "ensures_text": "ensures\n    result > x"
                 }
             }
         });
@@ -1886,9 +2372,11 @@ mod tests {
     }
 
     /// Internal atoms not matched by specify (e.g. functions inside proptest! macros)
-    /// should get `is-disabled: true` + `primary-spec: ""` rather than omitting both.
+    /// are in-scope backlog: `is-disabled: false` + `primary-spec: ""` (analyzed, no
+    /// spec) rather than omitting both. Only genuinely out-of-scope atoms (external
+    /// stubs, `#[verifier::external]`, cfg-inactive) are `is-disabled: true`.
     #[test]
-    fn test_internal_atom_missing_from_specs_gets_disabled() {
+    fn test_internal_atom_missing_from_specs_is_backlog() {
         let dir = TempDir::new().unwrap();
 
         let atoms = serde_json::json!({
@@ -1962,8 +2450,8 @@ mod tests {
         let proptest = &result["probe:test/0.1.0/test/module/proptest_fn()"];
         assert_eq!(
             proptest.is_disabled,
-            Some(true),
-            "internal atom not in specs should get is-disabled: true"
+            Some(false),
+            "internal atom not in specs is in-scope backlog → is-disabled: false"
         );
         assert_eq!(
             proptest.primary_spec.as_deref(),
@@ -1972,9 +2460,10 @@ mod tests {
         );
 
         let ext = &result["probe:external/1.0.0/lib/ext()"];
-        assert!(
-            ext.is_disabled.is_none(),
-            "external stub should still have is-disabled absent"
+        assert_eq!(
+            ext.is_disabled,
+            Some(true),
+            "external-crate stub is out of scope → is-disabled: true (KB P25)"
         );
         assert!(
             ext.primary_spec.is_none(),

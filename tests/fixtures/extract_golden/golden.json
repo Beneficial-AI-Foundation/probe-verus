@@ -11,7 +11,7 @@
       "display-name": "Counter::add",
       "has-body": true,
       "is-cfg-gated": false,
-      "is-disabled": true,
+      "is-disabled": false,
       "is-external": false,
       "is-public": false,
       "is-public-api": true,
@@ -43,7 +43,7 @@
       "display-name": "checked_add",
       "has-body": true,
       "is-cfg-gated": false,
-      "is-disabled": true,
+      "is-disabled": false,
       "is-external": false,
       "is-public": false,
       "is-public-api": false,
@@ -82,7 +82,7 @@
       "display-name": "double_checked",
       "has-body": true,
       "is-cfg-gated": false,
-      "is-disabled": true,
+      "is-disabled": false,
       "is-external": false,
       "is-public": false,
       "is-public-api": false,
@@ -102,7 +102,7 @@
       "display-name": "is_positive",
       "has-body": true,
       "is-cfg-gated": false,
-      "is-disabled": true,
+      "is-disabled": false,
       "is-external": false,
       "is-public": false,
       "is-public-api": false,
@@ -144,7 +144,7 @@
       "display-name": "positive_sum",
       "has-body": true,
       "is-cfg-gated": false,
-      "is-disabled": true,
+      "is-disabled": false,
       "is-external": false,
       "is-public": false,
       "is-public-api": false,
@@ -163,10 +163,10 @@
     "package-version": "0.1.0",
     "repo": ""
   },
-  "timestamp": "2026-07-02T18:54:17Z",
+  "timestamp": "2026-07-10T16:05:47Z",
   "tool": {
     "command": "extract",
     "name": "probe-verus",
-    "version": "6.10.2"
+    "version": "6.11.0"
   }
 }

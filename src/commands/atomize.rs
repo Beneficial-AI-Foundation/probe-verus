@@ -201,7 +201,7 @@ fn validate_project(project_path: &Path) -> Result<(), String> {
 
 /// Get the SCIP JSON path, generating if necessary.
 fn get_scip_json(cache: &mut ScipCache, regenerate: bool) -> Result<PathBuf, String> {
-    if cache.has_cached_json() && !regenerate {
+    if cache.has_current_cached_json() && !regenerate {
         println!(
             "  ✓ Found existing SCIP JSON at {}",
             cache.json_path().display()

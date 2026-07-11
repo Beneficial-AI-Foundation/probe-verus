@@ -1,7 +1,7 @@
 # probe-verus Data Schemas
 
-Version: 6.10.3
-Date: 2026-07-02
+Version: 7.0.0
+Date: 2026-07-10
 
 This document specifies the concrete JSON `data` payloads produced by each
 probe-verus subcommand.  It complements the language-agnostic
@@ -489,6 +489,21 @@ are always written alongside it in `<project>/.verilib/probes/`.
     "is-external": false,
     "is-cfg-gated": false,
     "primary-spec": "",
+    "is-disabled": false
+  },
+  "probe:my-crate/1.0.0/module/external_fn()": {
+    "display-name": "external_fn",
+    "dependencies": [],
+    "code-module": "module",
+    "code-path": "src/module.rs",
+    "code-text": { "lines-start": 120, "lines-end": 130 },
+    "kind": "exec",
+    "language": "rust",
+    "is-public": true,
+    "is-public-api": true,
+    "has-body": true,
+    "is-external": true,
+    "is-cfg-gated": false,
     "is-disabled": true
   },
   "probe:my-crate/1.0.0/module/axiom_foo()": {
@@ -517,6 +532,7 @@ are always written alongside it in `<project>/.verilib/probes/`.
     "code-text": { "lines-start": 0, "lines-end": 0 },
     "kind": "exec",
     "language": "rust",
+    "is-disabled": false,
     "verification-status": "trusted",
     "trusted-reason": "assume-specification",
     "primary-spec": "ensures\n    result == expected"
@@ -535,9 +551,10 @@ optional fields are added:
 | `ensures-dependencies` | array of strings | no | Subset of `dependencies` called in `ensures` clauses (omitted when empty) |
 | `body-dependencies` | array of strings | no | Subset of `dependencies` called in the function body (omitted when empty) |
 | `primary-spec` | string | no | Full spec text (requires + ensures concatenated). Empty string = analyzed, no spec. Absent = not analyzed. |
-| `is-disabled` | bool | no | `false` if the function has a spec; `true` otherwise. Always `false` when `trusted-reason` is present — a trust reason is a deliberate human act that puts the atom in analysis scope, so trusted atoms are never disabled (KB P25). Absent for non-trusted external stubs or when `--skip-specify`. |
-| `verification-status` | string | no | `"transitively-verified"`, `"verified"`, `"failed"`, `"unverified"`, or `"trusted"`.  After enrichment (default, skippable via `--skip-enrich`): `"transitively-verified"` = all transitive deps verified/trusted; `"verified"` = locally verified only.  `"trusted"` is set by the merge step when a trust-base trigger applies; see Verification Status Mapping. |
+| `is-disabled` | bool | no | `true` = **out of verification scope** (KB P25): `#[verifier::external]`, cfg-inactive in the verification build, an external-crate stub, a bodiless declaration (a trait-method signature with no body — nothing to verify), or code outside the verified library target (`build.rs`, `tests/`, `examples/`, `benches/`); such atoms carry no `verification-status`. `false` = in scope: a specified function, a trusted axiom, or the spec-less backlog. `has-verification-status ⟹ ¬is-disabled` (KB P24). Absent when scope was not analyzed (e.g. `--skip-specify`). |
+| `verification-status` | string | no | `"transitively-verified"`, `"verified"`, `"failed"`, `"unverified"`, or `"trusted"`.  After enrichment (default, skippable via `--skip-enrich`): `"transitively-verified"` = all transitive deps verified/trusted; `"verified"` = locally verified only.  `"trusted"` is set by the merge step when a trust-base trigger applies.  Out-of-scope atoms (`is-disabled: true`) and the spec-less backlog carry no status.  See Verification Status Mapping. |
 | `trusted-reason` | string | no | Present only when `verification-status` is `"trusted"`.  Values: `"admit"` (function uses `admit()`), `"external-body"` (has `#[verifier::external_body]`), or `"assume-specification"` (matched by an `assume_specification` declaration).  Enables automated trust-base classification without consulting specs.json. (v6.5.1) |
+| `cfg` | string | no | The combined item-gating `#[cfg(...)]` predicate governing the atom (own + enclosing impl/mod, `all(...)`-joined), if any. Omitted when the atom has no `#[cfg]` gate. (v7.0.0) |
 | `spec-labels` | array of strings | no | Taxonomy classification labels from `--taxonomy-config` (omitted when empty or when `--skip-specify`) |
 
 ### Dependency Categorization
@@ -557,6 +574,12 @@ the atomize step).  The three subcategory fields partition this union:
 | `dependencies` | `dependencies` | Union of all |
 
 ### Verification Status Mapping
+
+This mapping applies **only to spec-bearing functions** — those with a `requires`
+and/or `ensures` contract (KB P16). Verification is *against a spec*, so a spec-less
+in-scope function receives **no** `verification-status` (it is the backlog, `is-disabled:
+false`); Verus's body-safety `success` against a defaulted `ensures true` is vacuous,
+not a `verified` claim (KB P24).
 
 | Verus status | Unified value | Meaning |
 |-------------|---------------|---------|
@@ -586,13 +609,39 @@ Functions with only `assume()` (no `admit()`, not `external_body`, and not a
 matched `assume_specification` stub) remain `"unverified"` when proofs report
 `sorries`.
 
+**Out-of-scope (`is-disabled: true`, KB P25):** independently of the trusted
+overrides, an atom is marked `is-disabled: true` with **no** `verification-status`
+when it is not compiled and checked by Verus in this build. Five mechanisms:
+
+1. **`#[verifier::external]`** — the function is explicitly excluded from Verus
+   (`is_external` in specify output; e.g. `Debug::fmt`, serde impls).
+2. **cfg-inactive** — the atom's `#[cfg(...)]` predicate is false under the
+   verification build's active configuration (resolved default features +
+   `verus_keep_ghost`), so it is not compiled and cannot be verified (KB P26).
+   Applied as a post-merge pass; predicates the tool cannot resolve leave the atom
+   untouched (never hides a real backlog item). Examples: `#[cfg(test)]` code,
+   inactive features (`serde`/`group`/`rand_core`), `#[cfg(not(verus_keep_ghost))]`
+   fallbacks.
+3. **external-crate stub** — an atom with empty `code-path`, referenced from
+   another crate and not part of this crate's source.
+4. **bodiless declaration** — a trait-method signature with no body (`has-body:
+   false`): there is nothing to verify (the implementations carry the proof).
+5. **non-library target** — code outside the verified `src/` tree: `build.rs`
+   (build script), `tests/` (integration tests), `examples/`, `benches/`. Verus
+   verifies the library target, not these.
+
+Out-of-scope is **TCB-neutral**: unlike `"trusted"`, it does not enlarge the trust
+base, and it is distinct from the in-scope spec-less **backlog** (`is-disabled:
+false`, no status). A trust reason takes precedence: an atom that is both
+`#[verifier::external]` and trusted (e.g. also `#[verifier::external_body]`) is
+reported `"trusted"`, `is-disabled: false`.
+
 ### Notes
 
-- External stubs (empty `code-path`) are not ordinary specify entries, so they
-  usually lack `primary-spec`, `is-disabled`, and `spec-labels`, and proofs
-  often omit them.  Merge may still set `verification-status` to `"trusted"`
-  when an `assume_specification` declaration matches the stub (v6.5.0); in
-  that case the stub also gets the declared spec text as `primary-spec` and
+- External stubs (empty `code-path`) are out of scope: `is-disabled: true`, no
+  `verification-status`. Merge may still set `verification-status: "trusted"` when
+  an `assume_specification` declaration matches the stub (v6.5.0); in that case the
+  stub is in scope — it gets the declared spec text as `primary-spec` and
   `is-disabled: false`.
 - When a pipeline step is skipped (`--skip-specify` or `--skip-verify`),
   the corresponding fields are absent from **all** entries.
@@ -643,6 +692,7 @@ atoms file or merge failure).
   "trust-base": {
     "verified": 38,
     "trusted": 3,
+    "out-of-scope": 2,
     "unverified": 1,
     "failed": 0,
     "absent": 0
@@ -666,11 +716,12 @@ Counts of atoms by final `verification-status` after merge overrides.  Keys:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `verified` | integer | Atoms with `"verified"` |
+| `verified` | integer | Atoms with `"verified"` or `"transitively-verified"` |
 | `trusted` | integer | Atoms with `"trusted"` |
+| `out-of-scope` | integer | Atoms with `is-disabled: true` (`#[verifier::external]`, cfg-inactive, external-crate stub, bodiless declaration, or non-library target). Omitted when zero (v7.0.0) |
 | `unverified` | integer | Atoms with `"unverified"` |
 | `failed` | integer | Atoms with `"failed"` |
-| `absent` | integer | Atoms with no `verification-status` (e.g. stubs skipped by verify, or `--skip-verify`) |
+| `absent` | integer | In-scope atoms with no `verification-status` (the spec-less backlog, or when `--skip-verify`) |
 
 ---
 

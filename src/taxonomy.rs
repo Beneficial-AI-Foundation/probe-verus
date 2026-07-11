@@ -480,6 +480,7 @@ mod tests {
             kind,
             kind_display: None,
             visibility: None,
+            cfg_predicate: None,
             context: Some("standalone".to_string()),
             specified: !ensures_calls.is_empty(),
             has_requires: false,

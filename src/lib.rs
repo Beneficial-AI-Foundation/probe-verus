@@ -341,10 +341,13 @@ pub struct UnifiedAtom {
     #[serde(rename = "primary-spec", skip_serializing_if = "Option::is_none")]
     pub primary_spec: Option<String>,
     /// `true` = out of verification scope (KB P25): `#[verifier::external]`,
-    /// cfg-inactive in the verification build, or an external-crate stub. Such atoms
-    /// carry no `verification-status`. `false` = in scope: a specified function, a
-    /// trusted axiom, or the spec-less backlog. Absent = scope not analyzed (specs
-    /// not loaded). `has-verification-status ⟹ ¬is-disabled` (KB P24).
+    /// cfg-inactive in the verification build, an external-crate stub, a bodiless
+    /// declaration (a trait-method signature with no body), or a non-library target
+    /// (`build.rs`, `tests/`, `examples/`, `benches/`). Such atoms carry no
+    /// `verification-status`. `false` = in scope: a specified function, a trusted
+    /// axiom, an atom carrying any `verification-status`, or the spec-less backlog.
+    /// Absent = scope not analyzed (neither specs nor proofs loaded for this atom).
+    /// `has-verification-status ⟹ ¬is-disabled` (KB P24).
     #[serde(rename = "is-disabled", skip_serializing_if = "Option::is_none")]
     pub is_disabled: Option<bool>,
     /// Verification outcome for an in-scope atom. Values: `"verified"`,

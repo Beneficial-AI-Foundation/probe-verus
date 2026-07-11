@@ -1,7 +1,7 @@
 # probe-verus Data Schemas
 
 Version: 7.0.0
-Date: 2026-07-02
+Date: 2026-07-10
 
 This document specifies the concrete JSON `data` payloads produced by each
 probe-verus subcommand.  It complements the language-agnostic
@@ -554,7 +554,7 @@ optional fields are added:
 | `is-disabled` | bool | no | `true` = **out of verification scope** (KB P25): `#[verifier::external]`, cfg-inactive in the verification build, an external-crate stub, a bodiless declaration (a trait-method signature with no body — nothing to verify), or code outside the verified library target (`build.rs`, `tests/`, `examples/`, `benches/`); such atoms carry no `verification-status`. `false` = in scope: a specified function, a trusted axiom, or the spec-less backlog. `has-verification-status ⟹ ¬is-disabled` (KB P24). Absent when scope was not analyzed (e.g. `--skip-specify`). |
 | `verification-status` | string | no | `"transitively-verified"`, `"verified"`, `"failed"`, `"unverified"`, or `"trusted"`.  After enrichment (default, skippable via `--skip-enrich`): `"transitively-verified"` = all transitive deps verified/trusted; `"verified"` = locally verified only.  `"trusted"` is set by the merge step when a trust-base trigger applies.  Out-of-scope atoms (`is-disabled: true`) and the spec-less backlog carry no status.  See Verification Status Mapping. |
 | `trusted-reason` | string | no | Present only when `verification-status` is `"trusted"`.  Values: `"admit"` (function uses `admit()`), `"external-body"` (has `#[verifier::external_body]`), or `"assume-specification"` (matched by an `assume_specification` declaration).  Enables automated trust-base classification without consulting specs.json. (v6.5.1) |
-| `cfg` | string | no | The combined item-gating `#[cfg(...)]` predicate governing the atom (own + enclosing impl/mod, `all(...)`-joined), if any. Omitted when the atom has no `#[cfg]` gate. (v6.11.0) |
+| `cfg` | string | no | The combined item-gating `#[cfg(...)]` predicate governing the atom (own + enclosing impl/mod, `all(...)`-joined), if any. Omitted when the atom has no `#[cfg]` gate. (v7.0.0) |
 | `spec-labels` | array of strings | no | Taxonomy classification labels from `--taxonomy-config` (omitted when empty or when `--skip-specify`) |
 
 ### Dependency Categorization

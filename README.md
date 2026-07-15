@@ -204,8 +204,6 @@ See [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md) for detailed technical document
 - Disambiguation of trait implementations
 - Verification output parsing and function categorization
 
-See [docs/VERIFICATION_ARCHITECTURE.md](docs/VERIFICATION_ARCHITECTURE.md) for the verification analysis architecture.
-
 ## License
 
 MIT

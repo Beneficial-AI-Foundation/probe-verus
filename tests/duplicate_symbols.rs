@@ -12,8 +12,6 @@ fn get_test_data() -> (
 
 /// Test that multiple trait implementations with the same SCIP symbol
 /// (e.g., `impl Mul<A> for B` and `impl Mul<B> for A`) are both captured.
-///
-/// See docs/DUPLICATE_SYMBOL_BUG.md for details on this bug.
 #[test]
 fn test_duplicate_mul_implementations() {
     let scip_data = parse_scip_json("data/curve_top.json").expect("Failed to parse SCIP JSON");

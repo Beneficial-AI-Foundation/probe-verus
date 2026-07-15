@@ -36,4 +36,20 @@ data/
 docker/
 .github/workflows/docker-publish.yml
 
+# Local-only files (kept on disk, not tracked)
+.dockerignore
+out.txt
+INSTALL_mine.md
+PROJECT_SUMMARY.md
+SCIP_RANGE_BUG_NOTE.md
+docs/DEPENDENCY_DISAMBIGUATION.md
+docs/GITHUB_ISSUE_COMMENT_FROM_TRAIT.md
+docs/MISSING_SERIALIZE_FUNCTIONS.md
+docs/PUBLIC_API_ALIGNMENT.md
+docs/RUST_ANALYZER_FROM_TRAIT_SYMBOLS.md
+docs/SPEC_TAXONOMY_DESIGN.md
+docs/VERUS_ANALYZER_ISSUE_DRAFT.md
+docs/verus-analyzer_symbol_names.md
+examples/curve25519-dalek-summary_2.md
+examples/gen_curve_atoms.rs
 

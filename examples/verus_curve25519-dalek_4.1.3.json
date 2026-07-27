@@ -52856,7 +52856,7 @@
     }
   },
   "schema": "probe-verus/extract",
-  "schema-version": "2.0",
+  "schema-version": "3.0",
   "source": {
     "commit": "9bb7fd09c3b9dbd52ff2dca9a75e618c751b79a7",
     "language": "rust",

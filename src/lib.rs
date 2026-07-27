@@ -2824,7 +2824,7 @@ mod tests {
 
         let enveloped = serde_json::json!({
             "schema": "probe-verus/atoms",
-            "schema-version": "2.0",
+            "schema-version": "3.0",
             "tool": { "name": "probe-verus", "version": "2.0.0", "command": "atomize" },
             "source": {
                 "repo": "", "commit": "", "language": "rust",

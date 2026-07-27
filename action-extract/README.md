@@ -116,7 +116,7 @@ The primary output is a dictionary keyed by code-name, where each entry is a `Un
 ```json
 {
   "schema": "probe-verus/extract",
-  "schema-version": "2.0",
+  "schema-version": "3.0",
   "tool": { "name": "probe-verus", "version": "5.2.0", "command": "extract" },
   "source": { "repo": "...", "commit": "...", "language": "rust", "package": "...", "package-version": "..." },
   "timestamp": "2026-03-22T12:00:00Z",

@@ -773,7 +773,7 @@ Merged output uses a different envelope structure: `source` is replaced by
 ```json
 {
   "schema": "probe/merged-atoms",
-  "schema-version": "2.0",
+  "schema-version": "3.0",
   "tool": { "name": "probe", "version": "2.0.0", "command": "merge-atoms" },
   "inputs": [
     {

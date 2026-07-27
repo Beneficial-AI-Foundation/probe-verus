@@ -1065,7 +1065,7 @@ mod tests {
     fn atoms_json() -> serde_json::Value {
         serde_json::json!({
             "schema": "probe-verus/atoms",
-            "schema-version": "2.0",
+            "schema-version": "3.0",
             "tool": {"name": "probe-verus", "version": "3.0.0", "command": "atomize"},
             "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
             "timestamp": "2026-03-10T00:00:00Z",
@@ -1104,7 +1104,7 @@ mod tests {
     fn specs_json() -> serde_json::Value {
         serde_json::json!({
             "schema": "probe-verus/specs",
-            "schema-version": "2.0",
+            "schema-version": "3.0",
             "tool": {"name": "probe-verus", "version": "3.0.0", "command": "specify"},
             "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
             "timestamp": "2026-03-10T00:00:00Z",
@@ -1143,7 +1143,7 @@ mod tests {
     fn proofs_json() -> serde_json::Value {
         serde_json::json!({
             "schema": "probe-verus/proofs",
-            "schema-version": "2.0",
+            "schema-version": "3.0",
             "tool": {"name": "probe-verus", "version": "3.0.0", "command": "run-verus"},
             "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
             "timestamp": "2026-03-10T00:00:00Z",
@@ -1383,7 +1383,7 @@ mod tests {
 
         let specs_with_admit = serde_json::json!({
             "schema": "probe-verus/specs",
-            "schema-version": "2.0",
+            "schema-version": "3.0",
             "tool": {"name": "probe-verus", "version": "6.4.0", "command": "specify"},
             "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
             "timestamp": "2026-04-07T00:00:00Z",
@@ -1413,7 +1413,7 @@ mod tests {
 
         let proofs_with_sorries = serde_json::json!({
             "schema": "probe-verus/proofs",
-            "schema-version": "2.0",
+            "schema-version": "3.0",
             "tool": {"name": "probe-verus", "version": "6.4.0", "command": "run-verus"},
             "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
             "timestamp": "2026-04-07T00:00:00Z",
@@ -1470,7 +1470,7 @@ mod tests {
         // has_trusted_assumption=true but contains_admit=false → assume() only
         let specs_assume_only = serde_json::json!({
             "schema": "probe-verus/specs",
-            "schema-version": "2.0",
+            "schema-version": "3.0",
             "tool": {"name": "probe-verus", "version": "6.4.0", "command": "specify"},
             "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
             "timestamp": "2026-04-07T00:00:00Z",
@@ -1492,7 +1492,7 @@ mod tests {
 
         let proofs_sorries = serde_json::json!({
             "schema": "probe-verus/proofs",
-            "schema-version": "2.0",
+            "schema-version": "3.0",
             "tool": {"name": "probe-verus", "version": "6.4.0", "command": "run-verus"},
             "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
             "timestamp": "2026-04-07T00:00:00Z",
@@ -1526,7 +1526,7 @@ mod tests {
 
         let specs_with_admit = serde_json::json!({
             "schema": "probe-verus/specs",
-            "schema-version": "2.0",
+            "schema-version": "3.0",
             "tool": {"name": "probe-verus", "version": "6.4.0", "command": "specify"},
             "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
             "timestamp": "2026-04-07T00:00:00Z",
@@ -1544,7 +1544,7 @@ mod tests {
         // Even if proofs says "success", contains_admit overrides to "trusted"
         let proofs_success = serde_json::json!({
             "schema": "probe-verus/proofs",
-            "schema-version": "2.0",
+            "schema-version": "3.0",
             "tool": {"name": "probe-verus", "version": "6.4.0", "command": "run-verus"},
             "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
             "timestamp": "2026-04-07T00:00:00Z",
@@ -1578,7 +1578,7 @@ mod tests {
 
         let specs_with_admit = serde_json::json!({
             "schema": "probe-verus/specs",
-            "schema-version": "2.0",
+            "schema-version": "3.0",
             "tool": {"name": "probe-verus", "version": "6.4.0", "command": "specify"},
             "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
             "timestamp": "2026-04-07T00:00:00Z",
@@ -1624,7 +1624,7 @@ mod tests {
 
         let specs_eb = serde_json::json!({
             "schema": "probe-verus/specs",
-            "schema-version": "2.0",
+            "schema-version": "3.0",
             "tool": {"name": "probe-verus", "version": "6.5.0", "command": "specify"},
             "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
             "timestamp": "2026-04-07T00:00:00Z",
@@ -1645,7 +1645,7 @@ mod tests {
 
         let proofs_success = serde_json::json!({
             "schema": "probe-verus/proofs",
-            "schema-version": "2.0",
+            "schema-version": "3.0",
             "tool": {"name": "probe-verus", "version": "6.5.0", "command": "run-verus"},
             "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
             "timestamp": "2026-04-07T00:00:00Z",
@@ -1685,7 +1685,7 @@ mod tests {
 
         let specs_eb = serde_json::json!({
             "schema": "probe-verus/specs",
-            "schema-version": "2.0",
+            "schema-version": "3.0",
             "tool": {"name": "probe-verus", "version": "6.5.0", "command": "specify"},
             "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
             "timestamp": "2026-04-07T00:00:00Z",
@@ -1731,7 +1731,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let atoms_path = write_json(&dir, "atoms.json", &atoms_json());
         let specs = serde_json::json!({
-            "schema": "probe-verus/specs", "schema-version": "2.0",
+            "schema": "probe-verus/specs", "schema-version": "3.0",
             "tool": {"name": "probe-verus", "version": "6.5.0", "command": "specify"},
             "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
             "timestamp": "2026-04-07T00:00:00Z",
@@ -1790,7 +1790,7 @@ mod tests {
         // verify, so it is out of scope (untracked: true, no status), not backlog.
         let dir = TempDir::new().unwrap();
         let atoms = serde_json::json!({
-            "schema": "probe-verus/atoms", "schema-version": "2.0",
+            "schema": "probe-verus/atoms", "schema-version": "3.0",
             "tool": {"name": "probe-verus", "version": "7.0.0", "command": "atomize"},
             "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
             "timestamp": "2026-07-11T00:00:00Z",
@@ -1809,7 +1809,7 @@ mod tests {
         let atoms_path = write_json(&dir, "atoms.json", &atoms);
         // Provide specs so specs.is_some(); the atom has no matching entry.
         let specs = serde_json::json!({
-            "schema": "probe-verus/specs", "schema-version": "2.0",
+            "schema": "probe-verus/specs", "schema-version": "3.0",
             "tool": {"name": "probe-verus", "version": "7.0.0", "command": "specify"},
             "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
             "timestamp": "2026-07-11T00:00:00Z",
@@ -1836,7 +1836,7 @@ mod tests {
         // verified library target, so they are out of scope (KB P25).
         let dir = TempDir::new().unwrap();
         let atoms = serde_json::json!({
-            "schema": "probe-verus/atoms", "schema-version": "2.0",
+            "schema": "probe-verus/atoms", "schema-version": "3.0",
             "tool": {"name": "probe-verus", "version": "7.0.0", "command": "atomize"},
             "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
             "timestamp": "2026-07-11T00:00:00Z",
@@ -1854,7 +1854,7 @@ mod tests {
         });
         let atoms_path = write_json(&dir, "atoms.json", &atoms);
         let specs = serde_json::json!({
-            "schema": "probe-verus/specs", "schema-version": "2.0",
+            "schema": "probe-verus/specs", "schema-version": "3.0",
             "tool": {"name": "probe-verus", "version": "7.0.0", "command": "specify"},
             "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
             "timestamp": "2026-07-11T00:00:00Z",
@@ -1879,7 +1879,7 @@ mod tests {
         // `src/` module merely named `tests` stays in scope.
         let dir = TempDir::new().unwrap();
         let atoms = serde_json::json!({
-            "schema": "probe-verus/atoms", "schema-version": "2.0",
+            "schema": "probe-verus/atoms", "schema-version": "3.0",
             "tool": {"name": "probe-verus", "version": "7.0.0", "command": "atomize"},
             "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
             "timestamp": "2026-07-11T00:00:00Z",
@@ -1902,7 +1902,7 @@ mod tests {
         });
         let atoms_path = write_json(&dir, "atoms.json", &atoms);
         let specs = serde_json::json!({
-            "schema": "probe-verus/specs", "schema-version": "2.0",
+            "schema": "probe-verus/specs", "schema-version": "3.0",
             "tool": {"name": "probe-verus", "version": "7.0.0", "command": "specify"},
             "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
             "timestamp": "2026-07-11T00:00:00Z", "data": {}
@@ -1929,7 +1929,7 @@ mod tests {
 
         let specs_ext = serde_json::json!({
             "schema": "probe-verus/specs",
-            "schema-version": "2.0",
+            "schema-version": "3.0",
             "tool": {"name": "probe-verus", "version": "6.5.0", "command": "specify"},
             "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
             "timestamp": "2026-04-07T00:00:00Z",
@@ -1972,7 +1972,7 @@ mod tests {
         let atoms_path = write_json(&dir, "atoms.json", &atoms_json());
 
         let specs_specless = serde_json::json!({
-            "schema": "probe-verus/specs", "schema-version": "2.0",
+            "schema": "probe-verus/specs", "schema-version": "3.0",
             "tool": {"name": "probe-verus", "version": "6.5.0", "command": "specify"},
             "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
             "timestamp": "2026-04-07T00:00:00Z",
@@ -1985,7 +1985,7 @@ mod tests {
         });
         let specs_path = write_json(&dir, "specs.json", &specs_specless);
         let proofs_success = serde_json::json!({
-            "schema": "probe-verus/proofs", "schema-version": "2.0",
+            "schema": "probe-verus/proofs", "schema-version": "3.0",
             "tool": {"name": "probe-verus", "version": "6.5.0", "command": "run-verus"},
             "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
             "timestamp": "2026-04-07T00:00:00Z",
@@ -2018,7 +2018,7 @@ mod tests {
 
         let specs_both = serde_json::json!({
             "schema": "probe-verus/specs",
-            "schema-version": "2.0",
+            "schema-version": "3.0",
             "tool": {"name": "probe-verus", "version": "6.5.0", "command": "specify"},
             "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
             "timestamp": "2026-04-07T00:00:00Z",
@@ -2052,7 +2052,7 @@ mod tests {
 
         let specs_normal = serde_json::json!({
             "schema": "probe-verus/specs",
-            "schema-version": "2.0",
+            "schema-version": "3.0",
             "tool": {"name": "probe-verus", "version": "6.5.0", "command": "specify"},
             "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
             "timestamp": "2026-04-07T00:00:00Z",
@@ -2074,7 +2074,7 @@ mod tests {
 
         let proofs = serde_json::json!({
             "schema": "probe-verus/proofs",
-            "schema-version": "2.0",
+            "schema-version": "3.0",
             "tool": {"name": "probe-verus", "version": "6.5.0", "command": "run-verus"},
             "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
             "timestamp": "2026-04-07T00:00:00Z",
@@ -2108,7 +2108,7 @@ mod tests {
     fn test_assume_spec_matching_single_match() {
         let atoms_with_external = serde_json::json!({
             "schema": "probe-verus/atoms",
-            "schema-version": "2.0",
+            "schema-version": "3.0",
             "tool": {"name": "probe-verus", "version": "6.5.0", "command": "atomize"},
             "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
             "timestamp": "2026-04-07T00:00:00Z",
@@ -2149,7 +2149,7 @@ mod tests {
     fn test_assume_spec_matching_no_match() {
         let atoms_with_external = serde_json::json!({
             "schema": "probe-verus/atoms",
-            "schema-version": "2.0",
+            "schema-version": "3.0",
             "tool": {"name": "probe-verus", "version": "6.5.0", "command": "atomize"},
             "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
             "timestamp": "2026-04-07T00:00:00Z",
@@ -2192,7 +2192,7 @@ mod tests {
 
         let atoms_with_external = serde_json::json!({
             "schema": "probe-verus/atoms",
-            "schema-version": "2.0",
+            "schema-version": "3.0",
             "tool": {"name": "probe-verus", "version": "6.5.0", "command": "atomize"},
             "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
             "timestamp": "2026-04-07T00:00:00Z",
@@ -2221,7 +2221,7 @@ mod tests {
 
         let specs_with_assume = serde_json::json!({
             "schema": "probe-verus/specs",
-            "schema-version": "2.0",
+            "schema-version": "3.0",
             "tool": {"name": "probe-verus", "version": "6.5.0", "command": "specify"},
             "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
             "timestamp": "2026-04-07T00:00:00Z",
@@ -2278,7 +2278,7 @@ mod tests {
     fn test_dep_categorization_with_locations() {
         let atoms_with_locs = serde_json::json!({
             "schema": "probe-verus/atoms",
-            "schema-version": "2.0",
+            "schema-version": "3.0",
             "tool": {"name": "probe-verus", "version": "5.0.0", "command": "atomize"},
             "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
             "timestamp": "2026-03-10T00:00:00Z",
@@ -2306,7 +2306,7 @@ mod tests {
 
         let specs_with_pre = serde_json::json!({
             "schema": "probe-verus/specs",
-            "schema-version": "2.0",
+            "schema-version": "3.0",
             "tool": {"name": "probe-verus", "version": "5.0.0", "command": "specify"},
             "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
             "timestamp": "2026-03-10T00:00:00Z",
@@ -2377,7 +2377,7 @@ mod tests {
 
         let atoms = serde_json::json!({
             "schema": "probe-verus/atoms",
-            "schema-version": "2.0",
+            "schema-version": "3.0",
             "tool": {"name": "probe-verus", "version": "6.6.0", "command": "atomize"},
             "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
             "timestamp": "2026-04-14T00:00:00Z",
@@ -2415,7 +2415,7 @@ mod tests {
 
         let specs = serde_json::json!({
             "schema": "probe-verus/specs",
-            "schema-version": "2.0",
+            "schema-version": "3.0",
             "tool": {"name": "probe-verus", "version": "6.6.0", "command": "specify"},
             "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
             "timestamp": "2026-04-14T00:00:00Z",

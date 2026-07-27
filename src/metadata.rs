@@ -11,6 +11,10 @@ use std::process::Command;
 const TOOL_NAME: &str = "probe-verus";
 const TOOL_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Schema version emitted in every envelope. Bumped to the unified ecosystem
+/// major "3.0" when the breaking `is-disabled` → `untracked` field rename landed.
+pub const SCHEMA_VERSION: &str = "3.0";
+
 // =============================================================================
 // Envelope types
 // =============================================================================
@@ -166,7 +170,7 @@ pub fn wrap_in_envelope<T: Serialize>(
 ) -> Envelope<T> {
     Envelope {
         schema: schema.to_string(),
-        schema_version: "2.0".to_string(),
+        schema_version: SCHEMA_VERSION.to_string(),
         tool: ToolInfo {
             name: TOOL_NAME.to_string(),
             version: TOOL_VERSION.to_string(),
@@ -197,7 +201,7 @@ pub fn wrap_merged_envelope<T: Serialize>(
 ) -> MergedEnvelope<T> {
     MergedEnvelope {
         schema: "probe/merged-atoms".to_string(),
-        schema_version: "2.0".to_string(),
+        schema_version: SCHEMA_VERSION.to_string(),
         tool: ToolInfo {
             name: "probe".to_string(),
             version: TOOL_VERSION.to_string(),
@@ -592,7 +596,7 @@ mod tests {
     fn test_unwrap_envelope_with_envelope() {
         let json = serde_json::json!({
             "schema": "probe-verus/atoms",
-            "schema-version": "2.0",
+            "schema-version": "3.0",
             "tool": { "name": "probe-verus", "version": "2.0.0", "command": "atomize" },
             "source": {
                 "repo": "https://github.com/org/proj",
@@ -642,7 +646,7 @@ mod tests {
     fn test_unwrap_envelope_foreign_schema() {
         let json = serde_json::json!({
             "schema": "probe-lean/atoms",
-            "schema-version": "2.0",
+            "schema-version": "3.0",
             "data": { "lean:Foo.bar": {} }
         });
 
@@ -778,7 +782,7 @@ mod tests {
     fn test_extract_envelope_inputs_from_envelope() {
         let json = serde_json::json!({
             "schema": "probe-verus/atoms",
-            "schema-version": "2.0",
+            "schema-version": "3.0",
             "tool": { "name": "probe-verus", "version": "2.0.0", "command": "atomize" },
             "source": {
                 "repo": "https://github.com/org/proj",
@@ -814,7 +818,7 @@ mod tests {
     fn test_extract_envelope_inputs_from_merged_envelope() {
         let json = serde_json::json!({
             "schema": "probe/merged-atoms",
-            "schema-version": "2.0",
+            "schema-version": "3.0",
             "tool": { "name": "probe", "version": "2.0.0", "command": "merge-atoms" },
             "inputs": [
                 {
@@ -864,7 +868,7 @@ mod tests {
 
         let envelope = wrap_merged_envelope(data, inputs, "2026-03-06T12:00:00Z");
         assert_eq!(envelope.schema, "probe/merged-atoms");
-        assert_eq!(envelope.schema_version, "2.0");
+        assert_eq!(envelope.schema_version, "3.0");
         assert_eq!(envelope.tool.name, "probe");
         assert_eq!(envelope.tool.version, env!("CARGO_PKG_VERSION"));
         assert_eq!(envelope.tool.command, "merge-atoms");

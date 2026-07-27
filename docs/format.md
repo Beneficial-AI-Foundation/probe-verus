@@ -14,7 +14,7 @@ All JSON outputs follow the [Schema 2.0 envelope](https://github.com/Beneficial-
 ```json
 {
   "schema": "probe-verus/atoms",
-  "schema-version": "2.0",
+  "schema-version": "3.0",
   "tool": {
     "name": "probe-verus",
     "version": "5.2.0",
@@ -180,7 +180,7 @@ external crates), it creates lightweight stub entries. Stubs can be identified b
 ```json
 {
   "schema": "probe-verus/atoms",
-  "schema-version": "2.0",
+  "schema-version": "3.0",
   "tool": {
     "name": "probe-verus",
     "version": "5.2.0",

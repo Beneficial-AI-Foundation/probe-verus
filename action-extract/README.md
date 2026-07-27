@@ -130,7 +130,7 @@ The primary output is a dictionary keyed by code-name, where each entry is a `Un
       "kind": "exec",
       "language": "verus",
       "primary-spec": "requires\n    x > 0\nensures\n    result > x",
-      "is-disabled": false,
+      "untracked": false,
       "verification-status": "verified",
       "spec-labels": ["label-A"]
     }

@@ -347,12 +347,12 @@ pub struct UnifiedAtom {
     /// `verification-status`. `false` = in scope: a specified function, a trusted
     /// axiom, an atom carrying any `verification-status`, or the spec-less backlog.
     /// Absent = scope not analyzed (neither specs nor proofs loaded for this atom).
-    /// `has-verification-status ⟹ ¬is-disabled` (KB P24).
-    #[serde(rename = "is-disabled", skip_serializing_if = "Option::is_none")]
-    pub is_disabled: Option<bool>,
+    /// `has-verification-status ⟹ ¬untracked` (KB P24).
+    #[serde(rename = "untracked", skip_serializing_if = "Option::is_none")]
+    pub untracked: Option<bool>,
     /// Verification outcome for an in-scope atom. Values: `"verified"`,
     /// `"transitively-verified"`, `"failed"`, `"unverified"`, or `"trusted"` (in the
-    /// trust base). Absent for the backlog and for out-of-scope atoms (`is-disabled: true`).
+    /// trust base). Absent for the backlog and for out-of-scope atoms (`untracked: true`).
     #[serde(
         rename = "verification-status",
         skip_serializing_if = "Option::is_none"

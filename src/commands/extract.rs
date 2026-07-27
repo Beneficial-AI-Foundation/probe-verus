@@ -737,14 +737,14 @@ pub fn merge_into_unified(
 
         let cfg_predicate = specs_entry.and_then(|e| e.cfg_predicate.clone());
 
-        // Scope (KB P24/P25): `is-disabled: true` ⟺ out of verification scope (the
+        // Scope (KB P24/P25): `untracked: true` ⟺ out of verification scope (the
         // `out_of_scope` cases above; cfg-inactive is added later in `apply_cfg_scope`).
         // Trusted atoms (`#[verifier::external_body]` / `admit()` / `assume_specification`),
         // any atom carrying a `verification-status` (P24: has-status ⟹ in scope), and
         // every compiled in-scope function — the spec-less backlog *and* specified
-        // functions alike — are `is-disabled: false`. `None` means scope was not
+        // functions alike — are `untracked: false`. `None` means scope was not
         // analyzed (neither specs nor proofs for this atom).
-        let is_disabled = if trusted_reason.is_some() {
+        let untracked = if trusted_reason.is_some() {
             Some(false)
         } else if out_of_scope {
             Some(true)
@@ -773,7 +773,7 @@ pub fn merge_into_unified(
                 ensures_dependencies: ensures_deps,
                 body_dependencies: body_deps,
                 primary_spec: spec_text,
-                is_disabled,
+                untracked,
                 verification_status,
                 trusted_reason,
                 cfg_predicate,
@@ -786,7 +786,7 @@ pub fn merge_into_unified(
 }
 
 /// Apply KB P25/P26: classify atoms whose `#[cfg(...)]` predicate is inactive in
-/// the verification build as out of scope (`is-disabled: true`, no
+/// the verification build as out of scope (`untracked: true`, no
 /// `verification-status`).
 ///
 /// cfg-inactivity is a structural out-of-scope property: a function the
@@ -794,7 +794,7 @@ pub fn merge_into_unified(
 /// specs, and independent of whether `run-verus` was executed. So this pass keys
 /// on the *absence of a terminal `verification-status`* — an atom that already
 /// carries one (verified/failed/trusted) is left untouched. Any other atom whose
-/// cfg predicate is inactive is marked `is-disabled: true`. Evaluation is
+/// cfg predicate is inactive is marked `untracked: true`. Evaluation is
 /// conservative — a predicate the tool cannot resolve leaves the atom as-is
 /// (never hides backlog).
 /// Build the verification-build cfg configuration for KB P26: the package's
@@ -823,7 +823,7 @@ fn apply_cfg_scope(unified: &mut BTreeMap<String, UnifiedAtom>, cfg: &crate::cfg
             continue;
         };
         if cfg.is_inactive(pred) {
-            atom.is_disabled = Some(true);
+            atom.untracked = Some(true);
         }
     }
 }
@@ -879,8 +879,8 @@ fn compute_trust_base_summary(unified: &BTreeMap<String, UnifiedAtom>) -> TrustB
 
     for atom in unified.values() {
         // Out-of-scope atoms (KB P25) carry no `verification-status`, so count them
-        // by `is-disabled` before matching on status.
-        if atom.is_disabled == Some(true) {
+        // by `untracked` before matching on status.
+        if atom.untracked == Some(true) {
             out_of_scope += 1;
             continue;
         }
@@ -1183,16 +1183,12 @@ mod tests {
             assert!(entry.primary_spec.is_none());
             assert!(entry.spec_labels.is_empty());
         }
-        // Real atoms without specs/proofs: scope not analyzed → is-disabled absent.
-        assert!(result["probe:test/0.1.0/module/foo()"]
-            .is_disabled
-            .is_none());
-        assert!(result["probe:test/0.1.0/module/bar()"]
-            .is_disabled
-            .is_none());
+        // Real atoms without specs/proofs: scope not analyzed → untracked absent.
+        assert!(result["probe:test/0.1.0/module/foo()"].untracked.is_none());
+        assert!(result["probe:test/0.1.0/module/bar()"].untracked.is_none());
         // External-crate stub (empty code-path) is out of scope regardless (KB P25).
         assert_eq!(
-            result["probe:external/1.0.0/lib/ext()"].is_disabled,
+            result["probe:external/1.0.0/lib/ext()"].untracked,
             Some(true)
         );
         assert_eq!(
@@ -1216,19 +1212,19 @@ mod tests {
             foo.primary_spec.as_deref(),
             Some("requires\n    x > 0\nensures\n    result > x")
         );
-        assert_eq!(foo.is_disabled, Some(false));
+        assert_eq!(foo.untracked, Some(false));
         assert_eq!(foo.spec_labels, vec!["label-A", "label-B"]);
 
         let bar = &result["probe:test/0.1.0/module/bar()"];
         assert_eq!(bar.primary_spec.as_deref(), Some(""));
-        // Spec-less, compiled, in-scope → the backlog: is-disabled false (KB P24).
-        assert_eq!(bar.is_disabled, Some(false));
+        // Spec-less, compiled, in-scope → the backlog: untracked false (KB P24).
+        assert_eq!(bar.untracked, Some(false));
         assert!(bar.spec_labels.is_empty());
 
         // External-crate stub has no spec match and is out of scope (KB P25).
         let ext = &result["probe:external/1.0.0/lib/ext()"];
         assert!(ext.primary_spec.is_none());
-        assert_eq!(ext.is_disabled, Some(true));
+        assert_eq!(ext.untracked, Some(true));
         assert!(ext.spec_labels.is_empty());
 
         // No proofs -> no verification-status
@@ -1265,18 +1261,18 @@ mod tests {
             assert!(entry.primary_spec.is_none());
             assert!(entry.spec_labels.is_empty());
         }
-        // A proof-derived status implies in scope (KB P24): is-disabled false.
+        // A proof-derived status implies in scope (KB P24): untracked false.
         assert_eq!(
-            result["probe:test/0.1.0/module/foo()"].is_disabled,
+            result["probe:test/0.1.0/module/foo()"].untracked,
             Some(false)
         );
         assert_eq!(
-            result["probe:test/0.1.0/module/bar()"].is_disabled,
+            result["probe:test/0.1.0/module/bar()"].untracked,
             Some(false)
         );
         // External-crate stub is out of scope (KB P25).
         assert_eq!(
-            result["probe:external/1.0.0/lib/ext()"].is_disabled,
+            result["probe:external/1.0.0/lib/ext()"].untracked,
             Some(true)
         );
     }
@@ -1295,7 +1291,7 @@ mod tests {
 
         let foo = &result["probe:test/0.1.0/module/foo()"];
         assert!(!foo.primary_spec.as_ref().unwrap().is_empty());
-        assert_eq!(foo.is_disabled, Some(false));
+        assert_eq!(foo.untracked, Some(false));
         assert_eq!(foo.verification_status.as_deref(), Some("verified"));
         assert_eq!(foo.atom.display_name, "foo");
         assert_eq!(foo.spec_labels, vec!["label-A", "label-B"]);
@@ -1304,14 +1300,14 @@ mod tests {
         assert_eq!(bar.primary_spec.as_deref(), Some(""));
         // Spec-less in-scope function: no spec to verify against, so no status even
         // though proofs report a result — it stays in the backlog (KB P16/P24).
-        assert_eq!(bar.is_disabled, Some(false));
+        assert_eq!(bar.untracked, Some(false));
         assert_eq!(bar.verification_status, None);
         assert!(bar.spec_labels.is_empty());
 
         let ext = &result["probe:external/1.0.0/lib/ext()"];
         assert!(ext.primary_spec.is_none());
         assert_eq!(
-            ext.is_disabled,
+            ext.untracked,
             Some(true),
             "external-crate stub is out of scope"
         );
@@ -1344,7 +1340,7 @@ mod tests {
         assert_eq!(foo_json["verification-status"], "verified");
         assert!(foo_json["primary-spec"].is_string());
         assert!(!foo_json["primary-spec"].as_str().unwrap().is_empty());
-        assert_eq!(foo_json["is-disabled"], false);
+        assert_eq!(foo_json["untracked"], false);
         assert_eq!(foo_json["kind"], "exec");
         assert_eq!(foo_json["language"], "rust");
         let labels = foo_json["spec-labels"]
@@ -1356,9 +1352,9 @@ mod tests {
 
         let bar_json = &json["probe:test/0.1.0/module/bar()"];
         assert_eq!(bar_json["primary-spec"], "");
-        // Spec-less in-scope backlog: is-disabled false, and no verification-status
+        // Spec-less in-scope backlog: untracked false, and no verification-status
         // even though proofs reported one (KB P16/P24).
-        assert_eq!(bar_json["is-disabled"], false);
+        assert_eq!(bar_json["untracked"], false);
         assert!(bar_json.get("verification-status").is_none());
         assert_eq!(bar_json["language"], "verus");
         assert!(
@@ -1374,8 +1370,8 @@ mod tests {
         assert!(ext_json.get("verification-status").is_none());
         assert!(ext_json.get("trusted-reason").is_none());
         assert!(ext_json.get("primary-spec").is_none());
-        // External-crate stub is out of scope (KB P25): is-disabled: true, no status.
-        assert_eq!(ext_json["is-disabled"], true);
+        // External-crate stub is out of scope (KB P25): untracked: true, no status.
+        assert_eq!(ext_json["untracked"], true);
         assert!(ext_json.get("spec-labels").is_none());
         assert_eq!(ext_json["language"], "rust");
     }
@@ -1720,7 +1716,7 @@ mod tests {
             Some("external-body"),
         );
         assert_eq!(
-            result["probe:test/0.1.0/module/foo()"].is_disabled,
+            result["probe:test/0.1.0/module/foo()"].untracked,
             Some(false),
             "spec-less external_body atom must not be disabled (P25: trusted atoms are in scope)"
         );
@@ -1750,9 +1746,9 @@ mod tests {
         let specs_path = write_json(&dir, "specs.json", &specs);
         let mut unified = merge_into_unified(&atoms_path, Some(&specs_path), None).unwrap();
 
-        // Before: spec-less, in-scope backlog (is-disabled: false), cfg predicate carried.
+        // Before: spec-less, in-scope backlog (untracked: false), cfg predicate carried.
         let before = &unified["probe:test/0.1.0/module/foo()"];
-        assert_eq!(before.is_disabled, Some(false));
+        assert_eq!(before.untracked, Some(false));
         assert_eq!(before.verification_status, None);
         assert_eq!(
             before.cfg_predicate.as_deref(),
@@ -1767,9 +1763,9 @@ mod tests {
         apply_cfg_scope(&mut unified, &cfg);
         let after = &unified["probe:test/0.1.0/module/foo()"];
         assert_eq!(
-            after.is_disabled,
+            after.untracked,
             Some(true),
-            "cfg-inactive → out of scope (is-disabled: true)"
+            "cfg-inactive → out of scope (untracked: true)"
         );
         assert_eq!(
             after.verification_status, None,
@@ -1785,13 +1781,13 @@ mod tests {
         apply_cfg_scope(&mut unified2, &cfg_serde);
         let a = &unified2["probe:test/0.1.0/module/foo()"];
         assert_eq!(a.verification_status, None, "active feature stays backlog");
-        assert_eq!(a.is_disabled, Some(false), "active feature stays in scope");
+        assert_eq!(a.untracked, Some(false), "active feature stays in scope");
     }
 
     #[test]
     fn test_bodiless_declaration_is_out_of_scope() {
         // A bodiless exec atom (e.g. a trait-method declaration) has no body to
-        // verify, so it is out of scope (is-disabled: true, no status), not backlog.
+        // verify, so it is out of scope (untracked: true, no status), not backlog.
         let dir = TempDir::new().unwrap();
         let atoms = serde_json::json!({
             "schema": "probe-verus/atoms", "schema-version": "2.0",
@@ -1824,9 +1820,9 @@ mod tests {
         let result = merge_into_unified(&atoms_path, Some(&specs_path), None).unwrap();
         let atom = &result["probe:test/0.1.0/traits/Identity#identity()"];
         assert_eq!(
-            atom.is_disabled,
+            atom.untracked,
             Some(true),
-            "bodiless declaration → out of scope (is-disabled: true)"
+            "bodiless declaration → out of scope (untracked: true)"
         );
         assert_eq!(
             atom.verification_status, None,
@@ -1869,9 +1865,9 @@ mod tests {
         let result = merge_into_unified(&atoms_path, Some(&specs_path), None).unwrap();
         let atom = &result["probe:test/0.1.0/main()"];
         assert_eq!(
-            atom.is_disabled,
+            atom.untracked,
             Some(true),
-            "build.rs function → out of scope (is-disabled: true)"
+            "build.rs function → out of scope (untracked: true)"
         );
         assert_eq!(atom.verification_status, None);
     }
@@ -1915,12 +1911,12 @@ mod tests {
 
         let result = merge_into_unified(&atoms_path, Some(&specs_path), None).unwrap();
         assert_eq!(
-            result["probe:test/0.1.0/tests/helper()"].is_disabled,
+            result["probe:test/0.1.0/tests/helper()"].untracked,
             Some(true),
             "prefixed tests/ target → out of scope even with a workspace prefix"
         );
         assert_eq!(
-            result["probe:test/0.1.0/module/in_src()"].is_disabled,
+            result["probe:test/0.1.0/module/in_src()"].untracked,
             Some(false),
             "a src/ module named tests.rs is in scope (backlog)"
         );
@@ -1960,9 +1956,9 @@ mod tests {
             "out-of-scope atoms are TCB-neutral and must not carry a trusted-reason"
         );
         assert_eq!(
-            atom.is_disabled,
+            atom.untracked,
             Some(true),
-            "#[verifier::external] → out of scope (is-disabled: true)"
+            "#[verifier::external] → out of scope (untracked: true)"
         );
     }
 
@@ -1971,7 +1967,7 @@ mod tests {
         // A spec-less exec function that Verus trivially discharges (proofs "success")
         // is NOT `verified`: verification is against a spec, and it has none, so the
         // "success" is vacuous (KB P16/P24). It stays in the in-scope backlog:
-        // is-disabled false, no verification-status. Regression for read_le_u64_into.
+        // untracked false, no verification-status. Regression for read_le_u64_into.
         let dir = TempDir::new().unwrap();
         let atoms_path = write_json(&dir, "atoms.json", &atoms_json());
 
@@ -2009,9 +2005,9 @@ mod tests {
             "spec-less function earns no verification-status (KB P16/P24)"
         );
         assert_eq!(
-            atom.is_disabled,
+            atom.untracked,
             Some(false),
-            "spec-less in-scope function is backlog: is-disabled false (KB P24)"
+            "spec-less in-scope function is backlog: untracked false (KB P24)"
         );
     }
 
@@ -2265,7 +2261,7 @@ mod tests {
             "Spec text from assume_specification should be propagated"
         );
         assert_eq!(
-            stub.is_disabled,
+            stub.untracked,
             Some(false),
             "assume_specification target carries a spec, so it must not be disabled (P24)"
         );
@@ -2363,18 +2359,18 @@ mod tests {
             .body_dependencies
             .contains("probe:test/0.1.0/module/bar()"));
 
-        // primary-spec text and is-disabled
+        // primary-spec text and untracked
         assert_eq!(
             foo.primary_spec.as_deref(),
             Some("requires\n    is_valid(x)\nensures\n    helper(x)")
         );
-        assert_eq!(foo.is_disabled, Some(false));
+        assert_eq!(foo.untracked, Some(false));
     }
 
     /// Internal atoms not matched by specify (e.g. functions inside proptest! macros)
-    /// are in-scope backlog: `is-disabled: false` + `primary-spec: ""` (analyzed, no
+    /// are in-scope backlog: `untracked: false` + `primary-spec: ""` (analyzed, no
     /// spec) rather than omitting both. Only genuinely out-of-scope atoms (external
-    /// stubs, `#[verifier::external]`, cfg-inactive) are `is-disabled: true`.
+    /// stubs, `#[verifier::external]`, cfg-inactive) are `untracked: true`.
     #[test]
     fn test_internal_atom_missing_from_specs_is_backlog() {
         let dir = TempDir::new().unwrap();
@@ -2441,17 +2437,17 @@ mod tests {
 
         let specified = &result["probe:test/0.1.0/module/specified_fn()"];
         assert_eq!(
-            specified.is_disabled,
+            specified.untracked,
             Some(false),
-            "specified function → is-disabled: false"
+            "specified function → untracked: false"
         );
         assert!(!specified.primary_spec.as_ref().unwrap().is_empty());
 
         let proptest = &result["probe:test/0.1.0/test/module/proptest_fn()"];
         assert_eq!(
-            proptest.is_disabled,
+            proptest.untracked,
             Some(false),
-            "internal atom not in specs is in-scope backlog → is-disabled: false"
+            "internal atom not in specs is in-scope backlog → untracked: false"
         );
         assert_eq!(
             proptest.primary_spec.as_deref(),
@@ -2461,9 +2457,9 @@ mod tests {
 
         let ext = &result["probe:external/1.0.0/lib/ext()"];
         assert_eq!(
-            ext.is_disabled,
+            ext.untracked,
             Some(true),
-            "external-crate stub is out of scope → is-disabled: true (KB P25)"
+            "external-crate stub is out of scope → untracked: true (KB P25)"
         );
         assert!(
             ext.primary_spec.is_none(),

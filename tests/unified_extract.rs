@@ -73,7 +73,7 @@ fn merge_fixture_files(
             .and_then(|s| s.get(&code_name))
             .map(build_spec_text);
 
-        let is_disabled = spec_text.as_ref().map(|s| s.is_empty());
+        let untracked = spec_text.as_ref().map(|s| s.is_empty());
 
         let mut requires_deps = BTreeSet::new();
         let mut ensures_deps = BTreeSet::new();
@@ -111,7 +111,7 @@ fn merge_fixture_files(
                 ensures_dependencies: ensures_deps,
                 body_dependencies: body_deps,
                 primary_spec: spec_text,
-                is_disabled,
+                untracked,
                 verification_status,
                 trusted_reason: None,
                 cfg_predicate: None,
@@ -199,8 +199,8 @@ fn test_external_stubs_have_no_enrichment() {
         "External stub should have no 'primary-spec' field"
     );
     assert!(
-        ext.is_disabled.is_none(),
-        "External stub should have no 'is-disabled' field"
+        ext.untracked.is_none(),
+        "External stub should have no 'untracked' field"
     );
     assert!(
         ext.verification_status.is_none(),
@@ -220,14 +220,14 @@ fn test_full_merge_all_fields_populated() {
     let foo = &unified["probe:test-crate/0.1.0/module/foo()"];
     assert_eq!(foo.atom.display_name, "foo");
     assert!(!foo.primary_spec.as_ref().unwrap().is_empty());
-    assert_eq!(foo.is_disabled, Some(false));
+    assert_eq!(foo.untracked, Some(false));
     assert_eq!(foo.verification_status.as_deref(), Some("verified"));
     assert_eq!(foo.spec_labels, vec!["safety-critical", "arithmetic"]);
 
     let bar = &unified["probe:test-crate/0.1.0/module/bar()"];
     assert_eq!(bar.atom.display_name, "bar");
     assert_eq!(bar.primary_spec.as_deref(), Some(""));
-    assert_eq!(bar.is_disabled, Some(true));
+    assert_eq!(bar.untracked, Some(true));
     assert_eq!(bar.verification_status.as_deref(), Some("failed"));
     assert!(bar.spec_labels.is_empty());
 
@@ -235,7 +235,7 @@ fn test_full_merge_all_fields_populated() {
     let baz = &unified["probe:test-crate/0.1.0/module/baz()"];
     assert_eq!(baz.atom.display_name, "baz");
     assert!(!baz.primary_spec.as_ref().unwrap().is_empty());
-    assert_eq!(baz.is_disabled, Some(false));
+    assert_eq!(baz.untracked, Some(false));
     assert!(baz.verification_status.is_none());
     assert!(baz.spec_labels.is_empty());
 }
@@ -249,13 +249,13 @@ fn test_unified_json_serialization_format() {
 
     let json = serde_json::to_value(&unified).unwrap();
 
-    // foo: has specs, verification-status, is-disabled=false, spec-labels
+    // foo: has specs, verification-status, untracked=false, spec-labels
     let foo_json = &json["probe:test-crate/0.1.0/module/foo()"];
     assert_eq!(foo_json["display-name"], "foo");
     assert_eq!(foo_json["verification-status"], "verified");
     assert!(foo_json["primary-spec"].is_string());
     assert!(!foo_json["primary-spec"].as_str().unwrap().is_empty());
-    assert_eq!(foo_json["is-disabled"], false);
+    assert_eq!(foo_json["untracked"], false);
     assert_eq!(foo_json["kind"], "exec");
     assert_eq!(foo_json["language"], "rust");
     let labels = foo_json["spec-labels"]
@@ -265,16 +265,16 @@ fn test_unified_json_serialization_format() {
     assert_eq!(labels[0], "safety-critical");
     assert_eq!(labels[1], "arithmetic");
 
-    // bar: analyzed but no specs -> empty string, is-disabled=true, no spec-labels
+    // bar: analyzed but no specs -> empty string, untracked=true, no spec-labels
     let bar_json = &json["probe:test-crate/0.1.0/module/bar()"];
     assert_eq!(bar_json["primary-spec"], "");
-    assert_eq!(bar_json["is-disabled"], true);
+    assert_eq!(bar_json["untracked"], true);
     assert!(
         bar_json.get("spec-labels").is_none(),
         "Empty spec-labels should be omitted from JSON"
     );
 
-    // ext: no verification-status, primary-spec, is-disabled, or spec-labels (skip_serializing_if)
+    // ext: no verification-status, primary-spec, untracked, or spec-labels (skip_serializing_if)
     let ext_json = &json["probe:external/1.0.0/lib/ext()"];
     assert_eq!(ext_json["display-name"], "ext");
     assert!(
@@ -286,8 +286,8 @@ fn test_unified_json_serialization_format() {
         "External stub should not have primary-spec in JSON"
     );
     assert!(
-        ext_json.get("is-disabled").is_none(),
-        "External stub should not have is-disabled in JSON"
+        ext_json.get("untracked").is_none(),
+        "External stub should not have untracked in JSON"
     );
     assert!(
         ext_json.get("spec-labels").is_none(),
@@ -306,7 +306,7 @@ fn test_specs_text_content() {
         foo.primary_spec.as_deref(),
         Some("requires\n    x > 0,\n    y < 100\nensures\n    result > x")
     );
-    assert_eq!(foo.is_disabled, Some(false));
+    assert_eq!(foo.untracked, Some(false));
 
     // baz has only ensures
     let baz = &unified["probe:test-crate/0.1.0/module/baz()"];
@@ -314,10 +314,10 @@ fn test_specs_text_content() {
         baz.primary_spec.as_deref(),
         Some("ensures\n    result == x * 2")
     );
-    assert_eq!(baz.is_disabled, Some(false));
+    assert_eq!(baz.untracked, Some(false));
 
     // bar has no specs
     let bar = &unified["probe:test-crate/0.1.0/module/bar()"];
     assert_eq!(bar.primary_spec.as_deref(), Some(""));
-    assert_eq!(bar.is_disabled, Some(true));
+    assert_eq!(bar.untracked, Some(true));
 }

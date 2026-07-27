@@ -10,6 +10,9 @@ what constitutes a breaking change.
 
 ## [Unreleased]
 
+### Changed
+- **Renamed the `is-disabled` atom field to `untracked`** (KB P24/P25). Hard rename with no backward-compatible alias: both the Rust field identifier (`is_disabled` → `untracked`) and the serde/JSON wire name (`is-disabled` → `untracked`) change. Semantics and polarity are unchanged — `untracked: true` still means "out of verification scope" (the value that was `is-disabled: true`). Consumers reading the wire format must update the key name.
+
 ## [7.0.0] - 2026-07-10
 
 Out-of-scope verification state, aligned to the shared KB two-state scope model

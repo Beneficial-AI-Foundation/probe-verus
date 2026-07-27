@@ -60,7 +60,7 @@ src/
 
 ### Main Pipelines
 
-1. **Extract Pipeline** (`extract` command): Unified 3-step pipeline (atomize + specify + run-verus) producing a single unified JSON output (`probe-verus/extract` schema) where each atom includes optional `primary-spec`, `is-disabled`, `verification-status`, `spec-labels`, and categorized dependency fields. Individual atoms/specs/proofs files are always kept alongside the unified output. All outputs go to `<project>/.verilib/probes/`. Recommended CI/Docker entrypoint.
+1. **Extract Pipeline** (`extract` command): Unified 3-step pipeline (atomize + specify + run-verus) producing a single unified JSON output (`probe-verus/extract` schema) where each atom includes optional `primary-spec`, `untracked`, `verification-status`, `spec-labels`, and categorized dependency fields. Individual atoms/specs/proofs files are always kept alongside the unified output. All outputs go to `<project>/.verilib/probes/`. Recommended CI/Docker entrypoint.
 2. **Atomize Pipeline** (`atomize` command): SCIP JSON → call graph parsing → spans via verus_syn → Schema 2.0 envelope → `.verilib/probes/`
 3. **List Functions Pipeline** (`list-functions` command): Source files → AST visitor → function list
 4. **Run-Verus Pipeline** (`run-verus` command): Cargo verus output → error parsing → function mapping → Schema 2.0 envelope → `.verilib/probes/`
@@ -89,7 +89,7 @@ src/
 
 - `FunctionNode`: Call graph node with callees and type context
 - `AtomWithLines`: Output format with line ranges
-- `UnifiedAtom`: `AtomWithLines` + optional `primary-spec` text, `is-disabled`, `verification-status`, `spec-labels`, and categorized dependency fields (extract pipeline output)
+- `UnifiedAtom`: `AtomWithLines` + optional `primary-spec` text, `untracked`, `verification-status`, `spec-labels`, and categorized dependency fields (extract pipeline output)
 - `FunctionInfo`: Function metadata with mode, specs, ensures/requires calls
 - `TaxonomyConfig`, `TaxonomyRule`, `MatchCriteria`: TOML-based spec classification rules
 - `FunctionInterval`: Interval tree entry for error→function mapping

@@ -130,7 +130,7 @@ Running `probe-verus extract` produces a JSON envelope. Each entry in `data` des
       "kind": "exec",
       "language": "rust",
       "primary-spec": "requires\n    x > 0\nensures\n    result > x",
-      "is-disabled": false,
+      "untracked": false,
       "verification-status": "verified"
     }
   }

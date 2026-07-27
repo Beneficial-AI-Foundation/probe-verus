@@ -1,4 +1,4 @@
-//! Schema 2.0 metadata gathering and envelope construction.
+//! Schema 3.0 metadata gathering and envelope construction.
 //!
 //! Reads git info and Cargo.toml to populate the envelope fields.
 //! Provides envelope wrapping for output and unwrapping for input.
@@ -161,7 +161,7 @@ pub struct SpecifyInternalConfig<'a> {
 // Envelope wrapping / unwrapping
 // =============================================================================
 
-/// Wrap data in a Schema 2.0 envelope.
+/// Wrap data in a Schema 3.0 envelope.
 pub fn wrap_in_envelope<T: Serialize>(
     schema: &str,
     command: &str,
@@ -188,7 +188,7 @@ pub fn wrap_in_envelope<T: Serialize>(
     }
 }
 
-/// Wrap merged data in a Schema 2.0 merged-atoms envelope.
+/// Wrap merged data in a Schema 3.0 merged-atoms envelope.
 ///
 /// Per the spec, merged output uses `schema: "probe/merged-atoms"` and an `inputs`
 /// array instead of a single `source` field.  `tool.name` is `"probe"` (the
@@ -249,7 +249,7 @@ pub fn extract_envelope_inputs(json: &serde_json::Value) -> Vec<MergedInput> {
     vec![]
 }
 
-/// Extract the data payload from JSON, unwrapping the Schema 2.0 envelope if present.
+/// Extract the data payload from JSON, unwrapping the Schema 3.0 envelope if present.
 ///
 /// Accepts any envelope that has a `"schema"` string containing `'/'` (e.g.
 /// `"probe-verus/atoms"`, `"probe-lean/atoms"`) and a `"data"` field.

@@ -47,7 +47,7 @@ cargo fmt && cargo clippy --all-targets && cargo test
 src/
 ├── main.rs           # CLI entry point with subcommand routing
 ├── lib.rs            # Core data structures and SCIP JSON parsing
-├── metadata.rs       # Schema 2.0 envelope construction, project metadata gathering
+├── metadata.rs       # Schema 3.0 envelope construction, project metadata gathering
 ├── commands/         # Subcommand implementations (extract, atomize, run_verus, specify, setup, etc.)
 ├── scip_cache.rs     # SCIP index generation, caching, and tool resolution
 ├── taxonomy.rs       # Spec taxonomy classification from TOML rules
@@ -61,10 +61,10 @@ src/
 ### Main Pipelines
 
 1. **Extract Pipeline** (`extract` command): Unified 3-step pipeline (atomize + specify + run-verus) producing a single unified JSON output (`probe-verus/extract` schema) where each atom includes optional `primary-spec`, `untracked`, `verification-status`, `spec-labels`, and categorized dependency fields. Individual atoms/specs/proofs files are always kept alongside the unified output. All outputs go to `<project>/.verilib/probes/`. Recommended CI/Docker entrypoint.
-2. **Atomize Pipeline** (`atomize` command): SCIP JSON → call graph parsing → spans via verus_syn → Schema 2.0 envelope → `.verilib/probes/`
+2. **Atomize Pipeline** (`atomize` command): SCIP JSON → call graph parsing → spans via verus_syn → Schema 3.0 envelope → `.verilib/probes/`
 3. **List Functions Pipeline** (`list-functions` command): Source files → AST visitor → function list
-4. **Run-Verus Pipeline** (`run-verus` command): Cargo verus output → error parsing → function mapping → Schema 2.0 envelope → `.verilib/probes/`
-5. **Specify Pipeline** (`specify` command): Source files + atoms.json → spec extraction → optional taxonomy classification via TOML rules → Schema 2.0 envelope → `.verilib/probes/`
+4. **Run-Verus Pipeline** (`run-verus` command): Cargo verus output → error parsing → function mapping → Schema 3.0 envelope → `.verilib/probes/`
+5. **Specify Pipeline** (`specify` command): Source files + atoms.json → spec extraction → optional taxonomy classification via TOML rules → Schema 3.0 envelope → `.verilib/probes/`
 6. **Setup Pipeline** (`setup` command): Resolve versions → download from GitHub → decompress to `~/.probe-verus/tools/` → install matching Rust toolchain via rustup
 
 ### Key Architectural Patterns
@@ -81,7 +81,7 @@ src/
 
 **AST-based Spec Taxonomy**: The `specify` command can classify specs using taxonomy rules defined in TOML. Classification uses structured AST data (function mode, called function names extracted via `verus_syn` visitor) rather than regex on text. A `CallNameCollector` visitor walks `ExprCall`/`ExprMethodCall` nodes in ensures/requires clauses to extract called function names.
 
-**Schema 2.0 Metadata Envelope**: All JSON outputs are wrapped in a standardized envelope containing `schema`, `schema-version`, `tool`, `source`, `timestamp`, and `data` fields. The `metadata.rs` module handles envelope construction, project metadata gathering (git commit, repo URL, Cargo.toml parsing), and default output path resolution to `.verilib/probes/`.
+**Schema 3.0 Metadata Envelope**: All JSON outputs are wrapped in a standardized envelope containing `schema`, `schema-version`, `tool`, `source`, `timestamp`, and `data` fields. The `metadata.rs` module handles envelope construction, project metadata gathering (git commit, repo URL, Cargo.toml parsing), and default output path resolution to `.verilib/probes/`.
 
 **Config Structs for Internal APIs**: `atomize_internal`, `specify_internal`, and `run_verus_internal` use `AtomizeInternalConfig`, `SpecifyInternalConfig`, and `ExtractInternalConfig` structs (defined in `metadata.rs`) instead of long parameter lists. The `extract` command gathers metadata once and passes it via config structs so all steps share a consistent timestamp.
 
@@ -94,7 +94,7 @@ src/
 - `TaxonomyConfig`, `TaxonomyRule`, `MatchCriteria`: TOML-based spec classification rules
 - `FunctionInterval`: Interval tree entry for error→function mapping
 - `CompilationError`, `VerificationFailure`: Error types for verification analysis
-- `Envelope<T>`, `MergedEnvelope<T>`: Schema 2.0 metadata wrappers for JSON output
+- `Envelope<T>`, `MergedEnvelope<T>`: Schema 3.0 metadata wrappers for JSON output
 - `ProjectMetadata`: Git commit, repo URL, timestamp, package name/version
 - `AtomizeInternalConfig`, `SpecifyInternalConfig`, `ExtractInternalConfig`: Config structs for internal command APIs
 
@@ -144,7 +144,7 @@ Examples from history:
 The **probe KB** in the sibling `probe` repo (`baif/probe/kb/`) is the source of truth for cross-cutting properties and schema definitions. Key references:
 
 - **`kb/engineering/properties.md`** -- Properties P1–P19 that all probe tools must satisfy (e.g., P14: deterministic output, P15: dependency completeness)
-- **`kb/engineering/schema.md`** -- Schema 2.0 envelope and atom field definitions
+- **`kb/engineering/schema.md`** -- Schema 3.0 envelope and atom field definitions
 - **`kb/tools/probe-verus.md`** -- probe-verus-specific documentation in the KB
 
 If implementation contradicts the KB, fix the code, not the KB.

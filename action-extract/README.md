@@ -106,7 +106,7 @@ If `taxonomy-config` is not provided, the action checks for `spec-taxonomy.toml`
 
 ## Output File Format
 
-All JSON outputs use the [Schema 2.0 metadata envelope](https://github.com/Beneficial-AI-Foundation/probe/blob/main/docs/envelope-rationale.md). The actual payload is in the `data` field.
+All JSON outputs use the [Schema 3.0 metadata envelope](https://github.com/Beneficial-AI-Foundation/probe/blob/main/docs/envelope-rationale.md). The actual payload is in the `data` field.
 
 ### Unified extract output (`probe-verus/extract` schema)
 

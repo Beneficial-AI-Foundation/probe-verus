@@ -132,7 +132,7 @@ jobs:
 
 ## Output File Format
 
-All JSON outputs are wrapped in a [Schema 2.0 metadata envelope](https://github.com/Beneficial-AI-Foundation/probe/blob/main/docs/envelope-rationale.md). The actual payload is in the `data` field. Use `jq '.data'` to access it.
+All JSON outputs are wrapped in a [Schema 3.0 metadata envelope](https://github.com/Beneficial-AI-Foundation/probe/blob/main/docs/envelope-rationale.md). The actual payload is in the `data` field. Use `jq '.data'` to access it.
 
 ### results.json
 

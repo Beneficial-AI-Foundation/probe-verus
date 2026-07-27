@@ -795,7 +795,7 @@ is an `AtomWithLines`.
 
 ## Commands Without Envelopes
 
-The following commands produce raw JSON without a Schema 2.0 envelope.
+The following commands produce raw JSON without a Schema 3.0 envelope.
 
 ### 9. `list-functions` — Function Listing
 

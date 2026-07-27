@@ -270,7 +270,7 @@ The analysis determines an overall status:
 
 ## Output Formats
 
-All JSON outputs are wrapped in a [Schema 2.0 metadata envelope](https://github.com/Beneficial-AI-Foundation/probe/blob/main/docs/envelope-rationale.md). Default output paths use the `.verilib/probes/` convention: `verus_<pkg>_<ver>[_suffix].json`.
+All JSON outputs are wrapped in a [Schema 3.0 metadata envelope](https://github.com/Beneficial-AI-Foundation/probe/blob/main/docs/envelope-rationale.md). Default output paths use the `.verilib/probes/` convention: `verus_<pkg>_<ver>[_suffix].json`.
 
 ### Atoms (`probe-verus/atoms`)
 

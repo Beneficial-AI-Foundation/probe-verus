@@ -13,7 +13,7 @@ Located at `../probe/kb/` (sibling repo). Start with
 | File | What it governs |
 |------|-----------------|
 | [engineering/properties.md](https://github.com/Beneficial-AI-Foundation/probe/blob/main/kb/engineering/properties.md) | Invariants P1-P19 all probe tools must satisfy |
-| [engineering/schema.md](https://github.com/Beneficial-AI-Foundation/probe/blob/main/kb/engineering/schema.md) | Schema 2.0 envelope and atom field definitions |
+| [engineering/schema.md](https://github.com/Beneficial-AI-Foundation/probe/blob/main/kb/engineering/schema.md) | Schema 3.0 envelope and atom field definitions |
 | [engineering/architecture.md](https://github.com/Beneficial-AI-Foundation/probe/blob/main/kb/engineering/architecture.md) | Five-tool separation, data flow, per-tool roles |
 | [engineering/glossary.md](https://github.com/Beneficial-AI-Foundation/probe/blob/main/kb/engineering/glossary.md) | Precise domain terminology |
 | [tools/probe-verus.md](https://github.com/Beneficial-AI-Foundation/probe/blob/main/kb/tools/probe-verus.md) | probe-verus-specific page in the shared KB |

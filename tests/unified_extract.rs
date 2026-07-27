@@ -4,9 +4,9 @@
 //! produces consistent results, using pre-built fixture files.
 
 use probe_verus::metadata::unwrap_envelope;
-use probe_verus::{AtomWithLines, CallLocation, UnifiedAtom};
+use probe_verus::{AtomWithLines, UnifiedAtom};
 use serde::Deserialize;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 const FIXTURES: &str = "tests/fixtures/unified_test";
@@ -17,8 +17,6 @@ struct SpecsEntry {
     requires_text: Option<String>,
     #[serde(default)]
     ensures_text: Option<String>,
-    #[serde(rename = "spec-labels", default)]
-    spec_labels: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -45,81 +43,18 @@ fn load_enveloped<T: serde::de::DeserializeOwned>(path: &Path) -> BTreeMap<Strin
         .unwrap_or_else(|e| panic!("Failed to deserialize {}: {}", path.display(), e))
 }
 
-fn build_spec_text(entry: &SpecsEntry) -> String {
-    let mut parts = Vec::new();
-    if let Some(ref t) = entry.requires_text {
-        parts.push(t.as_str());
-    }
-    if let Some(ref t) = entry.ensures_text {
-        parts.push(t.as_str());
-    }
-    parts.join("\n")
-}
-
-/// Merge atoms + specs + proofs into unified output (mirrors the logic in extract.rs).
+/// Merge atoms + specs + proofs into unified output by delegating to the real
+/// pipeline logic in `extract.rs`. Using the production function (rather than a
+/// hand-rolled copy) keeps these tests honest about scope/status/spec semantics
+/// (KB P16/P24/P25): `untracked` is derived from out-of-scope conditions, and a
+/// spec-less in-scope function is backlog (no `verification-status`).
 fn merge_fixture_files(
     atoms_path: &Path,
     specs_path: Option<&Path>,
     proofs_path: Option<&Path>,
 ) -> BTreeMap<String, UnifiedAtom> {
-    let atoms: BTreeMap<String, AtomWithLines> = load_enveloped(atoms_path);
-    let specs: Option<BTreeMap<String, SpecsEntry>> = specs_path.map(load_enveloped);
-    let proofs: Option<BTreeMap<String, ProofsEntryMinimal>> = proofs_path.map(load_enveloped);
-
-    let mut unified = BTreeMap::new();
-    for (code_name, atom) in atoms {
-        let spec_text: Option<String> = specs
-            .as_ref()
-            .and_then(|s| s.get(&code_name))
-            .map(build_spec_text);
-
-        let untracked = spec_text.as_ref().map(|s| s.is_empty());
-
-        let mut requires_deps = BTreeSet::new();
-        let mut ensures_deps = BTreeSet::new();
-        let mut body_deps = BTreeSet::new();
-        for d in &atom.dependencies_with_locations {
-            match d.location {
-                CallLocation::Precondition => {
-                    requires_deps.insert(d.code_name.clone());
-                }
-                CallLocation::Postcondition => {
-                    ensures_deps.insert(d.code_name.clone());
-                }
-                CallLocation::Inner => {
-                    body_deps.insert(d.code_name.clone());
-                }
-            }
-        }
-
-        let verification_status = proofs
-            .as_ref()
-            .and_then(|p| p.get(&code_name))
-            .map(|e| map_verification_status(&e.status).to_string());
-
-        let spec_labels: Vec<String> = specs
-            .as_ref()
-            .and_then(|s| s.get(&code_name))
-            .map(|e| e.spec_labels.clone())
-            .unwrap_or_default();
-
-        unified.insert(
-            code_name,
-            UnifiedAtom {
-                atom,
-                requires_dependencies: requires_deps,
-                ensures_dependencies: ensures_deps,
-                body_dependencies: body_deps,
-                primary_spec: spec_text,
-                untracked,
-                verification_status,
-                trusted_reason: None,
-                cfg_predicate: None,
-                spec_labels,
-            },
-        );
-    }
-    unified
+    probe_verus::commands::merge_into_unified(atoms_path, specs_path, proofs_path)
+        .expect("merge_into_unified should succeed on the fixtures")
 }
 
 #[test]
@@ -198,9 +133,10 @@ fn test_external_stubs_have_no_enrichment() {
         ext.primary_spec.is_none(),
         "External stub should have no 'primary-spec' field"
     );
-    assert!(
-        ext.untracked.is_none(),
-        "External stub should have no 'untracked' field"
+    assert_eq!(
+        ext.untracked,
+        Some(true),
+        "External-crate stub is out of verification scope (KB P25): untracked = true"
     );
     assert!(
         ext.verification_status.is_none(),
@@ -227,8 +163,11 @@ fn test_full_merge_all_fields_populated() {
     let bar = &unified["probe:test-crate/0.1.0/module/bar()"];
     assert_eq!(bar.atom.display_name, "bar");
     assert_eq!(bar.primary_spec.as_deref(), Some(""));
-    assert_eq!(bar.untracked, Some(true));
-    assert_eq!(bar.verification_status.as_deref(), Some("failed"));
+    // bar is spec-less but in scope: backlog (KB P24) — untracked=false and no
+    // verification-status, even though a proofs entry exists (a spec-less function
+    // earns no status: there is no spec to have verified against).
+    assert_eq!(bar.untracked, Some(false));
+    assert!(bar.verification_status.is_none());
     assert!(bar.spec_labels.is_empty());
 
     // baz has specs (ensures only) but no proofs entry
@@ -265,16 +204,18 @@ fn test_unified_json_serialization_format() {
     assert_eq!(labels[0], "safety-critical");
     assert_eq!(labels[1], "arithmetic");
 
-    // bar: analyzed but no specs -> empty string, untracked=true, no spec-labels
+    // bar: spec-less in-scope backlog -> empty primary-spec, untracked=false, no
+    // verification-status, no spec-labels
     let bar_json = &json["probe:test-crate/0.1.0/module/bar()"];
     assert_eq!(bar_json["primary-spec"], "");
-    assert_eq!(bar_json["untracked"], true);
+    assert_eq!(bar_json["untracked"], false);
     assert!(
         bar_json.get("spec-labels").is_none(),
         "Empty spec-labels should be omitted from JSON"
     );
 
-    // ext: no verification-status, primary-spec, untracked, or spec-labels (skip_serializing_if)
+    // ext: out-of-scope external stub (KB P25) -> untracked=true is serialized; no
+    // verification-status, primary-spec, or spec-labels (skip_serializing_if)
     let ext_json = &json["probe:external/1.0.0/lib/ext()"];
     assert_eq!(ext_json["display-name"], "ext");
     assert!(
@@ -285,9 +226,9 @@ fn test_unified_json_serialization_format() {
         ext_json.get("primary-spec").is_none(),
         "External stub should not have primary-spec in JSON"
     );
-    assert!(
-        ext_json.get("untracked").is_none(),
-        "External stub should not have untracked in JSON"
+    assert_eq!(
+        ext_json["untracked"], true,
+        "External stub is out of scope (KB P25): untracked = true"
     );
     assert!(
         ext_json.get("spec-labels").is_none(),
@@ -316,8 +257,8 @@ fn test_specs_text_content() {
     );
     assert_eq!(baz.untracked, Some(false));
 
-    // bar has no specs
+    // bar is spec-less but in scope: backlog (KB P24) — untracked=false
     let bar = &unified["probe:test-crate/0.1.0/module/bar()"];
     assert_eq!(bar.primary_spec.as_deref(), Some(""));
-    assert_eq!(bar.untracked, Some(true));
+    assert_eq!(bar.untracked, Some(false));
 }

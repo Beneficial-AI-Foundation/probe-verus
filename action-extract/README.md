@@ -106,7 +106,7 @@ If `taxonomy-config` is not provided, the action checks for `spec-taxonomy.toml`
 
 ## Output File Format
 
-All JSON outputs use the [Schema 2.0 metadata envelope](https://github.com/Beneficial-AI-Foundation/probe/blob/main/docs/envelope-rationale.md). The actual payload is in the `data` field.
+All JSON outputs use the [Schema 3.0 metadata envelope](https://github.com/Beneficial-AI-Foundation/probe/blob/main/docs/envelope-rationale.md). The actual payload is in the `data` field.
 
 ### Unified extract output (`probe-verus/extract` schema)
 
@@ -116,7 +116,7 @@ The primary output is a dictionary keyed by code-name, where each entry is a `Un
 ```json
 {
   "schema": "probe-verus/extract",
-  "schema-version": "2.0",
+  "schema-version": "3.0",
   "tool": { "name": "probe-verus", "version": "5.2.0", "command": "extract" },
   "source": { "repo": "...", "commit": "...", "language": "rust", "package": "...", "package-version": "..." },
   "timestamp": "2026-03-22T12:00:00Z",
@@ -130,7 +130,7 @@ The primary output is a dictionary keyed by code-name, where each entry is a `Un
       "kind": "exec",
       "language": "verus",
       "primary-spec": "requires\n    x > 0\nensures\n    result > x",
-      "is-disabled": false,
+      "untracked": false,
       "verification-status": "verified",
       "spec-labels": ["label-A"]
     }

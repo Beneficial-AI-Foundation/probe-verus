@@ -2,19 +2,19 @@
 
 ## Overview
 
-`probe-verus atomize` generates a JSON file wrapped in a Schema 2.0 metadata envelope.
+`probe-verus atomize` generates a JSON file wrapped in a Schema 3.0 metadata envelope.
 The `data` payload is a dictionary of function metadata keyed by `code-name`
 (a probe-style URI). Each entry contains the function's display name, dependencies, source
 location, declaration kind, language, and optional per-call location data.
 
 ## Envelope Structure
 
-All JSON outputs follow the [Schema 2.0 envelope](https://github.com/Beneficial-AI-Foundation/probe/blob/main/docs/envelope-rationale.md) format:
+All JSON outputs follow the [Schema 3.0 envelope](https://github.com/Beneficial-AI-Foundation/probe/blob/main/docs/envelope-rationale.md) format:
 
 ```json
 {
   "schema": "probe-verus/atoms",
-  "schema-version": "2.0",
+  "schema-version": "3.0",
   "tool": {
     "name": "probe-verus",
     "version": "5.2.0",
@@ -180,7 +180,7 @@ external crates), it creates lightweight stub entries. Stubs can be identified b
 ```json
 {
   "schema": "probe-verus/atoms",
-  "schema-version": "2.0",
+  "schema-version": "3.0",
   "tool": {
     "name": "probe-verus",
     "version": "5.2.0",

@@ -2,7 +2,7 @@
 
 Probe Verus projects: generate call graph atoms, extract specifications, and analyze verification results.
 
-`probe-verus` analyzes Rust/Verus codebases and produces structured JSON describing every function, its dependencies, source locations, specifications, and verification status. Output follows the Schema 2.0 envelope format; see [docs/SCHEMA.md](docs/SCHEMA.md) for the full specification.
+`probe-verus` analyzes Rust/Verus codebases and produces structured JSON describing every function, its dependencies, source locations, specifications, and verification status. Output follows the Schema 3.0 envelope format; see [docs/SCHEMA.md](docs/SCHEMA.md) for the full specification.
 
 ## Prerequisites
 
@@ -107,7 +107,7 @@ Running `probe-verus extract` produces a JSON envelope. Each entry in `data` des
 ```json
 {
   "schema": "probe-verus/extract",
-  "schema-version": "2.0",
+  "schema-version": "3.0",
   "tool": { "name": "probe-verus", "version": "6.10.3", "command": "extract" },
   "source": {
     "repo": "https://github.com/org/project",
@@ -130,7 +130,7 @@ Running `probe-verus extract` produces a JSON envelope. Each entry in `data` des
       "kind": "exec",
       "language": "rust",
       "primary-spec": "requires\n    x > 0\nensures\n    result > x",
-      "is-disabled": false,
+      "untracked": false,
       "verification-status": "verified"
     }
   }

@@ -245,7 +245,7 @@ pub fn specify_internal(config: &SpecifyInternalConfig) -> Result<usize, String>
     Ok(matched_count)
 }
 
-/// Load atoms from a JSON file, supporting both bare-dict (Schema 1.x) and enveloped (Schema 2.0).
+/// Load atoms from a JSON file, supporting both bare-dict (Schema 1.x) and enveloped (Schema 3.0).
 fn load_atoms(atoms_path: &Path) -> Result<BTreeMap<String, AtomEntry>, String> {
     let atoms_content =
         std::fs::read_to_string(atoms_path).map_err(|e| format!("Failed to read file: {e}"))?;

@@ -10,6 +10,10 @@ what constitutes a breaking change.
 
 ## [Unreleased]
 
+### Changed
+- **Renamed the `is-disabled` atom field to `untracked`** (KB P24/P25). Hard rename with no backward-compatible alias: both the Rust field identifier (`is_disabled` → `untracked`) and the serde/JSON wire name (`is-disabled` → `untracked`) change. Semantics and polarity are unchanged — `untracked: true` still means "out of verification scope" (the value that was `is-disabled: true`). Consumers reading the wire format must update the key name.
+- **Bumped the envelope `schema-version` from `2.0` to `3.0`** (breaking). The ecosystem moves to a unified major `3.0` because the `is-disabled` → `untracked` field rename is a breaking wire-format change. Every envelope (`probe-verus/atoms`, `/specs`, `/proofs`, `/extract`, and `probe/merged-atoms`) now emits `"schema-version": "3.0"`. Consumers pinned to `2.0` must update.
+
 ## [7.0.0] - 2026-07-10
 
 Out-of-scope verification state, aligned to the shared KB two-state scope model

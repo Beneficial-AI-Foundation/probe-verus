@@ -421,7 +421,7 @@ function without a proof).  Omitted when there are no such declarations.
 ### Overview
 
 The primary output of the `extract` command.  Each entry is an atom enriched
-with optional `primary-spec`, `is-disabled`, `verification-status`, and categorized
+with optional `primary-spec`, `untracked`, `verification-status`, and categorized
 dependency fields, aligning with the `probe-lean/extract` output structure.
 
 Dependencies are categorized into three subsets (analogous to probe-lean's
@@ -470,7 +470,7 @@ are always written alongside it in `<project>/.verilib/probes/`.
     "is-external": false,
     "is-cfg-gated": false,
     "primary-spec": "requires\n    x > 0,\n    y < 100\nensures\n    result > x",
-    "is-disabled": false,
+    "untracked": false,
     "verification-status": "verified",
     "spec-labels": ["safety-critical"]
   },
@@ -489,7 +489,7 @@ are always written alongside it in `<project>/.verilib/probes/`.
     "is-external": false,
     "is-cfg-gated": false,
     "primary-spec": "",
-    "is-disabled": false
+    "untracked": false
   },
   "probe:my-crate/1.0.0/module/external_fn()": {
     "display-name": "external_fn",
@@ -504,7 +504,7 @@ are always written alongside it in `<project>/.verilib/probes/`.
     "has-body": true,
     "is-external": true,
     "is-cfg-gated": false,
-    "is-disabled": true
+    "untracked": true
   },
   "probe:my-crate/1.0.0/module/axiom_foo()": {
     "display-name": "axiom_foo",
@@ -520,7 +520,7 @@ are always written alongside it in `<project>/.verilib/probes/`.
     "is-external": false,
     "is-cfg-gated": false,
     "primary-spec": "ensures\n    foo_property(x)",
-    "is-disabled": false,
+    "untracked": false,
     "verification-status": "trusted",
     "trusted-reason": "admit"
   },
@@ -532,7 +532,7 @@ are always written alongside it in `<project>/.verilib/probes/`.
     "code-text": { "lines-start": 0, "lines-end": 0 },
     "kind": "exec",
     "language": "rust",
-    "is-disabled": false,
+    "untracked": false,
     "verification-status": "trusted",
     "trusted-reason": "assume-specification",
     "primary-spec": "ensures\n    result == expected"
@@ -551,8 +551,8 @@ optional fields are added:
 | `ensures-dependencies` | array of strings | no | Subset of `dependencies` called in `ensures` clauses (omitted when empty) |
 | `body-dependencies` | array of strings | no | Subset of `dependencies` called in the function body (omitted when empty) |
 | `primary-spec` | string | no | Full spec text (requires + ensures concatenated). Empty string = analyzed, no spec. Absent = not analyzed. |
-| `is-disabled` | bool | no | `true` = **out of verification scope** (KB P25): `#[verifier::external]`, cfg-inactive in the verification build, an external-crate stub, a bodiless declaration (a trait-method signature with no body — nothing to verify), or code outside the verified library target (`build.rs`, `tests/`, `examples/`, `benches/`); such atoms carry no `verification-status`. `false` = in scope: a specified function, a trusted axiom, or the spec-less backlog. `has-verification-status ⟹ ¬is-disabled` (KB P24). Absent when scope was not analyzed (e.g. `--skip-specify`). |
-| `verification-status` | string | no | `"transitively-verified"`, `"verified"`, `"failed"`, `"unverified"`, or `"trusted"`.  After enrichment (default, skippable via `--skip-enrich`): `"transitively-verified"` = all transitive deps verified/trusted; `"verified"` = locally verified only.  `"trusted"` is set by the merge step when a trust-base trigger applies.  Out-of-scope atoms (`is-disabled: true`) and the spec-less backlog carry no status.  See Verification Status Mapping. |
+| `untracked` | bool | no | `true` = **out of verification scope** (KB P25): `#[verifier::external]`, cfg-inactive in the verification build, an external-crate stub, a bodiless declaration (a trait-method signature with no body — nothing to verify), or code outside the verified library target (`build.rs`, `tests/`, `examples/`, `benches/`); such atoms carry no `verification-status`. `false` = in scope: a specified function, a trusted axiom, or the spec-less backlog. `has-verification-status ⟹ ¬untracked` (KB P24). Absent when scope was not analyzed (e.g. `--skip-specify`). |
+| `verification-status` | string | no | `"transitively-verified"`, `"verified"`, `"failed"`, `"unverified"`, or `"trusted"`.  After enrichment (default, skippable via `--skip-enrich`): `"transitively-verified"` = all transitive deps verified/trusted; `"verified"` = locally verified only.  `"trusted"` is set by the merge step when a trust-base trigger applies.  Out-of-scope atoms (`untracked: true`) and the spec-less backlog carry no status.  See Verification Status Mapping. |
 | `trusted-reason` | string | no | Present only when `verification-status` is `"trusted"`.  Values: `"admit"` (function uses `admit()`), `"external-body"` (has `#[verifier::external_body]`), or `"assume-specification"` (matched by an `assume_specification` declaration).  Enables automated trust-base classification without consulting specs.json. (v6.5.1) |
 | `cfg` | string | no | The combined item-gating `#[cfg(...)]` predicate governing the atom (own + enclosing impl/mod, `all(...)`-joined), if any. Omitted when the atom has no `#[cfg]` gate. (v7.0.0) |
 | `spec-labels` | array of strings | no | Taxonomy classification labels from `--taxonomy-config` (omitted when empty or when `--skip-specify`) |
@@ -577,7 +577,7 @@ the atomize step).  The three subcategory fields partition this union:
 
 This mapping applies **only to spec-bearing functions** — those with a `requires`
 and/or `ensures` contract (KB P16). Verification is *against a spec*, so a spec-less
-in-scope function receives **no** `verification-status` (it is the backlog, `is-disabled:
+in-scope function receives **no** `verification-status` (it is the backlog, `untracked:
 false`); Verus's body-safety `success` against a defaulted `ensures true` is vacuous,
 not a `verified` claim (KB P24).
 
@@ -609,8 +609,8 @@ Functions with only `assume()` (no `admit()`, not `external_body`, and not a
 matched `assume_specification` stub) remain `"unverified"` when proofs report
 `sorries`.
 
-**Out-of-scope (`is-disabled: true`, KB P25):** independently of the trusted
-overrides, an atom is marked `is-disabled: true` with **no** `verification-status`
+**Out-of-scope (`untracked: true`, KB P25):** independently of the trusted
+overrides, an atom is marked `untracked: true` with **no** `verification-status`
 when it is not compiled and checked by Verus in this build. Five mechanisms:
 
 1. **`#[verifier::external]`** — the function is explicitly excluded from Verus
@@ -631,18 +631,18 @@ when it is not compiled and checked by Verus in this build. Five mechanisms:
    verifies the library target, not these.
 
 Out-of-scope is **TCB-neutral**: unlike `"trusted"`, it does not enlarge the trust
-base, and it is distinct from the in-scope spec-less **backlog** (`is-disabled:
+base, and it is distinct from the in-scope spec-less **backlog** (`untracked:
 false`, no status). A trust reason takes precedence: an atom that is both
 `#[verifier::external]` and trusted (e.g. also `#[verifier::external_body]`) is
-reported `"trusted"`, `is-disabled: false`.
+reported `"trusted"`, `untracked: false`.
 
 ### Notes
 
-- External stubs (empty `code-path`) are out of scope: `is-disabled: true`, no
+- External stubs (empty `code-path`) are out of scope: `untracked: true`, no
   `verification-status`. Merge may still set `verification-status: "trusted"` when
   an `assume_specification` declaration matches the stub (v6.5.0); in that case the
   stub is in scope — it gets the declared spec text as `primary-spec` and
-  `is-disabled: false`.
+  `untracked: false`.
 - When a pipeline step is skipped (`--skip-specify` or `--skip-verify`),
   the corresponding fields are absent from **all** entries.
 - `spec-labels` is only populated when `--taxonomy-config` is provided to
@@ -718,7 +718,7 @@ Counts of atoms by final `verification-status` after merge overrides.  Keys:
 |-------|------|-------------|
 | `verified` | integer | Atoms with `"verified"` or `"transitively-verified"` |
 | `trusted` | integer | Atoms with `"trusted"` |
-| `out-of-scope` | integer | Atoms with `is-disabled: true` (`#[verifier::external]`, cfg-inactive, external-crate stub, bodiless declaration, or non-library target). Omitted when zero (v7.0.0) |
+| `out-of-scope` | integer | Atoms with `untracked: true` (`#[verifier::external]`, cfg-inactive, external-crate stub, bodiless declaration, or non-library target). Omitted when zero (v7.0.0) |
 | `unverified` | integer | Atoms with `"unverified"` |
 | `failed` | integer | Atoms with `"failed"` |
 | `absent` | integer | In-scope atoms with no `verification-status` (the spec-less backlog, or when `--skip-verify`) |
@@ -773,7 +773,7 @@ Merged output uses a different envelope structure: `source` is replaced by
 ```json
 {
   "schema": "probe/merged-atoms",
-  "schema-version": "2.0",
+  "schema-version": "3.0",
   "tool": { "name": "probe", "version": "2.0.0", "command": "merge-atoms" },
   "inputs": [
     {
@@ -795,7 +795,7 @@ is an `AtomWithLines`.
 
 ## Commands Without Envelopes
 
-The following commands produce raw JSON without a Schema 2.0 envelope.
+The following commands produce raw JSON without a Schema 3.0 envelope.
 
 ### 9. `list-functions` — Function Listing
 

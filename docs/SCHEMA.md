@@ -113,12 +113,33 @@ probe:core/https://github.com/rust-lang/rust/library/core/option/impl#map()
 | `code-path` | string | yes | Relative source file path (empty string for external stubs) |
 | `code-text` | CodeTextInfo | yes | Line range of the function body |
 | `kind` | DeclKind | yes | `"exec"`, `"proof"`, or `"spec"` |
-| `language` | string | yes | `"rust"` for `exec` atoms, `"verus"` for `proof`/`spec` atoms (derived from `kind`, not lexical scope; see [P20]) |
+| `language` | string | yes | `"rust"` for `exec` atoms, `"verus"` for `proof`/`spec` atoms — derived from `kind`, not lexical scope (see [Language assignment](#language-assignment)) |
 | `is-public` | boolean | no | Whether the function signature starts with unrestricted `pub` (absent for external stubs) |
 | `is-public-api` | boolean | no | Whether the function is part of the crate's public API. Default: SCIP module-chain walk (`pub fn` + all ancestor modules `pub` + exec kind + library crate). With `--with-public-api`: overridden by `cargo public-api` ground truth via RQN matching. `spec fn` and `proof fn` always get `false` (erased at runtime). Absent for external stubs. |
 | `has-body` | boolean | no | Whether the function has a body. `false` for bodiless trait method declarations; `true` otherwise. Absent for external stubs. |
 | `is-external` | boolean | no | Whether `#[verifier::external]` is present (directly or via `#[cfg_attr(verus_keep_ghost, verifier::external)]`). Absent for external stubs. |
 | `is-cfg-gated` | boolean | no | Whether the function or any enclosing item (impl block, module, `cfg_if!` branch, or the module's `mod` declaration) has `#[cfg(...)]`. Absent for external stubs. |
+
+### Language assignment
+
+The `language` field is derived from the atom's `kind`, **not** from whether the
+function appears inside a `verus!{}` block:
+
+| `kind` | `language` | Rationale |
+|--------|------------|-----------|
+| `exec` | `"rust"` | Exec functions are real, compiled Rust code, even when annotated with Verus specs |
+| `proof` | `"verus"` | Proof functions are Verus-only constructs, erased at compilation |
+| `spec` | `"verus"` | Spec functions are Verus-only constructs, erased at compilation |
+
+Exec functions (e.g. `compress`, `decompress`, `mul`) sit inside `verus!{}`
+blocks only because that is where their specifications live; they are Rust
+functions with formal contracts, not Verus constructs. Tagging them
+`language: "verus"` would wrongly exclude them from Rust-specific analysis such
+as entrypoint detection and call-graph filtering. Implemented in `src/lib.rs`
+(`convert_to_atoms_with_lines_internal`).
+
+The resulting `kind → language` value convention is also recorded in the shared
+interchange schema ([schema.md § Language assignment for Verus atoms](https://github.com/Beneficial-AI-Foundation/probe/blob/main/kb/engineering/schema.md#language-assignment-for-verus-atoms)).
 
 #### `--with-public-api`: ground-truth override
 

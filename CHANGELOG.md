@@ -10,6 +10,19 @@ what constitutes a breaking change.
 
 ## [Unreleased]
 
+## [8.0.1] - 2026-08-04
+
+### Fixed
+- **Pinned `probe` (and the `probe-extract-check` dev-dep) to the tagged `v0.4.0`
+  release (schema `3.x` validator).** The `probe` git dependency was unpinned, so
+  released builds froze whatever `probe` their lockfile held (0.3.0, gate
+  `starts_with("2.")`) while local installs floated to `probe` main (`3.x`) — the
+  gitignored `.cargo/config.toml` path-patch hid the split. So released/ECR builds
+  **emitted** `schema-version: "3.0"` but **validated** loaded atoms as `2.x`,
+  rejecting 3.0 inputs with `load … incompatible schema-version "3.0" (expected 2.x)`
+  during verification-status enrichment. Pinning `probe` `v0.4.0` makes emit and
+  validate agree. Lockfile now records `git+…?tag=v0.4.0`.
+
 ### Changed
 - **Renamed the `is-disabled` atom field to `untracked`** (KB P24/P25). Hard rename with no backward-compatible alias: both the Rust field identifier (`is_disabled` → `untracked`) and the serde/JSON wire name (`is-disabled` → `untracked`) change. Semantics and polarity are unchanged — `untracked: true` still means "out of verification scope" (the value that was `is-disabled: true`). Consumers reading the wire format must update the key name.
 - **Bumped the envelope `schema-version` from `2.0` to `3.0`** (breaking). The ecosystem moves to a unified major `3.0` because the `is-disabled` → `untracked` field rename is a breaking wire-format change. Every envelope (`probe-verus/atoms`, `/specs`, `/proofs`, `/extract`, and `probe/merged-atoms`) now emits `"schema-version": "3.0"`. Consumers pinned to `2.0` must update.

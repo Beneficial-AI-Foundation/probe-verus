@@ -57,18 +57,18 @@ This achieves **~95% accuracy** for function spans in typical Verus projects.
 
 ### Disambiguation of Trait Implementations
 
-A key challenge is disambiguating trait implementations that share the same symbol. For example:
+verus-analyzer 2026-08-22 and later emits rust-analyzer-style symbols that name both the
+Self type and the trait, so trait implementations are distinct without extra work:
 
 ```rust
-impl Mul<Scalar> for Point { fn mul(...) }
-impl Mul<Point> for Scalar { fn mul(...) }
+impl Mul<&Scalar> for &MontgomeryPoint { fn mul(...) }  // montgomery/impl#[`&MontgomeryPoint`][`Mul<&Scalar>`]mul().
+impl Mul<&MontgomeryPoint> for &Scalar { fn mul(...) }  // montgomery/impl#[`&Scalar`][`Mul<&MontgomeryPoint>`]mul().
 ```
 
-Both produce similar SCIP symbols. The tool uses multiple strategies:
-1. **Signature text** - extracts type parameters from function signatures
-2. **Self type** - extracts the implementing type from `self` parameter
-3. **Definition type context** - looks at nearby type references
-4. **Line number fallback** - uses line numbers when types can't disambiguate
+The code-name is derived from the symbol directly. If the analyzer still emits the same
+symbol for several definitions (e.g. spec-only `FromSpecImpl<u8>`/`<u16>` impls, whose
+trait it drops), those code-names get an `@line` suffix. Indexes from older
+verus-analyzer releases (`Type#Trait#method()` symbols) are rejected.
 
 ---
 

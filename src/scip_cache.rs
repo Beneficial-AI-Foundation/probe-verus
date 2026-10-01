@@ -246,24 +246,6 @@ impl ScipCache {
         Ok(())
     }
 
-    /// Write a temporary verus-analyzer config that enables `verus_keep_ghost`.
-    ///
-    /// Verus projects gate specification-bearing variants of functions behind
-    /// `#[cfg(verus_keep_ghost)]`.  Without this cfg, SCIP indexes the plain
-    /// (non-spec) variants, whose line numbers diverge from what the Verus
-    /// parser sees — causing atom-to-proof matching failures later.
-    fn write_verus_cfg_config(&self) -> Option<PathBuf> {
-        if self.analyzer != Analyzer::VerusAnalyzer {
-            return None;
-        }
-        let path = self.data_dir().join(".va_scip_config.json");
-        std::fs::create_dir_all(self.data_dir()).ok()?;
-        std::fs::write(&path, r#"{"cargo":{"cfgs":{"verus_keep_ghost":null}}}"#).ok()?;
-        // Canonicalize to an absolute path so it remains valid when the child
-        // process runs with a different CWD (current_dir set to project_path).
-        std::fs::canonicalize(&path).ok().or(Some(path))
-    }
-
     /// Generate the SCIP index using the configured analyzer.
     fn generate_scip_index(&self, verbose: bool) -> Result<(), ScipError> {
         let analyzer_bin = self
@@ -279,14 +261,10 @@ impl ScipCache {
             );
         }
 
-        let config_file = self.write_verus_cfg_config();
-
-        let mut cmd = Command::new(analyzer_bin);
-        cmd.args(["scip", "."]);
-        if let Some(ref cfg_path) = config_file {
-            cmd.arg("--config-path").arg(cfg_path);
-        }
-        let status = cmd
+        // verus-analyzer (2026-08-22 and later) enables `verus_keep_ghost` itself,
+        // so `#[cfg(verus_keep_ghost)]` items are indexed without extra config.
+        let status = Command::new(analyzer_bin)
+            .args(["scip", "."])
             .current_dir(&self.project_path)
             .stdout(if verbose {
                 Stdio::inherit()

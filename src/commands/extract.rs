@@ -10,7 +10,10 @@ use crate::metadata::{
 };
 use crate::verification::VerusRunner;
 use crate::verus_parser::AssumeSpecInfo;
-use crate::{resolve_workspace_root, AtomWithLines, CallLocation, DeclKind, UnifiedAtom};
+use crate::{
+    code_name_has_owner_and_method, resolve_workspace_root, AtomWithLines, CallLocation, DeclKind,
+    UnifiedAtom,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -519,12 +522,19 @@ fn map_verification_status(status: &str) -> &'static str {
 /// Match `assume_specification` declarations to external stub atoms.
 ///
 /// For each declaration, take the last 2 path segments (e.g. `["ConditionallySelectable",
-/// "conditional_swap"]`) and search atoms with empty `code-path` for code-names where
-/// both segments appear separated by `#`.  Returns the set of matched atom code-names.
+/// "conditional_swap"]`) and search atoms with empty `code-path` for code-names whose
+/// method is the last segment and whose impl Self type or trait is the first.
+/// Returns the set of matched atom code-names.
 /// Result of matching an `assume_specification` to an atom: the spec text to
 /// propagate onto the external stub.
 struct AssumeSpecMatch {
     spec_text: String,
+}
+
+/// The qualified Self type of a Verus path: `<u64 as Trait>::method` -> `u64`.
+fn qualified_self_type(path_display: &str) -> Option<&str> {
+    let inner = path_display.strip_prefix('<')?;
+    inner.split_once(" as ").map(|(self_ty, _)| self_ty.trim())
 }
 
 fn match_assume_specs_to_atoms(
@@ -548,12 +558,26 @@ fn match_assume_specs_to_atoms(
         let candidates: Vec<&String> = atoms
             .iter()
             .filter(|(_, atom)| atom.code_path.is_empty())
-            .filter(|(name, _)| {
-                name.contains(&format!("{}#", type_seg))
-                    && name.contains(&format!("{}()", method_seg))
-            })
+            .filter(|(name, _)| code_name_has_owner_and_method(name, type_seg, method_seg))
             .map(|(name, _)| name)
             .collect();
+        // `<u64 as Trait>::method` also matches the trait's own declaration;
+        // narrow to the impl for the qualified Self type when that is ambiguous.
+        let candidates = match qualified_self_type(&aspec.path_display) {
+            Some(self_ty) if candidates.len() > 1 => {
+                let narrowed: Vec<&String> = candidates
+                    .iter()
+                    .copied()
+                    .filter(|name| code_name_has_owner_and_method(name, self_ty, method_seg))
+                    .collect();
+                if narrowed.is_empty() {
+                    candidates
+                } else {
+                    narrowed
+                }
+            }
+            _ => candidates,
+        };
 
         match candidates.len() {
             1 => {

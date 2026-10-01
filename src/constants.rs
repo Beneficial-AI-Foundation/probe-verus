@@ -60,12 +60,6 @@ pub fn is_definition(symbol_roles: Option<i32>) -> bool {
 /// This tolerance allows fuzzy matching within a reasonable range.
 pub const LINE_TOLERANCE: usize = 5;
 
-/// Number of lines to look back from a definition for type context.
-///
-/// Used when collecting nearby type references to help disambiguate
-/// trait implementations (e.g., `impl From<T> for Container<X>` vs `Container<Y>`).
-pub const TYPE_CONTEXT_LOOKBACK_LINES: i32 = 5;
-
 // =============================================================================
 // Cache Configuration
 // =============================================================================

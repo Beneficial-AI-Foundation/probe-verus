@@ -760,7 +760,7 @@ Counts of atoms by final `verification-status` after merge overrides.  Keys:
   "montgomery/MontgomeryPoint_mul.md": {
     "code-line": 42,
     "code-path": "src/montgomery.rs",
-    "code-name": "probe:curve25519-dalek/4.1.3/montgomery/MontgomeryPoint#mul()"
+    "code-name": "probe:curve25519-dalek/4.1.3/montgomery/impl#[MontgomeryPoint]mul_clamped()"
   },
   "edwards/decompress.md": {
     "code-path": "src/edwards.rs"
@@ -855,7 +855,7 @@ field.
       "crate": "curve25519-dalek",
       "version": "4.1.3",
       "functions": [
-        "probe:curve25519-dalek/4.1.3/field/FieldElement51#mul()"
+        "probe:curve25519-dalek/4.1.3/backend/serial/u64/field/impl#[FieldElement51]square()"
       ]
     },
     {

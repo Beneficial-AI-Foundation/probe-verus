@@ -10,6 +10,18 @@ what constitutes a breaking change.
 
 ## [Unreleased]
 
+### Breaking
+- **Requires verus-analyzer 2026-08-22 or later; code-names follow its SCIP symbols.** That release switched to rust-analyzer's symbol format (`impl#[SelfType][Trait]method()`), which names the Self type and trait and fixes the reversed module paths of older releases (`field/u64/serial/backend/...` is now `backend/serial/u64/field/...`). Code-names are now the symbol with the prefix and trailing `.` removed, lifetimes dropped and spaces replaced by `/`, e.g. ``probe:curve25519-dalek/4.1.3/montgomery/impl#[`&MontgomeryPoint`][`Mul<&Scalar>`]mul()`` (was `.../montgomery/&MontgomeryPoint#Mul<Scalar>#mul()`). Nearly every code-name changes; outputs from earlier versions must be regenerated. `atomize`/`extract` fail on a SCIP index from an older verus-analyzer (rerun with `--regenerate-scip` after upgrading).
+- **Library API:** `build_call_graph` returns only the call graph, and `convert_to_atoms_with_lines` / `convert_to_atoms_with_parsed_spans` no longer take the symbol-to-display-name map. `FunctionNode` lost `self_type` and `definition_type_context`; `CalleeInfo` lost `type_hints`.
+
+### Changed
+- Dependencies now include operator calls (`a * b` → the `Mul` impl), which the new analyzer resolves. On dalek-lite this adds the missing edges into `FieldElement51`/`Scalar` arithmetic impls, plus edges to `core`/`vstd` operator impls on primitive types.
+- Display names and `rust-qualified-name` of spec-trait impls on reference types now include the Self type (`Scalar::add_req` instead of `add_req`).
+
+### Removed
+- The verus-analyzer symbol repair: self-type pre-pass, signature-based trait-argument insertion, definition type-context disambiguation and call-site type hints.
+- The `verus_keep_ghost` config file passed to verus-analyzer; the analyzer now enables that cfg itself.
+
 ## [8.0.1] - 2026-08-04
 
 ### Fixed

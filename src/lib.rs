@@ -20,7 +20,7 @@ pub use error::{ProbeError, ProbeResult};
 
 use constants::{
     is_definition, is_external_function_symbol, is_function_like_kind, LINE_TOLERANCE,
-    PROBE_URI_PREFIX, SCIP_SYMBOL_PREFIX, TYPE_CONTEXT_LOOKBACK_LINES,
+    PROBE_URI_PREFIX, SCIP_SYMBOL_PREFIX,
 };
 use path_utils::{extract_src_suffix, paths_match_by_suffix};
 
@@ -126,14 +126,11 @@ pub struct SignatureDocumentation {
     pub text: String,
 }
 
-/// A call from one function to another, with optional type context for disambiguation
+/// A call from one function to another
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CalleeInfo {
     /// The raw SCIP symbol of the callee
     pub symbol: String,
-    /// Type hints found on the same line as the call (e.g., turbofish type parameters)
-    /// Used to disambiguate calls to generic trait implementations
-    pub type_hints: Vec<String>,
     /// Line number where the call occurs (0-based from SCIP)
     pub line: i32,
 }
@@ -166,16 +163,8 @@ pub struct FunctionNode {
     pub display_name: String,
     pub signature_text: String,
     pub relative_path: String,
-    /// Callees with their type context for disambiguation
     pub callees: HashSet<CalleeInfo>,
     pub range: Vec<i32>,
-    /// The Self type for trait implementations, extracted from the `method().(self)` symbol.
-    /// Used to repair verus-analyzer's inconsistent symbol format.
-    /// e.g., "MontgomeryPoint" from "self: &MontgomeryPoint"
-    pub self_type: Option<String>,
-    /// Type context from the definition site (nearby type references).
-    /// Used to disambiguate trait impls like `impl From<T> for Container<X>` vs `Container<Y>`.
-    pub definition_type_context: Vec<String>,
 }
 
 fn default_language() -> String {
@@ -198,46 +187,95 @@ pub fn is_signature_public(sig: &str) -> bool {
 
 /// Check whether a probe `code_name` represents a trait impl method.
 ///
-/// Verus-analyzer SCIP encodes inherent impls as `SelfType#SelfType<Ret>#method()`
-/// (the impl name matches the self type), while trait impls use
-/// `SelfType#TraitName<Params>#method()` (impl name differs from self type).
-///
-/// This function requires 2+ `#` separators **and** that the impl-name segment
-/// (between the first `#` and the next `<` or `#`) differs from the self-type
-/// base name (the identifier before the first `#`, stripped of `&`/`mut/`/generics).
+/// SCIP encodes impl methods as `impl#[SelfType]method()` (inherent) and
+/// `impl#[SelfType][Trait]method()` (trait impl), so a trait impl is an
+/// `impl#` segment with two bracket groups.
 ///
 /// **Known limitation:** treats ALL trait impl methods as public, including
 /// impls of `pub(crate)` or private traits. SCIP symbols do not encode trait
 /// visibility. In practice the affected traits are public `core`/`std` traits.
 #[must_use]
 pub fn is_trait_impl_code_name(code_name: &str) -> bool {
-    let s = code_name
-        .strip_prefix(PROBE_URI_PREFIX)
-        .unwrap_or(code_name);
-    if s.matches('#').count() < 2 {
-        return false;
+    parse_impl_segment(code_name).is_some_and(|seg| seg.trait_type.is_some())
+}
+
+/// The bracket groups of an `impl#[SelfType][Trait]method()` symbol segment.
+#[derive(Debug, PartialEq, Eq)]
+struct ImplSegment<'a> {
+    self_type: &'a str,
+    trait_type: Option<&'a str>,
+}
+
+/// Parse the `impl#[...]` / `impl#[...][...]` part of a SCIP symbol or code_name.
+///
+/// Bracket contents may be wrapped in backticks when they contain special
+/// characters (e.g. `` [`&Scalar`] `` or `` [`[u8; 32]`] ``); the backticks are
+/// stripped from the returned slices.
+fn parse_impl_segment(s: &str) -> Option<ImplSegment<'_>> {
+    let start = s.rfind("impl#[")? + "impl#".len();
+    let (self_type, rest) = take_bracket_group(&s[start..])?;
+    let trait_type = take_bracket_group(rest).map(|(t, _)| t);
+    Some(ImplSegment {
+        self_type,
+        trait_type,
+    })
+}
+
+/// Split a leading `[...]` group off `s`, honouring backtick quoting.
+/// Returns the group contents (without brackets or backticks) and the remainder.
+fn take_bracket_group(s: &str) -> Option<(&str, &str)> {
+    let inner = s.strip_prefix('[')?;
+    if let Some(quoted) = inner.strip_prefix('`') {
+        let close = quoted.find("`]")?;
+        Some((&quoted[..close], &quoted[close + 2..]))
+    } else {
+        let close = inner.find(']')?;
+        Some((&inner[..close], &inner[close + 1..]))
     }
-    let first_hash = match s.find('#') {
-        Some(i) => i,
-        None => return false,
-    };
-    // Self-type segment: everything between the last `/` (before first `#`) and the `#`.
-    let before_hash = &s[..first_hash];
-    let self_segment = match before_hash.rfind('/') {
-        Some(i) => &before_hash[i + 1..],
-        None => before_hash,
-    };
-    // Strip `&` and `mut/` prefixes, then drop `<...>` generics.
-    let self_base = self_segment
-        .trim_start_matches('&')
-        .trim_start_matches("mut/");
-    let self_base = self_base.split('<').next().unwrap_or(self_base);
+}
 
-    // Impl-name segment: between first `#` and the next `<` or `#`.
-    let after_hash = &s[first_hash + 1..];
-    let impl_name = after_hash.split(['<', '#']).next().unwrap_or("");
+/// Reduce an impl Self type to the bare type name used in display names:
+/// strips references, `mut`, lifetimes, generic arguments and path qualifiers.
+/// `&'a NafLookupTable5<T>` -> `NafLookupTable5`,
+/// `crate::lizard::lizard_constants::FieldElement51` -> `FieldElement51`.
+fn bare_type_name(ty: &str) -> &str {
+    let ty = ty.trim_start_matches('&');
+    let ty = match ty.strip_prefix('\'') {
+        Some(rest) => rest.split_once(' ').map_or(rest, |(_, t)| t),
+        None => ty,
+    };
+    let ty = ty.strip_prefix("mut ").unwrap_or(ty);
+    let ty = ty.split('<').next().unwrap_or(ty);
+    ty.rsplit("::").next().unwrap_or(ty)
+}
 
-    !impl_name.is_empty() && impl_name != self_base
+/// Remove lifetime parameters from a SCIP symbol, so code_names do not depend
+/// on lifetime names: `` [`From<&'a EdwardsPoint>`] `` -> `` [`From<&EdwardsPoint>`] ``.
+fn strip_lifetimes(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        let starts_lifetime =
+            c == '\'' && chars.peek().is_some_and(|n| n.is_alphabetic() || *n == '_');
+        if !starts_lifetime {
+            out.push(c);
+            continue;
+        }
+        while chars
+            .peek()
+            .is_some_and(|n| n.is_alphanumeric() || *n == '_')
+        {
+            chars.next();
+        }
+        // Drop the separator that followed the lifetime (`'a T`, `'a, T`).
+        if chars.peek() == Some(&',') {
+            chars.next();
+        }
+        if chars.peek() == Some(&' ') {
+            chars.next();
+        }
+    }
+    out.replace(", >", ">").replace("<>", "")
 }
 
 /// Output format: Atom with line numbers
@@ -390,33 +428,13 @@ fn is_function_like(kind: i32) -> bool {
     is_function_like_kind(kind)
 }
 
-/// Create a unique key for a function by combining symbol, signature, self_type, and line number.
+/// Create a unique call-graph key for a function definition.
 ///
-/// This handles multiple levels of potential collisions:
-/// 1. Same symbol, different signature → distinguished by signature
-/// 2. Same symbol & signature, different Self type → distinguished by self_type
-/// 3. Same symbol, signature & self_type, different line → distinguished by line (fallback)
-///
-/// The line number fallback handles edge cases like:
-/// ```text
-/// impl<T> Marker<A> for X { fn mark(self) {} }  // line 10
-/// impl<T> Marker<B> for X { fn mark(self) {} }  // line 20
-/// ```
-/// Where the trait type parameter doesn't appear in the method signature.
-fn make_unique_key(
-    symbol: &str,
-    signature: &str,
-    self_type: Option<&str>,
-    line: Option<i32>,
-) -> String {
-    let base = match self_type {
-        Some(st) => format!("{}|{}|{}", symbol, signature, st),
-        None => format!("{}|{}", symbol, signature),
-    };
-    match line {
-        Some(l) => format!("{}@{}", base, l),
-        None => base,
-    }
+/// SCIP symbols are unique per definition except for a few analyzer bugs
+/// (e.g. spec-only trait impls whose trait is dropped from the symbol), so the
+/// definition line is included to keep such definitions apart.
+fn make_unique_key(symbol: &str, line: i32) -> String {
+    format!("{}@{}", symbol, line)
 }
 
 /// Derive a Rust-style qualified name from the code-path (file) and SCIP symbol.
@@ -464,11 +482,18 @@ pub fn derive_rust_qualified_name(code_path: &str, display_name: &str) -> Option
 /// For impl methods, prepend the Self type to produce "Type::method" display names.
 /// Free functions are returned unchanged.
 ///
-/// Extracts the Self type from the SCIP symbol format:
-///   `path/Type#Trait<Args>#method().`  ->  `Type::method`
-///   `path/&Type#Type<Ret>#method().`   ->  `Type::method`
-///   `path/function().`                 ->  `function` (unchanged)
+///   `path/impl#[Type][Trait]method().`   ->  `Type::method`
+///   `path/impl#[`&Type`]method().`       ->  `Type::method`
+///   `path/Trait#method().` (trait decl)  ->  `Trait::method`
+///   `path/function().`                   ->  `function` (unchanged)
 fn enrich_display_name(scip_symbol: &str, base_display_name: &str) -> String {
+    if let Some(seg) = parse_impl_segment(scip_symbol) {
+        let self_type = bare_type_name(seg.self_type);
+        if !self_type.is_empty() {
+            return format!("{}::{}", self_type, base_display_name);
+        }
+        return base_display_name.to_string();
+    }
     let s = scip_symbol
         .strip_prefix(SCIP_SYMBOL_PREFIX)
         .unwrap_or(scip_symbol);
@@ -478,295 +503,107 @@ fn enrich_display_name(scip_symbol: &str, base_display_name: &str) -> String {
         return base_display_name.to_string();
     }
     let path_part = parts[2].trim_end_matches('.');
-    // Get the segment after the last '/'
     let last_segment = path_part.rsplit('/').next().unwrap_or(path_part);
-    // If it contains '#', the part before the first '#' is the Self type
-    if let Some(hash_pos) = last_segment.find('#') {
-        let self_type = &last_segment[..hash_pos];
-        // Strip leading '&' for borrowed self
-        let self_type = self_type.strip_prefix('&').unwrap_or(self_type);
-        if !self_type.is_empty() {
-            return format!("{}::{}", self_type, base_display_name);
+    if let Some((owner, _)) = last_segment.split_once('#') {
+        if !owner.is_empty() {
+            return format!("{}::{}", owner, base_display_name);
         }
     }
     base_display_name.to_string()
 }
 
-/// Extract the base function/method name from a raw SCIP symbol.
+/// Whether a SCIP index uses the pre-2026-08-22 verus-analyzer symbol format
+/// (`module/Type#Trait#method().`, Self type sometimes missing) instead of the
+/// rust-analyzer format (`module/impl#[Type][Trait]method().`).
 ///
-/// For `rust-analyzer cargo x25519-dalek 2.0.1 x25519/StaticSecret#diffie_hellman().`
-/// returns `"diffie_hellman"`.
-/// For `rust-analyzer cargo core 1.0.0 mem/swap().` returns `"swap"`.
-fn extract_function_name_from_symbol(symbol: &str) -> String {
-    let s = symbol.strip_prefix(SCIP_SYMBOL_PREFIX).unwrap_or(symbol);
-    let without_suffix = s.strip_suffix("().").unwrap_or(s);
-    without_suffix
-        .rsplit_once('#')
-        .map(|(_, n)| n)
-        .or_else(|| without_suffix.rsplit_once('/').map(|(_, n)| n))
-        .unwrap_or(without_suffix)
-        .to_string()
+/// probe-verus code_names are derived directly from the symbol, so a legacy
+/// index yields ambiguous and inconsistent code_names.
+#[must_use]
+pub fn uses_legacy_symbol_format(scip_data: &ScipIndex) -> bool {
+    let mut has_method = false;
+    for symbol in scip_data.documents.iter().flat_map(|d| &d.symbols) {
+        if !is_function_like(symbol.kind) {
+            continue;
+        }
+        if symbol.symbol.contains("impl#[") {
+            return false;
+        }
+        let last_segment = symbol.symbol.rsplit('/').next().unwrap_or("");
+        has_method |= last_segment.contains('#');
+    }
+    has_method
 }
 
-/// Build a call graph from SCIP data.
-/// Returns the call graph and a map of all function symbols to their display names.
-///
-/// Note: Multiple trait implementations (e.g., `impl Mul<A> for B` and `impl Mul<B> for A`)
-/// can have the same SCIP symbol string. We use signature_documentation.text to distinguish them.
-pub fn build_call_graph(
-    scip_data: &ScipIndex,
-) -> (HashMap<String, FunctionNode>, HashMap<String, String>) {
+/// Build a call graph from SCIP data, keyed by `symbol@definition_line`.
+pub fn build_call_graph(scip_data: &ScipIndex) -> HashMap<String, FunctionNode> {
     let mut call_graph: HashMap<String, FunctionNode> = HashMap::new();
-    let mut project_function_keys: HashSet<String> = HashSet::new();
     let mut all_function_symbols: HashSet<String> = HashSet::new();
-    let mut symbol_to_display_name: HashMap<String, String> = HashMap::new();
 
-    // Pre-pass: Find where each symbol is DEFINED (symbol_roles == 1)
-    // Collect ALL definition occurrences per symbol (there may be multiple for trait impls)
-    // Maps symbol -> Vec<(path, line_number)>
+    // Pre-pass: find where each symbol is DEFINED. A symbol normally has one
+    // definition; analyzer bugs can yield several, which are kept apart by line.
+    // Maps symbol -> Vec<(path, line_number)>, sorted by line.
     let mut symbol_to_definitions: HashMap<String, Vec<(String, i32)>> = HashMap::new();
     for doc in &scip_data.documents {
         let rel_path = doc.relative_path.trim_start_matches('/').to_string();
         for occurrence in &doc.occurrences {
             if is_definition(occurrence.symbol_roles) && !occurrence.range.is_empty() {
-                let line = occurrence.range[0];
                 symbol_to_definitions
                     .entry(occurrence.symbol.clone())
                     .or_default()
-                    .push((rel_path.clone(), line));
+                    .push((rel_path.clone(), occurrence.range[0]));
             }
         }
     }
-
-    // Sort definitions by line number for consistent matching with symbol entries
     for defs in symbol_to_definitions.values_mut() {
         defs.sort_by_key(|(_, line)| *line);
     }
 
-    // Pre-pass: Collect type context for definitions (types near each definition line)
-    // This helps disambiguate trait impls like `impl From<T> for Container<X>` vs `Container<Y>`
-    // Maps (file_path, line) -> Vec<type_name>
-    let mut definition_type_contexts: HashMap<(String, i32), Vec<String>> = HashMap::new();
-    for doc in &scip_data.documents {
-        let rel_path = doc.relative_path.trim_start_matches('/').to_string();
-
-        // Collect all type references in this document
-        let mut type_refs_by_line: HashMap<i32, Vec<String>> = HashMap::new();
-        for occ in &doc.occurrences {
-            if !is_definition(occ.symbol_roles)
-                && !occ.range.is_empty()
-                && occ.symbol.ends_with('#')
-            {
-                let line = occ.range[0];
-                if let Some(type_name) = extract_type_name_from_symbol(&occ.symbol) {
-                    type_refs_by_line.entry(line).or_default().push(type_name);
-                }
-            }
-        }
-
-        // For each definition line, collect types from nearby lines (within 5 lines before)
-        for occ in &doc.occurrences {
-            if is_definition(occ.symbol_roles) && !occ.range.is_empty() {
-                let def_line = occ.range[0];
-                let mut nearby_types = Vec::new();
-
-                // Look at lines from def_line-N to def_line for type context
-                for offset in 0..=TYPE_CONTEXT_LOOKBACK_LINES {
-                    let check_line = def_line - offset;
-                    if check_line >= 0 {
-                        if let Some(types) = type_refs_by_line.get(&check_line) {
-                            for t in types {
-                                if !nearby_types.contains(t) {
-                                    nearby_types.push(t.clone());
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if !nearby_types.is_empty() {
-                    definition_type_contexts.insert((rel_path.clone(), def_line), nearby_types);
-                }
-            }
-        }
-    }
-
-    // Pre-pass: Collect self_type from `method().(self)` symbols
-    // These have enclosing_symbol set and display_name == "self"
-    // Since multiple trait impls can have the same symbol (verus-analyzer bug),
-    // we collect all self_types per enclosing_symbol in order.
-    // Maps enclosing_symbol -> Vec<self_type>
-    let mut enclosing_to_self_types: HashMap<String, Vec<String>> = HashMap::new();
-    for doc in &scip_data.documents {
-        for symbol in &doc.symbols {
-            // Look for self parameter symbols (display_name == "self" and has enclosing_symbol)
-            if let Some(ref display_name) = symbol.display_name {
-                if display_name == "self" {
-                    if let Some(ref enclosing) = symbol.enclosing_symbol {
-                        let self_sig = &symbol.signature_documentation.text;
-                        if let Some(self_type) = extract_self_type(self_sig) {
-                            enclosing_to_self_types
-                                .entry(enclosing.clone())
-                                .or_default()
-                                .push(self_type);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Track how many times we've seen each symbol to pick the right self_type
-    let mut symbol_self_type_idx: HashMap<String, usize> = HashMap::new();
-
-    // First pass: identify all function symbols and handle duplicates
-    // Track how many times we've seen each symbol to match with definition order
-    let mut symbol_seen_count: HashMap<String, usize> = HashMap::new();
-
-    for doc in &scip_data.documents {
-        for symbol in &doc.symbols {
-            if is_function_like(symbol.kind) {
-                let signature = &symbol.signature_documentation.text;
-                let base_display_name = symbol
-                    .display_name
-                    .clone()
-                    .unwrap_or_else(|| "unknown".to_string());
-                let display_name = enrich_display_name(&symbol.symbol, &base_display_name);
-
-                // Get the nth definition for this symbol (matching symbol entry order with def order)
-                let def_index = *symbol_seen_count.get(&symbol.symbol).unwrap_or(&0);
-                symbol_seen_count
-                    .entry(symbol.symbol.clone())
-                    .and_modify(|c| *c += 1)
-                    .or_insert(1);
-
-                // Look up self_type from the pre-collected map BEFORE creating unique key
-                // Use the index to handle multiple impls with the same symbol
-                let self_type =
-                    if let Some(self_types) = enclosing_to_self_types.get(&symbol.symbol) {
-                        let idx = *symbol_self_type_idx.get(&symbol.symbol).unwrap_or(&0);
-                        symbol_self_type_idx
-                            .entry(symbol.symbol.clone())
-                            .and_modify(|i| *i += 1)
-                            .or_insert(1);
-                        self_types.get(idx).cloned()
-                    } else {
-                        None
-                    };
-
-                // P21: Re-enrich display name for single-hash trait impl symbols.
-                // verus-analyzer emits "module/Trait#method()" (missing Self type)
-                // which enrich_display_name turns into "Trait::method". Replace with
-                // "SelfType::method" using the self_type from the SCIP pre-pass.
-                let display_name = if is_missing_self_type(&symbol.symbol) {
-                    if let Some(ref st) = self_type {
-                        let bare_st = st.strip_prefix('&').unwrap_or(st);
-                        let bare_st = bare_st.strip_prefix("mut ").unwrap_or(bare_st);
-                        format!("{bare_st}::{base_display_name}")
-                    } else {
-                        display_name
-                    }
-                } else {
-                    display_name
-                };
-
-                // Track ALL function symbols for dependency tracking
-                all_function_symbols.insert(symbol.symbol.clone());
-                symbol_to_display_name.insert(symbol.symbol.clone(), display_name.clone());
-
-                // Only add to call_graph if DEFINED in this project
-                if let Some(defs) = symbol_to_definitions.get(&symbol.symbol) {
-                    if let Some((rel_path, line)) = defs.get(def_index) {
-                        // Create unique key using signature, self_type, AND line number
-                        // This handles all collision cases:
-                        // - Same symbol, different signature → distinguished by signature
-                        // - Same symbol & signature, different Self type → distinguished by self_type
-                        // - Same symbol, signature & self_type → distinguished by line (fallback)
-                        let unique_key = make_unique_key(
-                            &symbol.symbol,
-                            signature,
-                            self_type.as_deref(),
-                            Some(*line),
-                        );
-
-                        project_function_keys.insert(unique_key.clone());
-
-                        // Look up definition type context (types near this definition line)
-                        let def_type_context = definition_type_contexts
-                            .get(&(rel_path.clone(), *line))
-                            .cloned()
-                            .unwrap_or_default();
-
-                        call_graph.insert(
-                            unique_key,
-                            FunctionNode {
-                                symbol: symbol.symbol.clone(),
-                                display_name,
-                                signature_text: signature.clone(),
-                                relative_path: rel_path.clone(),
-                                callees: HashSet::new(),
-                                range: Vec::new(),
-                                self_type,
-                                definition_type_context: def_type_context,
-                            },
-                        );
-                    }
-                }
-            }
-        }
-    }
-
+    // First pass: create a node per project function definition. The nth
+    // `symbols[]` entry for a symbol is paired with its nth definition.
     let mut symbol_line_to_key: HashMap<(String, i32), String> = HashMap::new();
-    let mut symbol_seen_for_lines: HashMap<String, usize> = HashMap::new();
-    let mut symbol_self_type_idx_for_lines: HashMap<String, usize> = HashMap::new();
+    let mut symbol_seen_count: HashMap<String, usize> = HashMap::new();
     for doc in &scip_data.documents {
         for symbol in &doc.symbols {
-            if is_function_like(symbol.kind) {
-                let signature = &symbol.signature_documentation.text;
-
-                // Get the definition index first so we can look up the line number
-                let def_index = *symbol_seen_for_lines.get(&symbol.symbol).unwrap_or(&0);
-                symbol_seen_for_lines
-                    .entry(symbol.symbol.clone())
-                    .and_modify(|c| *c += 1)
-                    .or_insert(1);
-
-                // Look up self_type (must match the same logic as the first pass)
-                let self_type =
-                    if let Some(self_types) = enclosing_to_self_types.get(&symbol.symbol) {
-                        let idx = *symbol_self_type_idx_for_lines
-                            .get(&symbol.symbol)
-                            .unwrap_or(&0);
-                        symbol_self_type_idx_for_lines
-                            .entry(symbol.symbol.clone())
-                            .and_modify(|i| *i += 1)
-                            .or_insert(1);
-                        self_types.get(idx).cloned()
-                    } else {
-                        None
-                    };
-
-                // Get line number from definitions
-                if let Some(defs) = symbol_to_definitions.get(&symbol.symbol) {
-                    if let Some((_, line)) = defs.get(def_index) {
-                        let unique_key = make_unique_key(
-                            &symbol.symbol,
-                            signature,
-                            self_type.as_deref(),
-                            Some(*line),
-                        );
-
-                        if call_graph.contains_key(&unique_key) {
-                            symbol_line_to_key.insert((symbol.symbol.clone(), *line), unique_key);
-                        }
-                    }
-                }
+            if !is_function_like(symbol.kind) {
+                continue;
             }
+            let base_display_name = symbol
+                .display_name
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string());
+            let display_name = enrich_display_name(&symbol.symbol, &base_display_name);
+
+            let seen = symbol_seen_count.entry(symbol.symbol.clone()).or_insert(0);
+            let def_index = *seen;
+            *seen += 1;
+
+            // Track ALL function symbols for dependency tracking
+            all_function_symbols.insert(symbol.symbol.clone());
+
+            // Only add to call_graph if DEFINED in this project
+            let Some((rel_path, line)) = symbol_to_definitions
+                .get(&symbol.symbol)
+                .and_then(|defs| defs.get(def_index))
+            else {
+                continue;
+            };
+            let unique_key = make_unique_key(&symbol.symbol, *line);
+            symbol_line_to_key.insert((symbol.symbol.clone(), *line), unique_key.clone());
+            call_graph.insert(
+                unique_key,
+                FunctionNode {
+                    symbol: symbol.symbol.clone(),
+                    display_name,
+                    signature_text: symbol.signature_documentation.text.clone(),
+                    relative_path: rel_path.clone(),
+                    callees: HashSet::new(),
+                    range: Vec::new(),
+                },
+            );
         }
     }
 
     // Second pass: build call relationships and extract ranges
-    // Also collect type hints (symbols ending with #) for disambiguation
     for doc in &scip_data.documents {
         let mut current_function_key: Option<String> = None;
 
@@ -778,257 +615,42 @@ pub fn build_call_graph(
             a_start.cmp(&b_start)
         });
 
-        // Pre-collect type symbols per line for disambiguation
-        // Type symbols are those ending with # (struct/type references)
-        let mut line_to_type_hints: HashMap<i32, Vec<String>> = HashMap::new();
-        for occ in &ordered_occurrences {
-            if !is_definition(occ.symbol_roles) && !occ.range.is_empty() {
-                let line = occ.range[0];
-                // Check if this is a type reference (symbol ends with #)
-                if occ.symbol.ends_with('#') {
-                    // Extract just the type name from the symbol
-                    // e.g., "rust-analyzer cargo ... curve_models/serial/backend/ProjectiveNielsPoint#"
-                    // → "ProjectiveNielsPoint"
-                    if let Some(type_name) = extract_type_name_from_symbol(&occ.symbol) {
-                        line_to_type_hints.entry(line).or_default().push(type_name);
-                    }
-                }
-            }
-        }
-
         for occurrence in &ordered_occurrences {
-            let is_def = is_definition(occurrence.symbol_roles);
-            let line = if !occurrence.range.is_empty() {
-                occurrence.range[0]
-            } else {
-                -1
-            };
+            let line = occurrence.range[0];
 
             // Track when we enter a project function definition
-            if is_def {
-                // Look up the unique key for this (symbol, line) pair
+            if is_definition(occurrence.symbol_roles) {
                 if let Some(key) = symbol_line_to_key.get(&(occurrence.symbol.clone(), line)) {
                     current_function_key = Some(key.clone());
                     if let Some(node) = call_graph.get_mut(key) {
                         node.range = occurrence.range.clone();
                     }
                 }
+                continue;
             }
 
             // Track ALL function calls (including to external functions)
-            // Note: References use the base symbol, not the unique key
-            if !is_def
-                && (all_function_symbols.contains(&occurrence.symbol)
-                    || is_external_function_symbol(&occurrence.symbol, &all_function_symbols))
+            if !(all_function_symbols.contains(&occurrence.symbol)
+                || is_external_function_symbol(&occurrence.symbol, &all_function_symbols))
             {
-                // Register newly-discovered external function symbols so downstream
-                // code can resolve their display names and code_names without fallback
-                if all_function_symbols.insert(occurrence.symbol.clone()) {
-                    let base_name = extract_function_name_from_symbol(&occurrence.symbol);
-                    let enriched = enrich_display_name(&occurrence.symbol, &base_name);
-                    symbol_to_display_name.insert(occurrence.symbol.clone(), enriched);
-                }
-
-                if let Some(caller_key) = &current_function_key {
-                    if let Some(caller_node) = call_graph.get_mut(caller_key) {
-                        // For callees, we store the base symbol with type hints
-                        if caller_node.symbol != occurrence.symbol {
-                            let type_hints =
-                                line_to_type_hints.get(&line).cloned().unwrap_or_default();
-                            caller_node.callees.insert(CalleeInfo {
-                                symbol: occurrence.symbol.clone(),
-                                type_hints,
-                                line,
-                            });
-                        }
-                    }
+                continue;
+            }
+            all_function_symbols.insert(occurrence.symbol.clone());
+            if let Some(caller_node) = current_function_key
+                .as_ref()
+                .and_then(|key| call_graph.get_mut(key))
+            {
+                if caller_node.symbol != occurrence.symbol {
+                    caller_node.callees.insert(CalleeInfo {
+                        symbol: occurrence.symbol.clone(),
+                        line,
+                    });
                 }
             }
         }
     }
 
-    (call_graph, symbol_to_display_name)
-}
-
-/// Extract the type name from a SCIP symbol ending with #
-/// e.g., "rust-analyzer cargo curve25519-dalek 4.1.3 curve_models/serial/backend/ProjectiveNielsPoint#"
-/// → "ProjectiveNielsPoint"
-fn extract_type_name_from_symbol(symbol: &str) -> Option<String> {
-    // Strip the trailing #
-    let without_hash = symbol.trim_end_matches('#');
-    // Get the last path component
-    if let Some(last_slash) = without_hash.rfind('/') {
-        let name = &without_hash[last_slash + 1..];
-        if !name.is_empty() {
-            return Some(name.to_string());
-        }
-    }
-    None
-}
-
-/// Extract type parameter info from a signature for trait impls.
-/// For example, from "fn mul(self, scalar: &Scalar) -> MontgomeryPoint"
-/// extracts the self type and parameter types to help distinguish impls.
-///
-/// This function handles several patterns:
-/// 1. Binary ops: `fn mul(self, rhs: &Scalar) -> ...` - extracts "Scalar" from second param
-/// 2. From trait: `fn from(value: EdwardsPoint) -> ...` - extracts "EdwardsPoint" from first param
-/// 3. Into trait: `fn into(self) -> RistrettoPoint` - extracts "RistrettoPoint" from return type
-fn extract_impl_type_info(signature: &str) -> Option<String> {
-    let signature = signature.trim();
-
-    // Look for the parameter list
-    let params_start = signature.find('(')?;
-    let params_end = signature.find(')')?;
-    let params = &signature[params_start + 1..params_end];
-
-    // Split by comma and look for typed self or first param after self
-    let parts: Vec<&str> = params.split(',').map(|s| s.trim()).collect();
-
-    // Case 1: Two or more parameters (e.g., binary ops like Mul, Add)
-    // Pattern: "fn method(self, param: &Type) -> ..."
-    if parts.len() >= 2 {
-        // Get the type of the second parameter (first after self)
-        let second_param = parts[1];
-        if let Some(type_str) = extract_type_from_param(second_param) {
-            return Some(type_str);
-        }
-    }
-
-    // Case 2: Single parameter that is NOT self (e.g., From::from)
-    // Pattern: "fn from(value: SourceType) -> ..."
-    if parts.len() == 1 {
-        let first_param = parts[0].trim();
-        // Skip if it's just "self" or "self: Type" (not a From-like method)
-        if !first_param.is_empty() && !first_param.starts_with("self") && first_param.contains(':')
-        {
-            if let Some(type_str) = extract_type_from_param(first_param) {
-                return Some(type_str);
-            }
-        }
-    }
-
-    // Case 3: No parameters or just self - try to extract from return type (e.g., Into::into)
-    // Pattern: "fn into(self) -> TargetType"
-    if let Some(arrow_pos) = signature.find("->") {
-        let return_type = signature[arrow_pos + 2..].trim();
-        // Clean up the return type
-        let clean_return = clean_type_string(return_type);
-        // Only use return type for disambiguation if it's a concrete type (not Self)
-        if !clean_return.is_empty() && clean_return != "Self" {
-            return Some(clean_return);
-        }
-    }
-
-    None
-}
-
-/// Extract and clean a type from a parameter declaration like "param: &Type" or "param: Type"
-/// Preserves the `&` to distinguish reference vs owned types.
-fn extract_type_from_param(param: &str) -> Option<String> {
-    let colon_pos = param.find(':')?;
-    let type_part = param[colon_pos + 1..].trim();
-    let clean = clean_type_string_preserve_ref(type_part);
-    if clean.is_empty() {
-        None
-    } else {
-        Some(clean)
-    }
-}
-
-/// Clean up a type string by removing lifetimes but PRESERVING the reference marker (&).
-/// This is important for distinguishing `impl From<&T>` from `impl From<T>`.
-fn clean_type_string_preserve_ref(type_str: &str) -> String {
-    let type_str = type_str.trim();
-
-    // Check if it's a reference type
-    let is_ref = type_str.starts_with('&');
-
-    // Remove the & temporarily to clean up lifetimes
-    let without_ref = type_str.trim_start_matches('&').trim();
-
-    // Remove lifetime annotations
-    let clean = without_ref
-        .trim_start_matches("'a ")
-        .trim_start_matches("'b ")
-        .trim_start_matches("'_ ")
-        .trim_start_matches("mut ")
-        .trim();
-
-    if clean.is_empty() {
-        String::new()
-    } else if is_ref {
-        // Re-add the & for reference types
-        format!("&{}", clean)
-    } else {
-        clean.to_string()
-    }
-}
-
-/// Clean up a type string by removing references, lifetimes, and whitespace
-/// Used for return types where we don't care about reference distinction.
-fn clean_type_string(type_str: &str) -> String {
-    type_str
-        .trim()
-        .trim_start_matches('&')
-        .trim_start_matches("'a ")
-        .trim_start_matches("'b ")
-        .trim_start_matches("'_ ")
-        .trim_start_matches("mut ")
-        .trim()
-        .to_string()
-}
-
-/// Extract the Self type from a self parameter signature.
-/// For example, from "self: &MontgomeryPoint" extracts "&MontgomeryPoint".
-/// From "self: Scalar" extracts "Scalar".
-/// Preserves the `&` to distinguish owned vs reference implementations,
-/// matching rust-analyzer's behavior.
-fn extract_self_type(self_signature: &str) -> Option<String> {
-    // Pattern: "self: &Type" or "self: &'a Type" or "self: Type"
-    let self_signature = self_signature.trim();
-
-    if let Some(colon_pos) = self_signature.find(':') {
-        let type_part = self_signature[colon_pos + 1..].trim();
-
-        // Check if it's a reference type
-        let is_ref = type_part.starts_with('&');
-
-        // Remove lifetime annotations but preserve the & if present
-        let clean_type = type_part
-            .trim_start_matches('&')
-            .trim_start_matches("'a ")
-            .trim_start_matches("'b ")
-            .trim_start_matches("'_ ")
-            .trim();
-
-        if !clean_type.is_empty() {
-            // Re-add the & if it was a reference type
-            if is_ref {
-                return Some(format!("&{}", clean_type));
-            } else {
-                return Some(clean_type.to_string());
-            }
-        }
-    }
-
-    None
-}
-
-/// Check if a symbol path is missing the Self type (verus-analyzer inconsistency).
-/// verus-analyzer produces "module/Trait#method()" for reference Self types,
-/// but "module/Type#Trait#method()" for owned Self types.
-/// This function detects the former pattern.
-fn is_missing_self_type(symbol: &str) -> bool {
-    // Pattern for missing Self type: "module/Trait#method()" where Trait is capitalized
-    // Pattern for present Self type: "module/Type#Trait#method()" has two # separators
-
-    // Count the number of # in the symbol
-    let hash_count = symbol.matches('#').count();
-
-    // If there's only one #, and it's followed by a method name, Self type is likely missing
-    // e.g., "montgomery/Mul#mul()" vs "montgomery/MontgomeryPoint#Mul#mul()"
-    hash_count == 1
+    call_graph
 }
 
 /// Extract the module path from a probe_name.
@@ -1069,165 +691,31 @@ fn extract_code_module(probe_name: &str) -> String {
     }
 }
 
-/// Convert symbol to a scip name, optionally including type info for disambiguation.
+/// Convert a SCIP symbol to a probe code_name.
 ///
-/// Parameters:
-/// - `symbol`: The raw SCIP symbol string
-/// - `display_name`: The function/method name
-/// - `signature`: Optional function signature (e.g., "fn mul(self, scalar: &Scalar) -> MontgomeryPoint")
-/// - `self_type`: Optional Self type extracted from the self parameter (e.g., "MontgomeryPoint")
+/// The SCIP symbol already identifies the definition uniquely (Self type and
+/// trait included), so the conversion is purely syntactic: strip the
+/// `rust-analyzer cargo ` prefix and the trailing `.`, drop lifetimes, and turn
+/// spaces into `/`.
 ///
-/// This function repairs verus-analyzer's inconsistent symbol format by:
-/// 1. Adding trait type parameters (e.g., `Mul` -> `Mul<Scalar>`) for disambiguation
-/// 2. Adding the Self type when missing (e.g., `montgomery/Mul#mul` -> `montgomery/MontgomeryPoint#Mul#mul`)
-/// 3. Adding line number suffix when type info alone can't disambiguate (e.g., generic impls)
-fn symbol_to_code_name(
-    symbol: &str,
-    display_name: &str,
-    signature: Option<&str>,
-    self_type: Option<&str>,
-) -> String {
-    symbol_to_code_name_with_line(symbol, display_name, signature, self_type, None)
-}
-
-/// Convert symbol to scip name, with optional line number for disambiguation.
-fn symbol_to_code_name_with_line(
-    symbol: &str,
-    display_name: &str,
-    signature: Option<&str>,
-    self_type: Option<&str>,
-    line_number: Option<usize>,
-) -> String {
-    symbol_to_code_name_full(
-        symbol,
-        display_name,
-        signature,
-        self_type,
-        line_number,
-        None,
-    )
-    .unwrap_or_else(|e| {
-        eprintln!("Warning: {}", e);
-        let raw = symbol.replace("rust-analyzer cargo ", "").replace(' ', "/");
-        let normalized = raw.strip_suffix('.').unwrap_or(&raw);
-        format!("{}{}", PROBE_URI_PREFIX, normalized)
-    })
-}
-
-/// Convert symbol to scip name with full disambiguation options.
+/// `rust-analyzer cargo curve25519-dalek 4.1.3 montgomery/impl#[`&MontgomeryPoint`][`Mul<&'a Scalar>`]mul().`
+/// becomes ``probe:curve25519-dalek/4.1.3/montgomery/impl#[`&MontgomeryPoint`][`Mul<&Scalar>`]mul()``.
 ///
-/// # Arguments
-/// * `symbol` - The raw SCIP symbol
-/// * `display_name` - The function's display name
-/// * `signature` - Optional signature text for type extraction
-/// * `self_type` - Optional Self type for trait impls
-/// * `line_number` - Optional line number (last resort disambiguation)
-/// * `target_type` - Optional target type parameter for generic impls (e.g., "ProjectiveNielsPoint")
-///
-/// # Returns
-/// Returns `Ok(String)` with the formatted scip name, or `Err(ProbeError)` if the symbol
-/// format is invalid.
-fn symbol_to_code_name_full(
-    symbol: &str,
-    display_name: &str,
-    signature: Option<&str>,
-    self_type: Option<&str>,
-    line_number: Option<usize>,
-    target_type: Option<&str>,
-) -> Result<String, ProbeError> {
-    // Step 1: Strip "rust-analyzer cargo " prefix
-    let s = symbol.strip_prefix(SCIP_SYMBOL_PREFIX).ok_or_else(|| {
-        ProbeError::invalid_symbol(
-            format!("Symbol does not start with '{}'", SCIP_SYMBOL_PREFIX),
-            symbol,
-        )
-    })?;
-
-    // Step 2 & 3: Check if s ends with "method_name()."
-    // The display_name may be enriched (e.g., "Mul::mul") but the SCIP symbol uses
-    // "#" separators (e.g., "Mul#mul()."), so extract just the method name for matching.
-    let method_name = display_name.rsplit("::").next().unwrap_or(display_name);
-    let expected_suffix = format!("{}().", method_name);
-
-    if !s.ends_with(&expected_suffix) {
-        return Err(ProbeError::invalid_symbol(
-            format!("Symbol does not end with '{}'", expected_suffix),
-            symbol,
-        ));
-    }
-
-    // Delete the last character of s
-    let mut result = s[..s.len() - 1].to_string();
-
-    // If we have a signature, try to add type info for disambiguation
-    // This helps distinguish e.g., Mul<&Scalar>::mul vs Mul<&MontgomeryPoint>::mul
-    if let Some(sig) = signature {
-        if let Some(type_info) = extract_impl_type_info(sig) {
-            // Check if this looks like a trait method (contains #)
-            // e.g., "4.1.3 montgomery/Mul#mul()"
-            if result.contains('#') {
-                // Insert the type parameter before the #
-                // "montgomery/Mul#mul()" -> "montgomery/Mul<Scalar>#mul()"
-                if let Some(hash_pos) = result.rfind('#') {
-                    result = format!(
-                        "{}<{}>{}",
-                        &result[..hash_pos],
-                        type_info,
-                        &result[hash_pos..]
-                    );
-                }
-            }
-        }
-    }
-
-    // If Self type is provided and the symbol is missing it (verus-analyzer inconsistency),
-    // insert the Self type to make it consistent with rust-analyzer format.
-    // e.g., "montgomery/Mul<Scalar>#mul()" -> "montgomery/MontgomeryPoint#Mul<Scalar>#mul()"
-    if let Some(self_t) = self_type {
-        if is_missing_self_type(&result) {
-            // Find the position after "module/" to insert the Self type
-            // Pattern: "version module/Trait#method()" or "version module/Trait<T>#method()"
-            if let Some(slash_pos) = result.rfind('/') {
-                // Insert Self type after the slash, before the trait
-                let before_slash = &result[..=slash_pos];
-                let after_slash = &result[slash_pos + 1..];
-                result = format!("{}{}#{}", before_slash, self_t, after_slash);
-            }
-        }
-    }
-
-    // If target_type is provided, add it as a type parameter to the struct name.
-    // This enriches the symbol to be more like rust-analyzer's format.
-    // e.g., "window/NafLookupTable5#From<&EdwardsPoint>#from()"
-    //    -> "window/NafLookupTable5<ProjectiveNielsPoint>#From<&EdwardsPoint>#from()"
-    let mut target_type_applied = false;
-    if let Some(target_t) = target_type {
-        // Find the struct name (first # after the module path)
-        // Pattern: "version module/StructName#Trait..." or "version module/StructName#Trait<T>#..."
-        if let Some(first_hash) = result.find('#') {
-            // Check if there's already a type parameter before this #
-            let before_hash = &result[..first_hash];
-            if !before_hash.ends_with('>') {
-                // No existing type parameter, add one
-                result = format!("{}<{}>{}", before_hash, target_t, &result[first_hash..]);
-                target_type_applied = true;
-            }
-        }
-    }
-
-    // Line number is a fallback when target_type couldn't be applied (no # in symbol,
-    // or existing type parameter prevents insertion). Also used directly when no
-    // target_type was provided.
+/// `line_number` is appended as `@line` to separate definitions that share a symbol.
+fn symbol_to_code_name(symbol: &str, line_number: Option<usize>) -> String {
+    let s = symbol.strip_prefix(SCIP_SYMBOL_PREFIX).unwrap_or_else(|| {
+        eprintln!(
+            "Warning: Symbol does not start with '{}': {}",
+            SCIP_SYMBOL_PREFIX, symbol
+        );
+        symbol
+    });
+    let s = s.strip_suffix('.').unwrap_or(s);
+    let mut result = strip_lifetimes(s).replace(' ', "/");
     if let Some(line) = line_number {
-        if !target_type_applied {
-            result = format!("{}@{}", result, line);
-        }
+        result = format!("{}@{}", result, line);
     }
-
-    // Convert to probe: URI format
-    // "curve25519-dalek 4.1.3 montgomery/MontgomeryPoint#ct_eq()"
-    // becomes "probe:curve25519-dalek/4.1.3/montgomery/MontgomeryPoint#ct_eq()"
-    Ok(format!("{}{}", PROBE_URI_PREFIX, result.replace(' ', "/")))
+    format!("{}{}", PROBE_URI_PREFIX, result)
 }
 
 /// Convert call graph to atoms with line numbers format.
@@ -1237,19 +725,9 @@ fn symbol_to_code_name_full(
 /// For accurate function body spans, use `convert_to_atoms_with_parsed_spans` instead.
 pub fn convert_to_atoms_with_lines(
     call_graph: &HashMap<String, FunctionNode>,
-    symbol_to_display_name: &HashMap<String, String>,
 ) -> Vec<AtomWithLines> {
     let empty_map = HashMap::new();
-    convert_to_atoms_with_lines_internal(
-        call_graph,
-        symbol_to_display_name,
-        None,
-        false,
-        &empty_map,
-        false,
-        "",
-        "",
-    )
+    convert_to_atoms_with_lines_internal(call_graph, None, false, &empty_map, false, "", "")
 }
 
 /// Convert call graph to atoms with accurate line numbers by parsing source files.
@@ -1261,7 +739,6 @@ pub fn convert_to_atoms_with_lines(
 #[allow(clippy::too_many_arguments)]
 pub fn convert_to_atoms_with_parsed_spans(
     call_graph: &HashMap<String, FunctionNode>,
-    symbol_to_display_name: &HashMap<String, String>,
     project_root: &Path,
     with_locations: bool,
     file_module_pub: &HashMap<String, ModuleInfo>,
@@ -1283,7 +760,6 @@ pub fn convert_to_atoms_with_parsed_spans(
 
     convert_to_atoms_with_lines_internal(
         call_graph,
-        symbol_to_display_name,
         Some(&span_map),
         with_locations,
         file_module_pub,
@@ -1301,7 +777,6 @@ pub fn convert_to_atoms_with_parsed_spans(
 #[allow(clippy::too_many_arguments)]
 fn convert_to_atoms_with_lines_internal(
     call_graph: &HashMap<String, FunctionNode>,
-    symbol_to_display_name: &HashMap<String, String>,
     span_map: Option<&HashMap<(String, String, usize), verus_parser::SpanAndMode>>,
     with_locations: bool,
     file_module_pub: &HashMap<String, ModuleInfo>,
@@ -1371,12 +846,7 @@ fn convert_to_atoms_with_lines_internal(
             let is_external = sam.map(|s| s.is_external).unwrap_or(false);
             let is_cfg = sam.map(|s| s.is_cfg).unwrap_or(false);
 
-            let base_code_name = symbol_to_code_name(
-                &node.symbol,
-                &node.display_name,
-                Some(&node.signature_text),
-                node.self_type.as_deref(),
-            );
+            let base_code_name = symbol_to_code_name(&node.symbol, None);
 
             NodeData {
                 node,
@@ -1395,131 +865,31 @@ fn convert_to_atoms_with_lines_internal(
         .collect();
 
     // === Phase 2: Detect duplicates and compute final code_names ===
-    let mut code_name_count: HashMap<String, usize> = HashMap::new();
+    // Symbols are unique per definition except for rare analyzer bugs; such
+    // duplicates get an `@line` suffix.
+    let mut code_name_count: HashMap<&str, usize> = HashMap::new();
     for data in &node_data {
-        *code_name_count
-            .entry(data.base_code_name.clone())
-            .or_insert(0) += 1;
+        *code_name_count.entry(&data.base_code_name).or_insert(0) += 1;
     }
-
-    // For disambiguation, we need to find "discriminating" types that uniquely identify each impl
-    // Group nodes by their base_code_name to find duplicates
-    let mut code_name_to_nodes: HashMap<&str, Vec<usize>> = HashMap::new();
-    for (idx, data) in node_data.iter().enumerate() {
-        code_name_to_nodes
-            .entry(&data.base_code_name)
-            .or_default()
-            .push(idx);
-    }
-
-    // For each group of duplicates, find which types are discriminating
-    // (appear in some but not all impls of the same base_code_name)
-    let mut node_discriminating_type: HashMap<usize, Option<String>> = HashMap::new();
-    for indices in code_name_to_nodes.values() {
-        if indices.len() <= 1 {
-            // Not a duplicate, no disambiguation needed
-            for &idx in indices {
-                node_discriminating_type.insert(idx, None);
-            }
-            continue;
-        }
-
-        // Collect all type contexts for this group
-        let all_contexts: Vec<&Vec<String>> = indices
-            .iter()
-            .map(|&idx| &node_data[idx].node.definition_type_context)
-            .collect();
-
-        // Find types that appear in exactly one context (discriminating)
-        let mut type_counts: HashMap<&str, usize> = HashMap::new();
-        for ctx in &all_contexts {
-            for t in *ctx {
-                *type_counts.entry(t.as_str()).or_insert(0) += 1;
-            }
-        }
-
-        // For each node in this group, find a discriminating type
-        for &idx in indices {
-            let ctx = &node_data[idx].node.definition_type_context;
-            // Find a type that appears only in this node's context
-            let discriminating = ctx
-                .iter()
-                .find(|t| type_counts.get(t.as_str()).copied().unwrap_or(0) == 1);
-            node_discriminating_type.insert(idx, discriminating.cloned());
-        }
-    }
-
-    // Compute final code_name for each node
     let final_code_names: Vec<String> = node_data
         .iter()
-        .enumerate()
-        .map(|(idx, data)| {
-            let is_duplicate = code_name_count
-                .get(&data.base_code_name)
-                .copied()
-                .unwrap_or(0)
-                > 1;
-
-            if is_duplicate {
-                // Always pass line_number so it can serve as fallback when target_type
-                // can't be applied (e.g., no # in symbol or existing type parameter).
-                let line_fallback = if data.lines_start > 0 {
-                    Some(data.lines_start)
-                } else {
-                    None
-                };
-                let result = if let Some(Some(target_type)) = node_discriminating_type.get(&idx) {
-                    symbol_to_code_name_full(
-                        &data.node.symbol,
-                        &data.node.display_name,
-                        Some(&data.node.signature_text),
-                        data.node.self_type.as_deref(),
-                        line_fallback,
-                        Some(target_type),
-                    )
-                } else if data.lines_start > 0 {
-                    symbol_to_code_name_full(
-                        &data.node.symbol,
-                        &data.node.display_name,
-                        Some(&data.node.signature_text),
-                        data.node.self_type.as_deref(),
-                        Some(data.lines_start),
-                        None,
-                    )
-                } else {
-                    Ok(data.base_code_name.clone())
-                };
-                result.unwrap_or_else(|e| {
-                    eprintln!("Warning: {}", e);
-                    data.base_code_name.clone()
-                })
+        .map(|data| {
+            let is_duplicate = code_name_count[data.base_code_name.as_str()] > 1;
+            if is_duplicate && data.lines_start > 0 {
+                symbol_to_code_name(&data.node.symbol, Some(data.lines_start))
             } else {
                 data.base_code_name.clone()
             }
         })
         .collect();
 
-    // === Phase 3: Build map from raw symbol → list of (code_name, type_context) ===
-    // The type_context helps match call-site type hints to the correct implementation
-    struct CodeNameWithContext {
-        code_name: String,
-        /// Types from definition site (nearby type references) for disambiguation
-        type_context: Vec<String>,
-    }
-
-    let mut raw_symbol_to_code_names: HashMap<String, Vec<CodeNameWithContext>> = HashMap::new();
+    // === Phase 3: Build map from raw symbol → list of code_names ===
+    let mut raw_symbol_to_code_names: HashMap<String, Vec<String>> = HashMap::new();
     for (data, final_name) in node_data.iter().zip(final_code_names.iter()) {
-        // Use definition_type_context from FunctionNode (captured during build_call_graph)
-        // This contains types that appeared near the definition, like "ProjectiveNielsPoint"
-        let type_context = data.node.definition_type_context.clone();
-
         raw_symbol_to_code_names
             .entry(data.node.symbol.clone())
             .or_default()
-            .push(CodeNameWithContext {
-                code_name: final_name.clone(),
-                type_context,
-            });
+            .push(final_name.clone());
     }
 
     // Helper to classify call location based on line number and spec ranges
@@ -1556,126 +926,27 @@ fn convert_to_atoms_with_lines_internal(
             let mut dependencies_with_locations: Vec<DependencyWithLocation> = Vec::new();
 
             for callee in &data.node.callees {
-                // Only compute location info if requested (for --with-locations flag)
-                let (location, call_line_1based) = if with_locations {
-                    let loc = classify_call_location(
-                        callee.line,
-                        data.requires_range,
-                        data.ensures_range,
-                    );
-                    let line = (callee.line + 1) as usize;
-                    (Some(loc), line)
-                } else {
-                    (None, 0)
+                // A project symbol maps to its code_name(s); a symbol shared by several
+                // definitions (analyzer bug) resolves to all of them. Anything else is
+                // an external function.
+                let dep_code_names: Vec<String> = match raw_symbol_to_code_names.get(&callee.symbol)
+                {
+                    Some(names) => names.clone(),
+                    None => vec![symbol_to_code_name(&callee.symbol, None)],
                 };
-
-                // Check if this callee is a project function with known code_names
-                if let Some(code_name_contexts) = raw_symbol_to_code_names.get(&callee.symbol) {
-                    if code_name_contexts.len() == 1 {
-                        // Only one implementation - use it directly
-                        let dep_code_name = code_name_contexts[0].code_name.clone();
-                        dependencies.insert(dep_code_name.clone());
-                        if let Some(loc) = location.clone() {
-                            dependencies_with_locations.push(DependencyWithLocation {
-                                code_name: dep_code_name,
-                                location: loc,
-                                line: call_line_1based,
-                            });
-                        }
-                    } else if !callee.type_hints.is_empty() {
-                        // Multiple implementations - try to match using type hints
-                        // First, find types in call-site hints that DON'T appear in ALL impl contexts
-                        // (i.e., discriminating types like ProjectiveNielsPoint vs AffineNielsPoint)
-                        let discriminating_hints: Vec<_> = callee
-                            .type_hints
-                            .iter()
-                            .filter(|hint| {
-                                // Count how many impls have this type in their context
-                                let matching_count = code_name_contexts
-                                    .iter()
-                                    .filter(|ctx| ctx.type_context.iter().any(|t| t == *hint))
-                                    .count();
-                                // Keep hints that match some but not all impls
-                                matching_count > 0 && matching_count < code_name_contexts.len()
-                            })
-                            .collect();
-
-                        let matched: Vec<_> = if !discriminating_hints.is_empty() {
-                            // Use discriminating hints to filter
-                            code_name_contexts
-                                .iter()
-                                .filter(|ctx| {
-                                    discriminating_hints
-                                        .iter()
-                                        .any(|hint| ctx.type_context.iter().any(|t| t == *hint))
-                                })
-                                .collect()
-                        } else {
-                            // Fallback: use all hints
-                            code_name_contexts
-                                .iter()
-                                .filter(|ctx| {
-                                    callee.type_hints.iter().any(|hint| {
-                                        ctx.type_context
-                                            .iter()
-                                            .any(|t| t.contains(hint) || hint.contains(t))
-                                    })
-                                })
-                                .collect()
-                        };
-
-                        if matched.len() == 1 {
-                            // Found exactly one match - use it
-                            let dep_code_name = matched[0].code_name.clone();
-                            dependencies.insert(dep_code_name.clone());
-                            if let Some(loc) = location.clone() {
-                                dependencies_with_locations.push(DependencyWithLocation {
-                                    code_name: dep_code_name,
-                                    location: loc,
-                                    line: call_line_1based,
-                                });
-                            }
-                        } else {
-                            // Still ambiguous - include all
-                            for ctx in code_name_contexts {
-                                dependencies.insert(ctx.code_name.clone());
-                                if let Some(loc) = location.clone() {
-                                    dependencies_with_locations.push(DependencyWithLocation {
-                                        code_name: ctx.code_name.clone(),
-                                        location: loc,
-                                        line: call_line_1based,
-                                    });
-                                }
-                            }
-                        }
-                    } else {
-                        // No type hints - include all possible implementations
-                        for ctx in code_name_contexts {
-                            dependencies.insert(ctx.code_name.clone());
-                            if let Some(loc) = location.clone() {
-                                dependencies_with_locations.push(DependencyWithLocation {
-                                    code_name: ctx.code_name.clone(),
-                                    location: loc,
-                                    line: call_line_1based,
-                                });
-                            }
-                        }
-                    }
-                } else {
-                    // External function - use the raw symbol conversion
-                    let display_name = symbol_to_display_name
-                        .get(&callee.symbol)
-                        .cloned()
-                        .unwrap_or_else(|| "unknown".to_string());
-                    let dep_path = symbol_to_code_name(&callee.symbol, &display_name, None, None);
-                    dependencies.insert(dep_path.clone());
-                    if let Some(loc) = location {
+                for dep_code_name in dep_code_names {
+                    if with_locations {
                         dependencies_with_locations.push(DependencyWithLocation {
-                            code_name: dep_path,
-                            location: loc,
-                            line: call_line_1based,
+                            code_name: dep_code_name.clone(),
+                            location: classify_call_location(
+                                callee.line,
+                                data.requires_range,
+                                data.ensures_range,
+                            ),
+                            line: (callee.line + 1) as usize,
                         });
                     }
+                    dependencies.insert(dep_code_name);
                 }
             }
 
@@ -1803,6 +1074,28 @@ fn extract_display_name_from_code_name(code_name: &str) -> String {
         .or_else(|| without_parens.rsplit_once('/').map(|(_, n)| n))
         .unwrap_or(without_parens);
     name.to_string()
+}
+
+/// Whether `code_name` is the method `method` owned by `owner`, where the owner
+/// is the impl's Self type or trait (`impl#[Owner][..]method()`,
+/// `impl#[..][Owner<..>]method()`) or the trait of a trait method declaration
+/// (`Owner#method()`). Generic arguments, references and paths are ignored.
+#[must_use]
+pub fn code_name_has_owner_and_method(code_name: &str, owner: &str, method: &str) -> bool {
+    if extract_display_name_from_code_name(code_name) != method {
+        return false;
+    }
+    match parse_impl_segment(code_name) {
+        Some(seg) => {
+            bare_type_name(seg.self_type) == owner
+                || seg.trait_type.is_some_and(|t| bare_type_name(t) == owner)
+        }
+        None => code_name
+            .rsplit('/')
+            .next()
+            .and_then(|last| last.split_once('#'))
+            .is_some_and(|(o, _)| o == owner),
+    }
 }
 
 /// Normalize a code_name by stripping a trailing dot if present.
@@ -2446,10 +1739,8 @@ mod tests {
     // =========================================================================
 
     #[test]
-    fn test_enrich_impl_method() {
-        // Trait impl: Type#Trait<Args>#method()
-        let symbol =
-            "rust-analyzer cargo curve25519-dalek 4.1.3 edwards/CompressedEdwardsY#ConstantTimeEq<&CompressedEdwardsY>#ct_eq().";
+    fn test_enrich_trait_impl() {
+        let symbol = "rust-analyzer cargo curve25519-dalek 4.1.3 edwards/impl#[CompressedEdwardsY][ConstantTimeEq]ct_eq().";
         assert_eq!(
             enrich_display_name(symbol, "ct_eq"),
             "CompressedEdwardsY::ct_eq"
@@ -2457,20 +1748,14 @@ mod tests {
     }
 
     #[test]
-    fn test_enrich_borrowed_self() {
-        // Borrowed self: &Type#Type<Ret>#method()
-        let symbol =
-            "rust-analyzer cargo curve25519-dalek 4.1.3 edwards/&CompressedEdwardsY#CompressedEdwardsY<Option<EdwardsPoint>>#decompress().";
-        assert_eq!(
-            enrich_display_name(symbol, "decompress"),
-            "CompressedEdwardsY::decompress"
-        );
+    fn test_enrich_borrowed_self_trait_impl() {
+        let symbol = "rust-analyzer cargo curve25519-dalek 4.1.3 montgomery/impl#[`&MontgomeryPoint`][`Mul<&Scalar>`]mul().";
+        assert_eq!(enrich_display_name(symbol, "mul"), "MontgomeryPoint::mul");
     }
 
     #[test]
     fn test_enrich_inherent_impl() {
-        // Inherent impl: Type#method()
-        let symbol = "rust-analyzer cargo curve25519-dalek 4.1.3 field/FieldElement51#square().";
+        let symbol = "rust-analyzer cargo curve25519-dalek 4.1.3 backend/serial/u64/field/impl#[FieldElement51]square().";
         assert_eq!(
             enrich_display_name(symbol, "square"),
             "FieldElement51::square"
@@ -2478,68 +1763,218 @@ mod tests {
     }
 
     #[test]
-    fn test_enrich_free_function_unchanged() {
-        // Free function: no '#', keep bare name
-        let symbol =
-            "rust-analyzer cargo curve25519-dalek 4.1.3 ristretto_specs/specs/spec_ristretto_decompress().";
+    fn test_enrich_generic_and_path_qualified_self() {
+        let generic = "rust-analyzer cargo curve25519-dalek 4.1.3 window/impl#[`NafLookupTable5<ProjectiveNielsPoint>`][`From<&'a EdwardsPoint>`]from().";
         assert_eq!(
-            enrich_display_name(symbol, "spec_ristretto_decompress"),
-            "spec_ristretto_decompress"
+            enrich_display_name(generic, "from"),
+            "NafLookupTable5::from"
+        );
+        let alias = "rust-analyzer cargo curve25519-dalek 4.1.3 field/impl#[`crate::lizard::lizard_constants::FieldElement51`]is_zero().";
+        assert_eq!(
+            enrich_display_name(alias, "is_zero"),
+            "FieldElement51::is_zero"
         );
     }
 
     #[test]
-    fn test_enrich_trait_impl_add() {
-        // Trait impl: &EdwardsPoint#Add<&EdwardsPoint>#add()
-        let symbol =
-            "rust-analyzer cargo curve25519-dalek 4.1.3 edwards/&EdwardsPoint#Add<&EdwardsPoint>#add().";
-        assert_eq!(enrich_display_name(symbol, "add"), "EdwardsPoint::add");
+    fn test_enrich_trait_method_declaration() {
+        let symbol = "rust-analyzer cargo core https://github.com/rust-lang/rust/library/core cmp/PartialEq#eq().";
+        assert_eq!(enrich_display_name(symbol, "eq"), "PartialEq::eq");
+    }
+
+    #[test]
+    fn test_enrich_free_function_unchanged() {
+        let symbol = "rust-analyzer cargo curve25519-dalek 4.1.3 lemmas/field_lemmas/lemma_foo().";
+        assert_eq!(enrich_display_name(symbol, "lemma_foo"), "lemma_foo");
     }
 
     #[test]
     fn test_enrich_short_symbol_unchanged() {
-        // Symbols with fewer than 5 space-separated parts are returned unchanged
-        let symbol = "short symbol";
-        assert_eq!(enrich_display_name(symbol, "something"), "something");
-    }
-
-    #[test]
-    fn test_enrich_no_prefix_fallback() {
-        // Symbol without the expected prefix still works by splitting on spaces
-        let symbol = "other-tool cargo crate 1.0 module/Type#method().";
-        assert_eq!(enrich_display_name(symbol, "method"), "Type::method");
+        assert_eq!(enrich_display_name("short", "foo"), "foo");
     }
 
     // =========================================================================
-    // extract_function_name_from_symbol tests
+    // symbol_to_code_name / parse_impl_segment / strip_lifetimes tests
     // =========================================================================
 
     #[test]
-    fn test_extract_function_name_method() {
+    fn test_symbol_to_code_name_is_syntactic() {
         assert_eq!(
-            extract_function_name_from_symbol(
-                "rust-analyzer cargo x25519-dalek 2.0.1 x25519/StaticSecret#diffie_hellman()."
+            symbol_to_code_name(
+                "rust-analyzer cargo curve25519-dalek 4.1.3 montgomery/impl#[`&MontgomeryPoint`][`Mul<&Scalar>`]mul().",
+                None
             ),
-            "diffie_hellman"
+            "probe:curve25519-dalek/4.1.3/montgomery/impl#[`&MontgomeryPoint`][`Mul<&Scalar>`]mul()"
+        );
+        assert_eq!(
+            symbol_to_code_name(
+                "rust-analyzer cargo curve25519-dalek 4.1.3 lemmas/common_lemmas/mul_lemmas/lemma_mul_distributive_3_terms().",
+                None
+            ),
+            "probe:curve25519-dalek/4.1.3/lemmas/common_lemmas/mul_lemmas/lemma_mul_distributive_3_terms()"
         );
     }
 
     #[test]
-    fn test_extract_function_name_free_function() {
+    fn test_symbol_to_code_name_strips_lifetimes_and_adds_line() {
         assert_eq!(
-            extract_function_name_from_symbol("rust-analyzer cargo core 1.0.0 mem/swap()."),
-            "swap"
+            symbol_to_code_name(
+                "rust-analyzer cargo curve25519-dalek 4.1.3 window/impl#[`NafLookupTable5<ProjectiveNielsPoint>`][`From<&'a EdwardsPoint>`]from().",
+                Some(798)
+            ),
+            "probe:curve25519-dalek/4.1.3/window/impl#[`NafLookupTable5<ProjectiveNielsPoint>`][`From<&EdwardsPoint>`]from()@798"
         );
     }
 
     #[test]
-    fn test_extract_function_name_trait_impl() {
+    fn test_symbol_to_code_name_external() {
         assert_eq!(
-            extract_function_name_from_symbol(
-                "rust-analyzer cargo curve25519-dalek 4.1.3 edwards/CompressedEdwardsY#ConstantTimeEq#ct_eq()."
+            symbol_to_code_name(
+                "rust-analyzer cargo core https://github.com/rust-lang/rust/library/core array/impl#[`[T; N]`][Clone]clone().",
+                None
             ),
-            "ct_eq"
+            "probe:core/https://github.com/rust-lang/rust/library/core/array/impl#[`[T;/N]`][Clone]clone()"
         );
+    }
+
+    #[test]
+    fn test_strip_lifetimes() {
+        assert_eq!(
+            strip_lifetimes("`From<&'a EdwardsPoint>`"),
+            "`From<&EdwardsPoint>`"
+        );
+        assert_eq!(strip_lifetimes("`Foo<'a, T>`"), "`Foo<T>`");
+        assert_eq!(strip_lifetimes("`Foo<T, 'a>`"), "`Foo<T>`");
+        assert_eq!(strip_lifetimes("`Foo<'a>`"), "`Foo`");
+        assert_eq!(strip_lifetimes("`&'b mut Bar`"), "`&mut Bar`");
+        assert_eq!(strip_lifetimes("module/free_fn()"), "module/free_fn()");
+    }
+
+    #[test]
+    fn test_parse_impl_segment() {
+        assert_eq!(
+            parse_impl_segment("montgomery/impl#[`&MontgomeryPoint`][`Mul<&Scalar>`]mul()"),
+            Some(ImplSegment {
+                self_type: "&MontgomeryPoint",
+                trait_type: Some("Mul<&Scalar>"),
+            })
+        );
+        assert_eq!(
+            parse_impl_segment("field/impl#[FieldElement51]square()"),
+            Some(ImplSegment {
+                self_type: "FieldElement51",
+                trait_type: None,
+            })
+        );
+        assert_eq!(
+            parse_impl_segment("core/array/impl#[`[T; 32]`][Default]default()"),
+            Some(ImplSegment {
+                self_type: "[T; 32]",
+                trait_type: Some("Default"),
+            })
+        );
+        assert_eq!(parse_impl_segment("scalar/free_fn()"), None);
+    }
+
+    #[test]
+    fn test_bare_type_name() {
+        assert_eq!(
+            bare_type_name("&'a mut NafLookupTable5<T>"),
+            "NafLookupTable5"
+        );
+        assert_eq!(bare_type_name("&Scalar"), "Scalar");
+        assert_eq!(
+            bare_type_name("crate::lizard::lizard_constants::FieldElement51"),
+            "FieldElement51"
+        );
+    }
+
+    #[test]
+    fn test_code_name_has_owner_and_method() {
+        let imp = "probe:subtle/2.6.1/impl#[u64][ConditionallySelectable]conditional_swap()";
+        assert!(code_name_has_owner_and_method(
+            imp,
+            "u64",
+            "conditional_swap"
+        ));
+        assert!(code_name_has_owner_and_method(
+            imp,
+            "ConditionallySelectable",
+            "conditional_swap"
+        ));
+        assert!(!code_name_has_owner_and_method(
+            imp,
+            "u32",
+            "conditional_swap"
+        ));
+        assert!(!code_name_has_owner_and_method(
+            imp,
+            "u64",
+            "conditional_assign"
+        ));
+        let decl = "probe:subtle/2.6.1/ConditionallySelectable#conditional_swap()";
+        assert!(code_name_has_owner_and_method(
+            decl,
+            "ConditionallySelectable",
+            "conditional_swap"
+        ));
+        assert!(!code_name_has_owner_and_method(
+            decl,
+            "u64",
+            "conditional_swap"
+        ));
+        let generic = "probe:subtle/2.6.1/impl#[Choice][`From<u8>`]from()";
+        assert!(code_name_has_owner_and_method(generic, "Choice", "from"));
+        assert!(code_name_has_owner_and_method(generic, "From", "from"));
+    }
+
+    fn index_with_symbols(symbols: &[&str]) -> ScipIndex {
+        ScipIndex {
+            metadata: Metadata {
+                tool_info: ScipToolInfo {
+                    name: "verus-analyzer".to_string(),
+                    version: "0".to_string(),
+                },
+                project_root: String::new(),
+                text_document_encoding: 0,
+            },
+            documents: vec![Document {
+                language: "rust".to_string(),
+                relative_path: "src/lib.rs".to_string(),
+                occurrences: vec![],
+                symbols: symbols
+                    .iter()
+                    .map(|s| Symbol {
+                        symbol: s.to_string(),
+                        kind: 6,
+                        display_name: None,
+                        documentation: None,
+                        signature_documentation: SignatureDocumentation {
+                            language: "rust".to_string(),
+                            text: String::new(),
+                        },
+                        enclosing_symbol: None,
+                    })
+                    .collect(),
+            }],
+        }
+    }
+
+    #[test]
+    fn test_uses_legacy_symbol_format() {
+        let legacy = index_with_symbols(&[
+            "rust-analyzer cargo c 1.0 montgomery/Mul#mul().",
+            "rust-analyzer cargo c 1.0 lemmas/lemma_foo().",
+        ]);
+        assert!(uses_legacy_symbol_format(&legacy));
+        let current = index_with_symbols(&[
+            "rust-analyzer cargo c 1.0 montgomery/impl#[`&MontgomeryPoint`][`Mul<&Scalar>`]mul().",
+            "rust-analyzer cargo c 1.0 lemmas/lemma_foo().",
+        ]);
+        assert!(!uses_legacy_symbol_format(&current));
+        let free_functions_only =
+            index_with_symbols(&["rust-analyzer cargo c 1.0 lemmas/lemma_foo()."]);
+        assert!(!uses_legacy_symbol_format(&free_functions_only));
     }
 
     // =========================================================================
@@ -2647,13 +2082,13 @@ mod tests {
     }
 
     #[test]
-    fn test_fallback_code_name_no_trailing_dot() {
+    fn test_code_name_no_trailing_dot() {
         let symbol =
             "rust-analyzer cargo x25519-dalek 2.0.1 x25519/impl#[StaticSecret]diffie_hellman().";
-        let code_name = symbol_to_code_name(symbol, "wrong_name_triggers_fallback", None, None);
+        let code_name = symbol_to_code_name(symbol, None);
         assert!(
             !code_name.ends_with('.'),
-            "Fallback code_name should not end with '.': {}",
+            "code_name should not end with '.': {}",
             code_name
         );
     }
@@ -3043,66 +2478,40 @@ mod tests {
     // =========================================================================
 
     #[test]
-    fn test_trait_impl_add() {
+    fn test_trait_impl_borrowed_self() {
         assert!(is_trait_impl_code_name(
-            "probe:crate/1.0/edwards/EdwardsPoint#Add<&EdwardsPoint>#add()"
+            "probe:crate/1.0/montgomery/impl#[`&MontgomeryPoint`][`Mul<&Scalar>`]mul()"
         ));
     }
 
     #[test]
-    fn test_trait_impl_mul() {
+    fn test_trait_impl_generic_self() {
         assert!(is_trait_impl_code_name(
-            "probe:crate/1.0/montgomery/MontgomeryPoint#Mul<&Scalar>#mul()"
+            "probe:crate/1.0/window/impl#[`NafLookupTable5<ProjectiveNielsPoint>`][`From<&EdwardsPoint>`]from()"
         ));
     }
 
     #[test]
-    fn test_trait_impl_from() {
+    fn test_trait_impl_plain_trait() {
         assert!(is_trait_impl_code_name(
-            "probe:crate/1.0/window/NafLookupTable5<ProjectiveNielsPoint>#From<&EdwardsPoint>#from()"
+            "probe:crate/1.0/window/impl#[LookupTable][Clone]clone()"
+        ));
+    }
+
+    #[test]
+    fn test_trait_impl_with_line_suffix() {
+        assert!(is_trait_impl_code_name(
+            "probe:crate/1.0/scalar/impl#[Scalar][`FromSpecImpl<u8>`]from_spec()@1080"
         ));
     }
 
     #[test]
     fn test_inherent_impl_not_trait() {
         assert!(!is_trait_impl_code_name(
-            "probe:crate/1.0/montgomery/MontgomeryPoint#ct_eq()"
+            "probe:crate/1.0/backend/serial/u64/field/impl#[FieldElement51]square()"
         ));
-    }
-
-    #[test]
-    fn test_inherent_impl_two_hashes_not_trait() {
-        // verus-analyzer encodes inherent impls as SelfType#SelfType<Ret>#method()
         assert!(!is_trait_impl_code_name(
-            "probe:crate/1.0/scalar/&Scalar#Scalar<Scalar>#reduce()"
-        ));
-    }
-
-    #[test]
-    fn test_inherent_impl_different_return_type_not_trait() {
-        assert!(!is_trait_impl_code_name(
-            "probe:crate/1.0/scalar/&Scalar#Scalar<Choice>#is_canonical()"
-        ));
-    }
-
-    #[test]
-    fn test_inherent_impl_ref_self_not_trait() {
-        assert!(!is_trait_impl_code_name(
-            "probe:crate/1.0/edwards/&EdwardsPoint#EdwardsPoint<EdwardsPoint>#double()"
-        ));
-    }
-
-    #[test]
-    fn test_inherent_impl_generic_self_not_trait() {
-        assert!(!is_trait_impl_code_name(
-            "probe:crate/1.0/window/&LookupTable<AffineNielsPoint>#LookupTable<i8>#select()"
-        ));
-    }
-
-    #[test]
-    fn test_inherent_impl_mut_ref_not_trait() {
-        assert!(!is_trait_impl_code_name(
-            "probe:crate/1.0/scalar/&mut/Scalar52#Scalar52<u64>#conditional_add_l()"
+            "probe:crate/1.0/field/impl#[`crate::lizard::lizard_constants::FieldElement51`]is_zero()"
         ));
     }
 
@@ -3112,43 +2521,15 @@ mod tests {
     }
 
     #[test]
-    fn test_trait_impl_with_line_suffix() {
-        assert!(is_trait_impl_code_name(
-            "probe:crate/1.0/edwards/EdwardsPoint#Add<&EdwardsPoint>#add()@123"
-        ));
-    }
-
-    #[test]
-    fn test_no_probe_prefix() {
-        assert!(is_trait_impl_code_name(
-            "crate/1.0/edwards/EdwardsPoint#Add#add()"
+    fn test_trait_method_declaration_not_trait_impl() {
+        assert!(!is_trait_impl_code_name(
+            "probe:core/1.0/cmp/PartialEq#eq()"
         ));
     }
 
     #[test]
     fn test_empty_string_not_trait() {
         assert!(!is_trait_impl_code_name(""));
-    }
-
-    #[test]
-    fn test_trait_impl_display() {
-        assert!(is_trait_impl_code_name(
-            "probe:crate/1.0/DalekBits#Display<&Formatter<'_>>#fmt()"
-        ));
-    }
-
-    #[test]
-    fn test_trait_impl_clone() {
-        assert!(is_trait_impl_code_name(
-            "probe:crate/1.0/window/LookupTable#Clone#clone()"
-        ));
-    }
-
-    #[test]
-    fn test_trait_impl_index() {
-        assert!(is_trait_impl_code_name(
-            "probe:crate/1.0/scalar/Scalar52#Index<usize>#index()"
-        ));
     }
 
     // =========================================================================
@@ -3244,7 +2625,7 @@ mod tests {
     fn test_classify_public_api_trait_impl_in_pub_module() {
         let mut map = HashMap::new();
         map.insert("src/lib.rs".to_string(), mi(true));
-        let code_name = "probe-verus://mycrate/0.1.0/Counter#Add<Counter>#add()";
+        let code_name = "probe:mycrate/0.1.0/impl#[Counter][`Add<Counter>`]add()";
         assert_eq!(
             classify_public_api(false, code_name, "src/lib.rs", DeclKind::Exec, &map, true),
             Some(true)
@@ -3255,7 +2636,7 @@ mod tests {
     fn test_classify_public_api_trait_impl_in_private_module() {
         let mut map = HashMap::new();
         map.insert("src/internal.rs".to_string(), mi(false));
-        let code_name = "probe-verus://mycrate/0.1.0/Counter#Add<Counter>#add()";
+        let code_name = "probe:mycrate/0.1.0/impl#[Counter][`Add<Counter>`]add()";
         assert_eq!(
             classify_public_api(
                 false,

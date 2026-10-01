@@ -6,7 +6,7 @@ use crate::{
     metadata::{gather_metadata, get_default_output_path, wrap_in_envelope, AtomizeInternalConfig},
     parse_scip_json, public_api, resolve_package_root, resolve_workspace_root,
     scip_cache::{Analyzer, ScipCache},
-    AtomWithLines,
+    uses_legacy_symbol_format, AtomWithLines, ScipIndex,
 };
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -59,8 +59,9 @@ pub fn cmd_atomize(
 
     let scip_index = parse_scip_json(json_path.to_string_lossy().as_ref())
         .map_err(|e| format!("Failed to parse SCIP JSON: {}", e))?;
+    check_symbol_format(&scip_index)?;
 
-    let (call_graph, symbol_to_display_name) = build_call_graph(&scip_index);
+    let call_graph = build_call_graph(&scip_index);
     println!("  ✓ Call graph built with {} functions", call_graph.len());
     println!();
 
@@ -83,7 +84,6 @@ pub fn cmd_atomize(
 
     let atoms = convert_to_atoms_with_parsed_spans(
         &call_graph,
-        &symbol_to_display_name,
         &pkg_root,
         with_locations,
         &file_module_pub,
@@ -200,6 +200,18 @@ fn validate_project(project_path: &Path) -> Result<(), String> {
 }
 
 /// Get the SCIP JSON path, generating if necessary.
+/// Reject SCIP indexes produced by verus-analyzer releases older than 2026-08-22,
+/// whose symbols omit Self types and collide across trait impls.
+fn check_symbol_format(scip_index: &ScipIndex) -> Result<(), String> {
+    if uses_legacy_symbol_format(scip_index) {
+        return Err("SCIP index uses the legacy verus-analyzer symbol format \
+             (`Type#Trait#method()`). Upgrade verus-analyzer to 2026-08-22 or later \
+             and rerun with --regenerate-scip."
+            .to_string());
+    }
+    Ok(())
+}
+
 fn get_scip_json(cache: &mut ScipCache, regenerate: bool) -> Result<PathBuf, String> {
     if cache.has_current_cached_json() && !regenerate {
         println!(
@@ -285,8 +297,9 @@ pub fn atomize_internal(config: &AtomizeInternalConfig) -> Result<usize, String>
 
     let scip_index = parse_scip_json(json_path.to_string_lossy().as_ref())
         .map_err(|e| format!("Failed to parse SCIP JSON: {}", e))?;
+    check_symbol_format(&scip_index)?;
 
-    let (call_graph, symbol_to_display_name) = build_call_graph(&scip_index);
+    let call_graph = build_call_graph(&scip_index);
 
     let pkg_root = resolve_package_root(&project_path, config.package);
     let file_module_pub = build_module_visibility_map(&pkg_root);
@@ -300,7 +313,6 @@ pub fn atomize_internal(config: &AtomizeInternalConfig) -> Result<usize, String>
 
     let atoms = convert_to_atoms_with_parsed_spans(
         &call_graph,
-        &symbol_to_display_name,
         &pkg_root,
         config.with_locations,
         &file_module_pub,

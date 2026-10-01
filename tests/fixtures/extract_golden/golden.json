@@ -1,27 +1,100 @@
 {
   "data": {
-    "probe:verus-micro/0.1.0/Counter#Add<Counter>#add()": {
-      "code-module": "",
-      "code-path": "src/lib.rs",
+    "probe:core/https://github.com/rust-lang/rust/library/core/cmp/PartialOrd#gt()": {
+      "code-module": "/github.com/rust-lang/rust/library/core/cmp",
+      "code-path": "",
       "code-text": {
-        "lines-end": 47,
-        "lines-start": 45
+        "lines-end": 0,
+        "lines-start": 0
       },
       "dependencies": [],
-      "display-name": "Counter::add",
-      "has-body": true,
-      "is-cfg-gated": false,
-      "untracked": false,
-      "is-external": false,
-      "is-public": false,
-      "is-public-api": true,
+      "display-name": "gt",
       "kind": "exec",
       "language": "rust",
-      "primary-spec": "",
-      "rust-qualified-name": "verus_micro::Counter::add"
+      "untracked": true
+    },
+    "probe:core/https://github.com/rust-lang/rust/library/core/cmp/PartialOrd#lt()": {
+      "code-module": "/github.com/rust-lang/rust/library/core/cmp",
+      "code-path": "",
+      "code-text": {
+        "lines-end": 0,
+        "lines-start": 0
+      },
+      "dependencies": [],
+      "display-name": "lt",
+      "kind": "exec",
+      "language": "rust",
+      "untracked": true
+    },
+    "probe:core/https://github.com/rust-lang/rust/library/core/cmp/impls/impl#[u32][`PartialEq<Self>`]eq()": {
+      "code-module": "/github.com/rust-lang/rust/library/core/cmp/impls",
+      "code-path": "",
+      "code-text": {
+        "lines-end": 0,
+        "lines-start": 0
+      },
+      "dependencies": [],
+      "display-name": "eq",
+      "kind": "exec",
+      "language": "rust",
+      "untracked": true
+    },
+    "probe:core/https://github.com/rust-lang/rust/library/core/ops/arith/Add#add()": {
+      "code-module": "/github.com/rust-lang/rust/library/core/ops/arith",
+      "code-path": "",
+      "code-text": {
+        "lines-end": 0,
+        "lines-start": 0
+      },
+      "dependencies": [],
+      "display-name": "add",
+      "kind": "exec",
+      "language": "rust",
+      "untracked": true
+    },
+    "probe:core/https://github.com/rust-lang/rust/library/core/ops/arith/Mul#mul()": {
+      "code-module": "/github.com/rust-lang/rust/library/core/ops/arith",
+      "code-path": "",
+      "code-text": {
+        "lines-end": 0,
+        "lines-start": 0
+      },
+      "dependencies": [],
+      "display-name": "mul",
+      "kind": "exec",
+      "language": "rust",
+      "untracked": true
+    },
+    "probe:core/https://github.com/rust-lang/rust/library/core/ops/arith/impl#[u32][`Add<Self>`]add()": {
+      "code-module": "/github.com/rust-lang/rust/library/core/ops/arith",
+      "code-path": "",
+      "code-text": {
+        "lines-end": 0,
+        "lines-start": 0
+      },
+      "dependencies": [],
+      "display-name": "add",
+      "kind": "exec",
+      "language": "rust",
+      "untracked": true
+    },
+    "probe:core/https://github.com/rust-lang/rust/library/core/ops/arith/impl#[u32][`Mul<Self>`]mul()": {
+      "code-module": "/github.com/rust-lang/rust/library/core/ops/arith",
+      "code-path": "",
+      "code-text": {
+        "lines-end": 0,
+        "lines-start": 0
+      },
+      "dependencies": [],
+      "display-name": "mul",
+      "kind": "exec",
+      "language": "rust",
+      "untracked": true
     },
     "probe:verus-micro/0.1.0/checked_add()": {
       "body-dependencies": [
+        "probe:core/https://github.com/rust-lang/rust/library/core/cmp/impls/impl#[u32][`PartialEq<Self>`]eq()",
+        "probe:core/https://github.com/rust-lang/rust/library/core/ops/arith/impl#[u32][`Add<Self>`]add()",
         "probe:verus-micro/0.1.0/is_positive()"
       ],
       "code-module": "",
@@ -31,6 +104,8 @@
         "lines-start": 18
       },
       "dependencies": [
+        "probe:core/https://github.com/rust-lang/rust/library/core/cmp/impls/impl#[u32][`PartialEq<Self>`]eq()",
+        "probe:core/https://github.com/rust-lang/rust/library/core/ops/arith/impl#[u32][`Add<Self>`]add()",
         "probe:verus-micro/0.1.0/is_positive()"
       ],
       "dependencies-with-locations": [
@@ -38,22 +113,46 @@
           "code-name": "probe:verus-micro/0.1.0/is_positive()",
           "line": 20,
           "location": "inner"
+        },
+        {
+          "code-name": "probe:core/https://github.com/rust-lang/rust/library/core/ops/arith/impl#[u32][`Add<Self>`]add()",
+          "line": 21,
+          "location": "inner"
+        },
+        {
+          "code-name": "probe:core/https://github.com/rust-lang/rust/library/core/cmp/impls/impl#[u32][`PartialEq<Self>`]eq()",
+          "line": 23,
+          "location": "inner"
+        },
+        {
+          "code-name": "probe:core/https://github.com/rust-lang/rust/library/core/ops/arith/impl#[u32][`Add<Self>`]add()",
+          "line": 23,
+          "location": "inner"
+        },
+        {
+          "code-name": "probe:core/https://github.com/rust-lang/rust/library/core/ops/arith/impl#[u32][`Add<Self>`]add()",
+          "line": 25,
+          "location": "inner"
         }
       ],
       "display-name": "checked_add",
       "has-body": true,
       "is-cfg-gated": false,
-      "untracked": false,
       "is-external": false,
       "is-public": false,
       "is-public-api": false,
       "kind": "exec",
       "language": "rust",
       "primary-spec": "",
-      "rust-qualified-name": "verus_micro::checked_add"
+      "rust-qualified-name": "verus_micro::checked_add",
+      "untracked": false
     },
     "probe:verus-micro/0.1.0/double_checked()": {
       "body-dependencies": [
+        "probe:core/https://github.com/rust-lang/rust/library/core/cmp/PartialOrd#lt()",
+        "probe:core/https://github.com/rust-lang/rust/library/core/cmp/impls/impl#[u32][`PartialEq<Self>`]eq()",
+        "probe:core/https://github.com/rust-lang/rust/library/core/ops/arith/Mul#mul()",
+        "probe:core/https://github.com/rust-lang/rust/library/core/ops/arith/impl#[u32][`Mul<Self>`]mul()",
         "probe:verus-micro/0.1.0/checked_add()",
         "probe:verus-micro/0.1.0/is_positive()"
       ],
@@ -64,6 +163,10 @@
         "lines-start": 28
       },
       "dependencies": [
+        "probe:core/https://github.com/rust-lang/rust/library/core/cmp/PartialOrd#lt()",
+        "probe:core/https://github.com/rust-lang/rust/library/core/cmp/impls/impl#[u32][`PartialEq<Self>`]eq()",
+        "probe:core/https://github.com/rust-lang/rust/library/core/ops/arith/Mul#mul()",
+        "probe:core/https://github.com/rust-lang/rust/library/core/ops/arith/impl#[u32][`Mul<Self>`]mul()",
         "probe:verus-micro/0.1.0/checked_add()",
         "probe:verus-micro/0.1.0/is_positive()"
       ],
@@ -71,6 +174,26 @@
         {
           "code-name": "probe:verus-micro/0.1.0/is_positive()",
           "line": 30,
+          "location": "inner"
+        },
+        {
+          "code-name": "probe:core/https://github.com/rust-lang/rust/library/core/cmp/PartialOrd#lt()",
+          "line": 31,
+          "location": "inner"
+        },
+        {
+          "code-name": "probe:core/https://github.com/rust-lang/rust/library/core/ops/arith/Mul#mul()",
+          "line": 31,
+          "location": "inner"
+        },
+        {
+          "code-name": "probe:core/https://github.com/rust-lang/rust/library/core/cmp/impls/impl#[u32][`PartialEq<Self>`]eq()",
+          "line": 33,
+          "location": "inner"
+        },
+        {
+          "code-name": "probe:core/https://github.com/rust-lang/rust/library/core/ops/arith/impl#[u32][`Mul<Self>`]mul()",
+          "line": 33,
           "location": "inner"
         },
         {
@@ -82,37 +205,82 @@
       "display-name": "double_checked",
       "has-body": true,
       "is-cfg-gated": false,
-      "untracked": false,
       "is-external": false,
       "is-public": false,
       "is-public-api": false,
       "kind": "exec",
       "language": "rust",
       "primary-spec": "",
-      "rust-qualified-name": "verus_micro::double_checked"
+      "rust-qualified-name": "verus_micro::double_checked",
+      "untracked": false
+    },
+    "probe:verus-micro/0.1.0/impl#[Counter][`Add<Self>`]add()": {
+      "body-dependencies": [
+        "probe:core/https://github.com/rust-lang/rust/library/core/ops/arith/impl#[u32][`Add<Self>`]add()"
+      ],
+      "code-module": "",
+      "code-path": "src/lib.rs",
+      "code-text": {
+        "lines-end": 47,
+        "lines-start": 45
+      },
+      "dependencies": [
+        "probe:core/https://github.com/rust-lang/rust/library/core/ops/arith/impl#[u32][`Add<Self>`]add()"
+      ],
+      "dependencies-with-locations": [
+        {
+          "code-name": "probe:core/https://github.com/rust-lang/rust/library/core/ops/arith/impl#[u32][`Add<Self>`]add()",
+          "line": 46,
+          "location": "inner"
+        }
+      ],
+      "display-name": "Counter::add",
+      "has-body": true,
+      "is-cfg-gated": false,
+      "is-external": false,
+      "is-public": false,
+      "is-public-api": true,
+      "kind": "exec",
+      "language": "rust",
+      "primary-spec": "",
+      "rust-qualified-name": "verus_micro::Counter::add",
+      "untracked": false
     },
     "probe:verus-micro/0.1.0/is_positive()": {
+      "body-dependencies": [
+        "probe:core/https://github.com/rust-lang/rust/library/core/cmp/PartialOrd#gt()"
+      ],
       "code-module": "",
       "code-path": "src/lib.rs",
       "code-text": {
         "lines-end": 5,
         "lines-start": 5
       },
-      "dependencies": [],
+      "dependencies": [
+        "probe:core/https://github.com/rust-lang/rust/library/core/cmp/PartialOrd#gt()"
+      ],
+      "dependencies-with-locations": [
+        {
+          "code-name": "probe:core/https://github.com/rust-lang/rust/library/core/cmp/PartialOrd#gt()",
+          "line": 6,
+          "location": "inner"
+        }
+      ],
       "display-name": "is_positive",
       "has-body": true,
       "is-cfg-gated": false,
-      "untracked": false,
       "is-external": false,
       "is-public": false,
       "is-public-api": false,
       "kind": "exec",
       "language": "rust",
       "primary-spec": "",
-      "rust-qualified-name": "verus_micro::is_positive"
+      "rust-qualified-name": "verus_micro::is_positive",
+      "untracked": false
     },
     "probe:verus-micro/0.1.0/positive_sum()": {
       "body-dependencies": [
+        "probe:core/https://github.com/rust-lang/rust/library/core/ops/arith/Add#add()",
         "probe:verus-micro/0.1.0/is_positive()"
       ],
       "code-module": "",
@@ -122,6 +290,7 @@
         "lines-start": 9
       },
       "dependencies": [
+        "probe:core/https://github.com/rust-lang/rust/library/core/ops/arith/Add#add()",
         "probe:verus-micro/0.1.0/is_positive()"
       ],
       "dependencies-with-locations": [
@@ -136,6 +305,11 @@
           "location": "inner"
         },
         {
+          "code-name": "probe:core/https://github.com/rust-lang/rust/library/core/ops/arith/Add#add()",
+          "line": 14,
+          "location": "inner"
+        },
+        {
           "code-name": "probe:verus-micro/0.1.0/is_positive()",
           "line": 14,
           "location": "inner"
@@ -144,14 +318,14 @@
       "display-name": "positive_sum",
       "has-body": true,
       "is-cfg-gated": false,
-      "untracked": false,
       "is-external": false,
       "is-public": false,
       "is-public-api": false,
       "kind": "exec",
       "language": "rust",
       "primary-spec": "",
-      "rust-qualified-name": "verus_micro::positive_sum"
+      "rust-qualified-name": "verus_micro::positive_sum",
+      "untracked": false
     }
   },
   "schema": "probe-verus/extract",
@@ -163,10 +337,10 @@
     "package-version": "0.1.0",
     "repo": ""
   },
-  "timestamp": "2026-07-10T16:05:47Z",
+  "timestamp": "2026-10-01T19:48:23Z",
   "tool": {
     "command": "extract",
     "name": "probe-verus",
-    "version": "6.11.0"
+    "version": "9.0.0"
   }
 }

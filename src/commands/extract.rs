@@ -100,6 +100,7 @@ pub fn cmd_extract(
     verus_args: Vec<String>,
     with_public_api: bool,
     skip_enrich: bool,
+    output: Option<PathBuf>,
 ) -> Result<(), String> {
     if auto_install {
         eprintln!(
@@ -251,6 +252,7 @@ pub fn cmd_extract(
         merge_proofs,
         &project_path,
         &metadata,
+        output.as_deref(),
     );
     result.trust_base = trust_base;
 
@@ -934,13 +936,15 @@ fn warn_proof_atoms_without_status(unified: &BTreeMap<String, UnifiedAtom>) {
     }
 }
 
-/// Run the merge step: produce unified output.
+/// Run the merge step: produce unified output at `output`, or at the default
+/// `.verilib/probes/verus_<pkg>_<ver>.json` under the project root.
 fn run_unified_merge(
     atoms_path: &Path,
     specs_path: Option<&Path>,
     proofs_path: Option<&Path>,
     project_path: &Path,
     metadata: &ProjectMetadata,
+    output: Option<&Path>,
 ) -> (Option<PathBuf>, Option<TrustBaseSummary>) {
     if !atoms_path.exists() {
         eprintln!("  Warning: skipping unified output (no atoms file)");
@@ -964,7 +968,10 @@ fn run_unified_merge(
                 warn_proof_atoms_without_status(&unified);
             }
             let trust_base = compute_trust_base_summary(&unified);
-            let unified_path = get_default_output_path(project_path, metadata, "");
+            let unified_path = match output {
+                Some(p) => p.to_path_buf(),
+                None => get_default_output_path(project_path, metadata, ""),
+            };
             if let Some(parent) = unified_path.parent() {
                 if let Err(e) = std::fs::create_dir_all(parent) {
                     eprintln!("  Warning: Could not create output directory: {}", e);

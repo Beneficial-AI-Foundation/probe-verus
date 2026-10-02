@@ -33,6 +33,7 @@ probe-verus extract <PROJECT_PATH> [OPTIONS]
 | `--verus-args <ARGS>...` | | Extra arguments passed to cargo verus |
 | `--with-public-api` | | Use `cargo public-api` to override `is-public-api` (requires `cargo-public-api`; see below) |
 | `--skip-enrich` | | Skip the verification status enrichment step (transitive verification propagation) |
+| `--output <FILE>` | `-o` | Where to write the unified output (default: `.verilib/probes/verus_<pkg>_<ver>.json` under the project root). Intermediate `_atoms`/`_specs`/`_proofs` files stay under `.verilib/probes/` |
 
 #### Installing `cargo-public-api` (for `--with-public-api`)
 

@@ -106,6 +106,7 @@ fn extract_backward_compat() {
         vec![], // verus_args
         false,  // with_public_api
         false,  // skip_enrich
+        None,   // output
     )
     .expect("cmd_extract failed");
 

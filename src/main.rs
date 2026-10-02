@@ -381,6 +381,12 @@ enum Commands {
         /// Skip the verification status enrichment step (transitive verification propagation)
         #[arg(long)]
         skip_enrich: bool,
+
+        /// Where to write the unified extract output
+        /// (default: `.verilib/probes/verus_<pkg>_<ver>.json` under the project root).
+        /// Intermediate atoms/specs/proofs files stay under `.verilib/probes/`.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
     },
 }
 
@@ -579,6 +585,7 @@ fn main() {
             verus_args,
             with_public_api,
             skip_enrich,
+            output,
         } => {
             if let Err(e) = cmd_extract(
                 project_path,
@@ -597,6 +604,7 @@ fn main() {
                 verus_args,
                 with_public_api,
                 skip_enrich,
+                output,
             ) {
                 eprintln!("Error: {e}");
                 std::process::exit(1);

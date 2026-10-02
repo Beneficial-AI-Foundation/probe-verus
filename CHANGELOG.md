@@ -10,6 +10,13 @@ what constitutes a breaking change.
 
 ## [Unreleased]
 
+### Added
+- `extract -o/--output <FILE>` chooses where the unified output is written,
+  as `atomize -o` already does. The default stays
+  `.verilib/probes/verus_<pkg>_<ver>.json`; intermediate files are unaffected.
+  Lets callers that need the extract at a fixed path (the probegraph VS Code
+  extension, CI workflows) stop guessing the package name and version.
+
 ## [8.0.1] - 2026-08-04
 
 ### Fixed

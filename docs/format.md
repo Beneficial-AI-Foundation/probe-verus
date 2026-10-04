@@ -82,7 +82,11 @@ Examples:
 - Trait impl: ``probe:curve25519-dalek/4.1.3/scalar/impl#[`&Scalar`][`Add<&Scalar>`]add()``
 
 In the rare case where the analyzer emits the same symbol for several definitions, each
-gets an `@<line>` suffix (e.g. `.../scalar/impl#[Scalar]from_spec()@1080`).
+gets an `@<line>` suffix (e.g. `.../scalar/impl#[Scalar]from_spec()@1080`), or
+`@<path>:<line>:<column>` when definitions share a line. A call to such a symbol cannot be
+resolved to one definition, so it becomes a dependency on every definition sharing the
+symbol (except the caller itself). Their signature metadata is paired by document order,
+which SCIP does not guarantee, so it is approximate.
 
 Functions the analyzer does not index (e.g. in cfg-inactive impls) are added from the
 source parser. Their code-names follow the same shape, with the impl or trait rendered

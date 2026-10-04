@@ -244,35 +244,51 @@ fn bare_type_name(ty: &str) -> &str {
         Some(rest) => rest.split_once(' ').map_or(rest, |(_, t)| t),
         None => ty,
     };
-    let ty = ty.strip_prefix("mut ").unwrap_or(ty);
+    // Code-names turn spaces into `/`, so `mut` may be followed by either.
+    let ty = ty
+        .strip_prefix("mut ")
+        .or_else(|| ty.strip_prefix("mut/"))
+        .unwrap_or(ty);
     let ty = ty.split('<').next().unwrap_or(ty);
     ty.rsplit("::").next().unwrap_or(ty)
 }
 
 /// Remove lifetime parameters from a SCIP symbol, so code_names do not depend
 /// on lifetime names: `` [`From<&'a EdwardsPoint>`] `` -> `` [`From<&EdwardsPoint>`] ``.
-fn strip_lifetimes(s: &str) -> String {
+/// Character literals in const generic arguments (`` `Tag<'a'>` ``) are kept.
+pub(crate) fn strip_lifetimes(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
     let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable();
-    while let Some(c) = chars.next() {
-        let starts_lifetime =
-            c == '\'' && chars.peek().is_some_and(|n| n.is_alphabetic() || *n == '_');
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        let starts_lifetime = c == '\''
+            && chars
+                .get(i + 1)
+                .is_some_and(|n| n.is_alphabetic() || *n == '_');
         if !starts_lifetime {
             out.push(c);
+            i += 1;
             continue;
         }
+        if chars.get(i + 2) == Some(&'\'') {
+            out.extend(&chars[i..i + 3]);
+            i += 3;
+            continue;
+        }
+        i += 1;
         while chars
-            .peek()
+            .get(i)
             .is_some_and(|n| n.is_alphanumeric() || *n == '_')
         {
-            chars.next();
+            i += 1;
         }
         // Drop the separator that followed the lifetime (`'a T`, `'a, T`).
-        if chars.peek() == Some(&',') {
-            chars.next();
+        if chars.get(i) == Some(&',') {
+            i += 1;
         }
-        if chars.peek() == Some(&' ') {
-            chars.next();
+        if chars.get(i) == Some(&' ') {
+            i += 1;
         }
     }
     out.replace(", >", ">").replace("<>", "")
@@ -428,13 +444,14 @@ fn is_function_like(kind: i32) -> bool {
     is_function_like_kind(kind)
 }
 
-/// Create a unique call-graph key for a function definition.
+/// Call-graph key of a function definition: its symbol plus the document and
+/// full range of the defining occurrence.
 ///
 /// SCIP symbols are unique per definition except for a few analyzer bugs
 /// (e.g. spec-only trait impls whose trait is dropped from the symbol), so the
-/// definition line is included to keep such definitions apart.
-fn make_unique_key(symbol: &str, line: i32) -> String {
-    format!("{}@{}", symbol, line)
+/// symbol alone cannot be the key.
+fn make_definition_key(symbol: &str, relative_path: &str, range: &[i32]) -> String {
+    format!("{symbol}@{relative_path}:{range:?}")
 }
 
 /// Derive a Rust-style qualified name from the code-path (file) and SCIP symbol.
@@ -512,99 +529,169 @@ fn enrich_display_name(scip_symbol: &str, base_display_name: &str) -> String {
     base_display_name.to_string()
 }
 
-/// Whether a SCIP index uses the pre-2026-08-22 verus-analyzer symbol format
+/// `rust-analyzer 0.3.N` patch version reported by the first verus-analyzer
+/// release with the rust-analyzer symbol format (2026-08-22). 2026-06-17
+/// reports `0.3.264`.
+pub(crate) const FIRST_CURRENT_FORMAT_ANALYZER_PATCH: u32 = 266;
+
+/// The `N` of a `0.3.N[-suffix]` SCIP tool version, if it has that shape.
+pub(crate) fn analyzer_patch_version(version: &str) -> Option<u32> {
+    let rest = version.strip_prefix("0.3.")?;
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    digits.parse().ok()
+}
+
+/// Why a SCIP index uses the pre-2026-08-22 verus-analyzer symbol format
 /// (`module/Type#Trait#method().`, Self type sometimes missing) instead of the
-/// rust-analyzer format (`module/impl#[Type][Trait]method().`).
+/// rust-analyzer format (`module/impl#[Type][Trait]method().`), or `None` if
+/// nothing points to it.
 ///
 /// probe-verus code_names are derived directly from the symbol, so a legacy
-/// index yields ambiguous and inconsistent code_names.
+/// index yields ambiguous and inconsistent code_names. Evidence, any of which
+/// rejects the index (a mixed index is rejected too):
+/// - the producer reports a `0.3.N` version older than 2026-08-22;
+/// - a function symbol of the form `Type#Trait#method()`;
+/// - a function symbol `Owner#method()` whose owner is defined in the index
+///   and is not a trait. In the current format `Owner#method()` only names a
+///   trait method declaration, so an owner without a symbol record is no
+///   evidence either way.
 #[must_use]
-pub fn uses_legacy_symbol_format(scip_data: &ScipIndex) -> bool {
-    let mut has_method = false;
+pub fn legacy_symbol_format_reason(scip_data: &ScipIndex) -> Option<String> {
+    let tool = &scip_data.metadata.tool_info;
+    if analyzer_patch_version(&tool.version)
+        .is_some_and(|patch| patch < FIRST_CURRENT_FORMAT_ANALYZER_PATCH)
+    {
+        return Some(format!(
+            "it was produced by {} {}, older than verus-analyzer 2026-08-22 (0.3.{})",
+            tool.name, tool.version, FIRST_CURRENT_FORMAT_ANALYZER_PATCH
+        ));
+    }
+
+    let kinds: HashMap<&str, i32> = scip_data
+        .documents
+        .iter()
+        .flat_map(|d| &d.symbols)
+        .map(|s| (s.symbol.as_str(), s.kind))
+        .collect();
     for symbol in scip_data.documents.iter().flat_map(|d| &d.symbols) {
         if !is_function_like(symbol.kind) {
             continue;
         }
-        if symbol.symbol.contains("impl#[") {
-            return false;
-        }
         let last_segment = symbol.symbol.rsplit('/').next().unwrap_or("");
-        has_method |= last_segment.contains('#');
+        if last_segment.starts_with("impl#") {
+            continue;
+        }
+        match last_segment.matches('#').count() {
+            0 => {}
+            1 => {
+                let owner_end = symbol.symbol.len() - last_segment.len()
+                    + last_segment.find('#').unwrap_or(0)
+                    + 1;
+                let owner = &symbol.symbol[..owner_end];
+                if kinds
+                    .get(owner)
+                    .is_some_and(|kind| *kind != constants::SCIP_KIND_TRAIT)
+                {
+                    return Some(format!(
+                        "`{}` names a method by its non-trait owner",
+                        symbol.symbol
+                    ));
+                }
+            }
+            _ => {
+                return Some(format!(
+                    "`{}` names a trait impl method as `Type#Trait#method()`",
+                    symbol.symbol
+                ));
+            }
+        }
     }
-    has_method
+    None
 }
 
-/// Build a call graph from SCIP data, keyed by `symbol@definition_line`.
+/// Whether [`legacy_symbol_format_reason`] finds evidence of the legacy format.
+#[must_use]
+pub fn uses_legacy_symbol_format(scip_data: &ScipIndex) -> bool {
+    legacy_symbol_format_reason(scip_data).is_some()
+}
+
+/// Build a call graph from SCIP data, with one node per definition occurrence of
+/// a function symbol, keyed by [`make_definition_key`].
 pub fn build_call_graph(scip_data: &ScipIndex) -> HashMap<String, FunctionNode> {
     let mut call_graph: HashMap<String, FunctionNode> = HashMap::new();
-    let mut all_function_symbols: HashSet<String> = HashSet::new();
 
-    // Pre-pass: find where each symbol is DEFINED. A symbol normally has one
-    // definition; analyzer bugs can yield several, which are kept apart by line.
-    // Maps symbol -> Vec<(path, line_number)>, sorted by line.
-    let mut symbol_to_definitions: HashMap<String, Vec<(String, i32)>> = HashMap::new();
+    // All function symbols with a symbol record, used to recognise calls.
+    let mut all_function_symbols: HashSet<String> = scip_data
+        .documents
+        .iter()
+        .flat_map(|d| &d.symbols)
+        .filter(|s| is_function_like(s.kind))
+        .map(|s| s.symbol.clone())
+        .collect();
+
+    // First pass: a node per definition occurrence of a function symbol that has
+    // a `symbols[]` record in the same document. A symbol normally has one
+    // definition and one record; analyzer bugs can yield several of each, in
+    // which case the nth record (in document order) describes the nth definition.
     for doc in &scip_data.documents {
-        let rel_path = doc.relative_path.trim_start_matches('/').to_string();
+        let rel_path = doc.relative_path.trim_start_matches('/');
+        let mut records: HashMap<&str, Vec<&Symbol>> = HashMap::new();
+        for symbol in doc.symbols.iter().filter(|s| is_function_like(s.kind)) {
+            records.entry(&symbol.symbol).or_default().push(symbol);
+        }
+        let mut definitions: BTreeMap<&str, Vec<&Occurrence>> = BTreeMap::new();
         for occurrence in &doc.occurrences {
-            if is_definition(occurrence.symbol_roles) && !occurrence.range.is_empty() {
-                symbol_to_definitions
-                    .entry(occurrence.symbol.clone())
+            if is_definition(occurrence.symbol_roles)
+                && occurrence.range.len() >= 2
+                && records.contains_key(occurrence.symbol.as_str())
+            {
+                definitions
+                    .entry(&occurrence.symbol)
                     .or_default()
-                    .push((rel_path.clone(), occurrence.range[0]));
+                    .push(occurrence);
+            }
+        }
+        for (symbol, mut defs) in definitions {
+            defs.sort_by(|a, b| a.range.cmp(&b.range));
+            let recs = &records[symbol];
+            let paired = recs.len() == defs.len();
+            if !paired && recs.len() > 1 {
+                eprintln!(
+                    "Warning: {symbol} has {} definitions but {} symbol records in {rel_path}; \
+                     using the first record for all definitions",
+                    defs.len(),
+                    recs.len()
+                );
+            }
+            for (i, occurrence) in defs.into_iter().enumerate() {
+                let record = if paired { recs[i] } else { recs[0] };
+                let key = make_definition_key(symbol, rel_path, &occurrence.range);
+                if call_graph.contains_key(&key) {
+                    eprintln!("Warning: duplicate definition occurrence {key}, ignored");
+                    continue;
+                }
+                let base_display_name = record
+                    .display_name
+                    .clone()
+                    .unwrap_or_else(|| "unknown".to_string());
+                call_graph.insert(
+                    key,
+                    FunctionNode {
+                        symbol: symbol.to_string(),
+                        display_name: enrich_display_name(symbol, &base_display_name),
+                        signature_text: record.signature_documentation.text.clone(),
+                        relative_path: rel_path.to_string(),
+                        callees: HashSet::new(),
+                        range: occurrence.range.clone(),
+                    },
+                );
             }
         }
     }
-    for defs in symbol_to_definitions.values_mut() {
-        defs.sort_by_key(|(_, line)| *line);
-    }
 
-    // First pass: create a node per project function definition. The nth
-    // `symbols[]` entry for a symbol is paired with its nth definition.
-    let mut symbol_line_to_key: HashMap<(String, i32), String> = HashMap::new();
-    let mut symbol_seen_count: HashMap<String, usize> = HashMap::new();
+    // Second pass: attribute every call to the enclosing project function.
     for doc in &scip_data.documents {
-        for symbol in &doc.symbols {
-            if !is_function_like(symbol.kind) {
-                continue;
-            }
-            let base_display_name = symbol
-                .display_name
-                .clone()
-                .unwrap_or_else(|| "unknown".to_string());
-            let display_name = enrich_display_name(&symbol.symbol, &base_display_name);
-
-            let seen = symbol_seen_count.entry(symbol.symbol.clone()).or_insert(0);
-            let def_index = *seen;
-            *seen += 1;
-
-            // Track ALL function symbols for dependency tracking
-            all_function_symbols.insert(symbol.symbol.clone());
-
-            // Only add to call_graph if DEFINED in this project
-            let Some((rel_path, line)) = symbol_to_definitions
-                .get(&symbol.symbol)
-                .and_then(|defs| defs.get(def_index))
-            else {
-                continue;
-            };
-            let unique_key = make_unique_key(&symbol.symbol, *line);
-            symbol_line_to_key.insert((symbol.symbol.clone(), *line), unique_key.clone());
-            call_graph.insert(
-                unique_key,
-                FunctionNode {
-                    symbol: symbol.symbol.clone(),
-                    display_name,
-                    signature_text: symbol.signature_documentation.text.clone(),
-                    relative_path: rel_path.clone(),
-                    callees: HashSet::new(),
-                    range: Vec::new(),
-                },
-            );
-        }
-    }
-
-    // Second pass: build call relationships and extract ranges
-    for doc in &scip_data.documents {
+        let rel_path = doc.relative_path.trim_start_matches('/');
         let mut current_function_key: Option<String> = None;
 
         let mut ordered_occurrences = doc.occurrences.clone();
@@ -616,15 +703,11 @@ pub fn build_call_graph(scip_data: &ScipIndex) -> HashMap<String, FunctionNode> 
         });
 
         for occurrence in &ordered_occurrences {
-            let line = occurrence.range[0];
-
             // Track when we enter a project function definition
             if is_definition(occurrence.symbol_roles) {
-                if let Some(key) = symbol_line_to_key.get(&(occurrence.symbol.clone(), line)) {
-                    current_function_key = Some(key.clone());
-                    if let Some(node) = call_graph.get_mut(key) {
-                        node.range = occurrence.range.clone();
-                    }
+                let key = make_definition_key(&occurrence.symbol, rel_path, &occurrence.range);
+                if call_graph.contains_key(&key) {
+                    current_function_key = Some(key);
                 }
                 continue;
             }
@@ -636,16 +719,17 @@ pub fn build_call_graph(scip_data: &ScipIndex) -> HashMap<String, FunctionNode> 
                 continue;
             }
             all_function_symbols.insert(occurrence.symbol.clone());
+            // A reference to the caller's own symbol is kept: it may name another
+            // definition that shares the symbol. Self-edges are dropped when the
+            // symbol is resolved to code_names.
             if let Some(caller_node) = current_function_key
                 .as_ref()
                 .and_then(|key| call_graph.get_mut(key))
             {
-                if caller_node.symbol != occurrence.symbol {
-                    caller_node.callees.insert(CalleeInfo {
-                        symbol: occurrence.symbol.clone(),
-                        line,
-                    });
-                }
+                caller_node.callees.insert(CalleeInfo {
+                    symbol: occurrence.symbol.clone(),
+                    line: occurrence.range[0],
+                });
             }
         }
     }
@@ -931,7 +1015,8 @@ fn convert_to_atoms_with_lines_internal(
                 // an external function.
                 let dep_code_names: Vec<String> = match raw_symbol_to_code_names.get(&callee.symbol)
                 {
-                    Some(names) => names.clone(),
+                    // Recursion (the function's own code_name) is not a dependency.
+                    Some(names) => names.iter().filter(|n| **n != code_name).cloned().collect(),
                     None => vec![symbol_to_code_name(&callee.symbol, None)],
                 };
                 for dep_code_name in dep_code_names {
@@ -1076,25 +1161,102 @@ fn extract_display_name_from_code_name(code_name: &str) -> String {
     name.to_string()
 }
 
-/// Whether `code_name` is the method `method` owned by `owner`, where the owner
-/// is the impl's Self type or trait (`impl#[Owner][..]method()`,
-/// `impl#[..][Owner<..>]method()`) or the trait of a trait method declaration
-/// (`Owner#method()`). Generic arguments, references and paths are ignored.
+/// The owner of a method, as written in a Verus path such as an
+/// `assume_specification` target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MethodOwner<'a> {
+    /// `Owner::method`: `Owner` is the impl Self type, or the trait of a trait
+    /// method declaration. Compared by bare name.
+    Path(&'a str),
+    /// `<SelfType as Trait>::method` (or `<SelfType>::method` with no trait):
+    /// the impl must have exactly this Self type and trait.
+    Qualified {
+        self_type: &'a str,
+        trait_type: Option<&'a str>,
+    },
+}
+
+/// Normalize a type for comparison across Verus paths, SCIP symbols and
+/// code_names: drop lifetimes and path qualifiers, and keep whitespace (which
+/// code_names write as `/`) only as one space between two words. Generic
+/// arguments and references are kept.
+/// `&'a crate::Foo<core::Bar>` -> `&Foo<Bar>`, `[T;/N]` -> `[T;N]`,
+/// `&mut/T` -> `&mut T`.
+fn normalize_type(ty: &str) -> String {
+    let is_word = |c: char| c.is_alphanumeric() || c == '_';
+    let ty = strip_lifetimes(&ty.replace('/', " "));
+    let mut out = String::with_capacity(ty.len());
+    let mut pending_space = false;
+    let mut rest = ty.as_str();
+    while let Some(c) = rest.chars().next() {
+        if let Some(after) = rest.strip_prefix("::") {
+            while out.chars().last().is_some_and(is_word) {
+                out.pop();
+            }
+            pending_space = false;
+            rest = after;
+            continue;
+        }
+        if c.is_whitespace() {
+            pending_space = true;
+        } else {
+            if pending_space && is_word(c) && out.chars().last().is_some_and(is_word) {
+                out.push(' ');
+            }
+            pending_space = false;
+            out.push(c);
+        }
+        rest = &rest[c.len_utf8()..];
+    }
+    out
+}
+
+/// Whether the impl trait `candidate` (from a code_name) is the trait `wanted`
+/// (from a Verus path). Without generic arguments in `wanted`, bare names are
+/// compared; with them, the full normalized types.
+fn trait_matches(candidate: &str, wanted: &str) -> bool {
+    let wanted = normalize_type(wanted);
+    if wanted.contains('<') {
+        normalize_type(candidate) == wanted
+    } else {
+        bare_type_name(candidate) == wanted
+    }
+}
+
+/// Whether `code_name` is the method `method` of `owner`.
+///
+/// - [`MethodOwner::Path`] matches an impl whose Self type has that bare name
+///   (`impl#[Owner<..>][..]method()`) or a trait method declaration
+///   (`Owner#method()`), not an impl *of* a trait named `Owner`.
+/// - [`MethodOwner::Qualified`] matches only an impl with that Self type and
+///   trait (an inherent impl when there is no trait); a trait declaration
+///   never matches.
 #[must_use]
-pub fn code_name_has_owner_and_method(code_name: &str, owner: &str, method: &str) -> bool {
+pub fn code_name_is_method(code_name: &str, owner: MethodOwner<'_>, method: &str) -> bool {
     if extract_display_name_from_code_name(code_name) != method {
         return false;
     }
-    match parse_impl_segment(code_name) {
-        Some(seg) => {
-            bare_type_name(seg.self_type) == owner
-                || seg.trait_type.is_some_and(|t| bare_type_name(t) == owner)
-        }
-        None => code_name
-            .rsplit('/')
-            .next()
-            .and_then(|last| last.split_once('#'))
-            .is_some_and(|(o, _)| o == owner),
+    let seg = parse_impl_segment(code_name);
+    match owner {
+        MethodOwner::Path(owner) => match seg {
+            Some(seg) => bare_type_name(seg.self_type) == owner,
+            None => code_name
+                .rsplit('/')
+                .next()
+                .and_then(|last| last.split_once('#'))
+                .is_some_and(|(o, _)| o == owner),
+        },
+        MethodOwner::Qualified {
+            self_type,
+            trait_type,
+        } => seg.is_some_and(|seg| {
+            normalize_type(seg.self_type) == normalize_type(self_type)
+                && match (seg.trait_type, trait_type) {
+                    (Some(have), Some(want)) => trait_matches(have, want),
+                    (None, None) => true,
+                    _ => false,
+                }
+        }),
     }
 }
 
@@ -1579,12 +1741,23 @@ pub fn backfill_atoms_from_parser(
 
         let module_path = derive_module_path_from_code_path(&code_path);
 
+        // Methods are named after their impl or trait as in SCIP-derived code_names
+        // (`impl#[Self][Trait]name()`, `Trait#name()`), rendered from the source.
+        // The rendering is best effort, so the code_name may differ from the one
+        // the analyzer would assign once it indexes the function.
+        let owner = fi.scip_owner.as_deref().unwrap_or("").replace(' ', "/");
+        let module_segment = if module_path.is_empty() {
+            String::new()
+        } else {
+            format!("{module_path}/")
+        };
         let code_name = format!(
-            "{}{}{}/{}/{}()",
+            "{}{}{}/{}{}{}()",
             PROBE_URI_PREFIX,
             pkg_name,
             pkg_version_segment(pkg_version),
-            module_path,
+            module_segment,
+            owner,
             fi.name
         );
 
@@ -1619,11 +1792,19 @@ pub fn backfill_atoms_from_parser(
             // Backfill paths from verus_parser are relative to src/
             format!("{}/src/{}", pkg_name, output_code_path)
         };
-        let rqn = derive_rust_qualified_name(&rqn_path, &fi.name);
+        // `Type::method` like SCIP-derived display names (see `enrich_display_name`).
+        let display_name = match parse_impl_segment(&code_name) {
+            Some(seg) => format!("{}::{}", bare_type_name(seg.self_type), fi.name),
+            None => match fi.scip_owner.as_deref().and_then(|o| o.strip_suffix('#')) {
+                Some(trait_name) => format!("{}::{}", trait_name, fi.name),
+                None => fi.name.clone(),
+            },
+        };
+        let rqn = derive_rust_qualified_name(&rqn_path, &display_name);
         atoms_dict.insert(
             code_name.clone(),
             AtomWithLines {
-                display_name: fi.name.clone(),
+                display_name,
                 code_name: code_name.clone(),
                 dependencies: BTreeSet::new(),
                 dependencies_with_locations: Vec::new(),
@@ -1675,7 +1856,12 @@ fn derive_module_path_from_code_path(code_path: &str) -> String {
         .map(|pos| &code_path[pos + 5..])
         .or_else(|| code_path.strip_prefix("src/"))
         .unwrap_or(code_path);
-    after_src.trim_end_matches(".rs").to_string()
+    let module = after_src.trim_end_matches(".rs");
+    // As in SCIP symbols: `foo/mod.rs` is module `foo`, the crate root has no path.
+    if module == "lib" || module == "main" || module == "mod" {
+        return String::new();
+    }
+    module.strip_suffix("/mod").unwrap_or(module).to_string()
 }
 
 fn pkg_version_segment(v: &str) -> String {
@@ -1848,6 +2034,23 @@ mod tests {
         assert_eq!(strip_lifetimes("`Foo<'a>`"), "`Foo`");
         assert_eq!(strip_lifetimes("`&'b mut Bar`"), "`&mut Bar`");
         assert_eq!(strip_lifetimes("module/free_fn()"), "module/free_fn()");
+        // Character literals in const generic arguments are not lifetimes.
+        assert_eq!(strip_lifetimes("`Tag<'a'>`"), "`Tag<'a'>`");
+        assert_ne!(
+            strip_lifetimes("impl#[`Tag<'a'>`]read()."),
+            strip_lifetimes("impl#[`Tag<'b'>`]read().")
+        );
+        assert_eq!(strip_lifetimes("`Foo<'a, 'x'>`"), "`Foo<'x'>`");
+        assert_eq!(strip_lifetimes("`&'_ T`"), "`&T`");
+    }
+
+    #[test]
+    fn test_symbol_to_code_name_mut_reference() {
+        let sym = "rust-analyzer cargo c 1.0 m/impl#[`&'a mut Table<T>`]get().";
+        let code_name = symbol_to_code_name(sym, None);
+        assert_eq!(code_name, "probe:c/1.0/m/impl#[`&mut/Table<T>`]get()");
+        let seg = parse_impl_segment(&code_name).unwrap();
+        assert_eq!(bare_type_name(seg.self_type), "Table");
     }
 
     #[test]
@@ -1883,6 +2086,8 @@ mod tests {
             "NafLookupTable5"
         );
         assert_eq!(bare_type_name("&Scalar"), "Scalar");
+        // Code-name form: spaces became `/`, lifetimes are already gone.
+        assert_eq!(bare_type_name("&mut/NafLookupTable5<T>"), "NafLookupTable5");
         assert_eq!(
             bare_type_name("crate::lizard::lizard_constants::FieldElement51"),
             "FieldElement51"
@@ -1890,50 +2095,132 @@ mod tests {
     }
 
     #[test]
-    fn test_code_name_has_owner_and_method() {
-        let imp = "probe:subtle/2.6.1/impl#[u64][ConditionallySelectable]conditional_swap()";
-        assert!(code_name_has_owner_and_method(
+    fn test_code_name_is_method_path_owner() {
+        let imp = "probe:subtle/2.6.1/impl#[Choice][`From<u8>`]from()";
+        assert!(code_name_is_method(
             imp,
-            "u64",
-            "conditional_swap"
+            MethodOwner::Path("Choice"),
+            "from"
         ));
-        assert!(code_name_has_owner_and_method(
+        // `From::from` names the trait method, not every impl of `From`.
+        assert!(!code_name_is_method(imp, MethodOwner::Path("From"), "from"));
+        assert!(!code_name_is_method(
             imp,
-            "ConditionallySelectable",
-            "conditional_swap"
-        ));
-        assert!(!code_name_has_owner_and_method(
-            imp,
-            "u32",
-            "conditional_swap"
-        ));
-        assert!(!code_name_has_owner_and_method(
-            imp,
-            "u64",
-            "conditional_assign"
+            MethodOwner::Path("Choice"),
+            "into"
         ));
         let decl = "probe:subtle/2.6.1/ConditionallySelectable#conditional_swap()";
-        assert!(code_name_has_owner_and_method(
+        assert!(code_name_is_method(
             decl,
-            "ConditionallySelectable",
+            MethodOwner::Path("ConditionallySelectable"),
             "conditional_swap"
         ));
-        assert!(!code_name_has_owner_and_method(
+        assert!(!code_name_is_method(
             decl,
-            "u64",
+            MethodOwner::Path("u64"),
             "conditional_swap"
         ));
-        let generic = "probe:subtle/2.6.1/impl#[Choice][`From<u8>`]from()";
-        assert!(code_name_has_owner_and_method(generic, "Choice", "from"));
-        assert!(code_name_has_owner_and_method(generic, "From", "from"));
     }
 
-    fn index_with_symbols(symbols: &[&str]) -> ScipIndex {
+    #[test]
+    fn test_code_name_is_method_qualified_owner() {
+        let u64_swap = MethodOwner::Qualified {
+            self_type: "u64",
+            trait_type: Some("ConditionallySelectable"),
+        };
+        assert!(code_name_is_method(
+            "probe:subtle/2.6.1/impl#[u64][ConditionallySelectable]conditional_swap()",
+            u64_swap,
+            "conditional_swap"
+        ));
+        // A wrong Self type never matches, even as the only candidate.
+        assert!(!code_name_is_method(
+            "probe:subtle/2.6.1/impl#[u32][ConditionallySelectable]conditional_swap()",
+            u64_swap,
+            "conditional_swap"
+        ));
+        // Neither does the trait's own declaration.
+        assert!(!code_name_is_method(
+            "probe:subtle/2.6.1/ConditionallySelectable#conditional_swap()",
+            u64_swap,
+            "conditional_swap"
+        ));
+        // Nor an impl of a different trait for the same Self type.
+        assert!(!code_name_is_method(
+            "probe:x/1.0/impl#[u64][Other]conditional_swap()",
+            u64_swap,
+            "conditional_swap"
+        ));
+        // Nor an inherent method when a trait is named.
+        assert!(!code_name_is_method(
+            "probe:x/1.0/impl#[u64]conditional_swap()",
+            u64_swap,
+            "conditional_swap"
+        ));
+    }
+
+    #[test]
+    fn test_code_name_is_method_generic_types() {
+        // Self types compare with generic arguments; the Verus path spaces them
+        // differently and qualifies the trait.
+        let array_hash = MethodOwner::Qualified {
+            self_type: "[T ; N]",
+            trait_type: Some("core::hash::Hash"),
+        };
+        let hash = "probe:core/https://github.com/rust-lang/rust/library/core/array/impl#[`[T;/N]`][Hash]hash()";
+        assert!(code_name_is_method(hash, array_hash, "hash"));
+        let other_self = MethodOwner::Qualified {
+            self_type: "[u8 ; 32]",
+            trait_type: Some("Hash"),
+        };
+        assert!(!code_name_is_method(hash, other_self, "hash"));
+        // Trait generic arguments separate impls of the same trait.
+        let from_u8 = "probe:subtle/2.6.1/impl#[Choice][`From<u8>`]from()";
+        let want_u8 = MethodOwner::Qualified {
+            self_type: "Choice",
+            trait_type: Some("From<u8>"),
+        };
+        let want_bool = MethodOwner::Qualified {
+            self_type: "Choice",
+            trait_type: Some("From<bool>"),
+        };
+        let want_any = MethodOwner::Qualified {
+            self_type: "Choice",
+            trait_type: Some("From"),
+        };
+        assert!(code_name_is_method(from_u8, want_u8, "from"));
+        assert!(!code_name_is_method(from_u8, want_bool, "from"));
+        assert!(code_name_is_method(from_u8, want_any, "from"));
+        // `<T>::m` names an inherent method.
+        let inherent = MethodOwner::Qualified {
+            self_type: "Choice",
+            trait_type: None,
+        };
+        assert!(code_name_is_method(
+            "probe:subtle/2.6.1/impl#[Choice]unwrap_u8()",
+            inherent,
+            "unwrap_u8"
+        ));
+        assert!(!code_name_is_method(from_u8, inherent, "from"));
+    }
+
+    #[test]
+    fn test_normalize_type() {
+        assert_eq!(normalize_type("&'a crate::Foo<core::Bar>"), "&Foo<Bar>");
+        assert_eq!(normalize_type("[T;/N]"), "[T;N]");
+        assert_eq!(normalize_type("&mut/T"), "&mut T");
+        assert_eq!(normalize_type("& 'a mut T"), "&mut T");
+        assert_eq!(normalize_type("Tag<'a'>"), "Tag<'a'>");
+    }
+
+    /// An index with one document holding `symbols` as `(symbol, kind)` records
+    /// and, for each, a definition occurrence on its own line.
+    fn index_with_kinds(version: &str, symbols: &[(&str, i32)]) -> ScipIndex {
         ScipIndex {
             metadata: Metadata {
                 tool_info: ScipToolInfo {
-                    name: "verus-analyzer".to_string(),
-                    version: "0".to_string(),
+                    name: "rust-analyzer".to_string(),
+                    version: version.to_string(),
                 },
                 project_root: String::new(),
                 text_document_encoding: 0,
@@ -1941,12 +2228,20 @@ mod tests {
             documents: vec![Document {
                 language: "rust".to_string(),
                 relative_path: "src/lib.rs".to_string(),
-                occurrences: vec![],
+                occurrences: symbols
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (s, _))| Occurrence {
+                        range: vec![i as i32, 0, 1],
+                        symbol: s.to_string(),
+                        symbol_roles: Some(1),
+                    })
+                    .collect(),
                 symbols: symbols
                     .iter()
-                    .map(|s| Symbol {
+                    .map(|(s, kind)| Symbol {
                         symbol: s.to_string(),
-                        kind: 6,
+                        kind: *kind,
                         display_name: None,
                         documentation: None,
                         signature_documentation: SignatureDocumentation {
@@ -1960,21 +2255,268 @@ mod tests {
         }
     }
 
+    fn index_with_symbols(symbols: &[&str]) -> ScipIndex {
+        let with_kinds: Vec<(&str, i32)> = symbols.iter().map(|s| (*s, 6)).collect();
+        index_with_kinds("0", &with_kinds)
+    }
+
+    const STRUCT_KIND: i32 = 49;
+
     #[test]
-    fn test_uses_legacy_symbol_format() {
+    fn test_legacy_format_trait_impl_symbol() {
         let legacy = index_with_symbols(&[
-            "rust-analyzer cargo c 1.0 montgomery/Mul#mul().",
+            "rust-analyzer cargo c 1.0 field/FieldElement51#Clone#clone().",
             "rust-analyzer cargo c 1.0 lemmas/lemma_foo().",
         ]);
         assert!(uses_legacy_symbol_format(&legacy));
+    }
+
+    #[test]
+    fn test_legacy_format_inherent_method_on_struct() {
+        let legacy = index_with_kinds(
+            "0",
+            &[
+                (
+                    "rust-analyzer cargo c 1.0 montgomery/MontgomeryPoint#",
+                    STRUCT_KIND,
+                ),
+                (
+                    "rust-analyzer cargo c 1.0 montgomery/MontgomeryPoint#to_bytes().",
+                    6,
+                ),
+            ],
+        );
+        assert!(uses_legacy_symbol_format(&legacy));
+    }
+
+    #[test]
+    fn test_current_format_trait_declaration_only() {
+        // A trait-only crate: `Trait#method()` is still the current syntax for
+        // trait method declarations.
+        let trait_only = index_with_kinds(
+            "0",
+            &[
+                (
+                    "rust-analyzer cargo c 1.0 Trait#",
+                    constants::SCIP_KIND_TRAIT,
+                ),
+                ("rust-analyzer cargo c 1.0 Trait#method().", 6),
+            ],
+        );
+        assert!(!uses_legacy_symbol_format(&trait_only));
+        // Without the trait's record the owner is unknown: no evidence either way.
+        let unknown_owner = index_with_symbols(&["rust-analyzer cargo c 1.0 Trait#method()."]);
+        assert!(!uses_legacy_symbol_format(&unknown_owner));
+    }
+
+    #[test]
+    fn test_current_format_impl_symbols() {
         let current = index_with_symbols(&[
             "rust-analyzer cargo c 1.0 montgomery/impl#[`&MontgomeryPoint`][`Mul<&Scalar>`]mul().",
             "rust-analyzer cargo c 1.0 lemmas/lemma_foo().",
         ]);
         assert!(!uses_legacy_symbol_format(&current));
-        let free_functions_only =
-            index_with_symbols(&["rust-analyzer cargo c 1.0 lemmas/lemma_foo()."]);
-        assert!(!uses_legacy_symbol_format(&free_functions_only));
+    }
+
+    #[test]
+    fn test_legacy_format_free_functions_only_by_version() {
+        let free_fn = ["rust-analyzer cargo c 1.0 lemmas/lemma_foo()."];
+        // Syntax alone cannot tell; the producer version can.
+        assert!(!uses_legacy_symbol_format(&index_with_symbols(&free_fn)));
+        let with = |v| index_with_kinds(v, &[(free_fn[0], 6)]);
+        assert!(uses_legacy_symbol_format(&with("0.3.264-standalone")));
+        assert!(uses_legacy_symbol_format(&with("0.3.259")));
+        assert!(!uses_legacy_symbol_format(&with("0.3.266-standalone")));
+        assert!(!uses_legacy_symbol_format(&with("0.3.269-standalone")));
+        // Upstream rust-analyzer numbering.
+        assert!(!uses_legacy_symbol_format(&with("0.3.2743-standalone")));
+    }
+
+    #[test]
+    fn test_legacy_format_mixed_index() {
+        // One `impl#[` symbol does not vouch for the rest.
+        let mixed = index_with_symbols(&[
+            "rust-analyzer cargo c 1.0 montgomery/impl#[`&MontgomeryPoint`][`Mul<&Scalar>`]mul().",
+            "rust-analyzer cargo c 1.0 field/FieldElement51#Clone#clone().",
+        ]);
+        assert!(uses_legacy_symbol_format(&mixed));
+    }
+
+    // =========================================================================
+    // build_call_graph definition identity
+    // =========================================================================
+
+    fn occurrence(symbol: &str, range: [i32; 3], roles: Option<i32>) -> Occurrence {
+        Occurrence {
+            range: range.to_vec(),
+            symbol: symbol.to_string(),
+            symbol_roles: roles,
+        }
+    }
+
+    fn function_record(symbol: &str, signature: &str) -> Symbol {
+        Symbol {
+            symbol: symbol.to_string(),
+            kind: 6,
+            display_name: Some("f".to_string()),
+            documentation: None,
+            signature_documentation: SignatureDocumentation {
+                language: "rust".to_string(),
+                text: signature.to_string(),
+            },
+            enclosing_symbol: None,
+        }
+    }
+
+    fn document(path: &str, occurrences: Vec<Occurrence>, symbols: Vec<Symbol>) -> Document {
+        Document {
+            language: "rust".to_string(),
+            relative_path: path.to_string(),
+            occurrences,
+            symbols,
+        }
+    }
+
+    fn index_of(documents: Vec<Document>) -> ScipIndex {
+        ScipIndex {
+            metadata: Metadata {
+                tool_info: ScipToolInfo {
+                    name: "rust-analyzer".to_string(),
+                    version: "0.3.269".to_string(),
+                },
+                project_root: String::new(),
+                text_document_encoding: 0,
+            },
+            documents,
+        }
+    }
+
+    const DUP: &str = "rust-analyzer cargo c 1.0 m/impl#[S]f().";
+
+    /// Definitions sharing a symbol on the same line (in different files, or in
+    /// different columns of one file) each get a node.
+    #[test]
+    fn test_call_graph_keeps_colliding_definitions() {
+        let index = index_of(vec![
+            document(
+                "src/a.rs",
+                vec![
+                    occurrence(DUP, [10, 4, 5], Some(1)),
+                    occurrence(DUP, [10, 20, 21], Some(1)),
+                ],
+                vec![
+                    function_record(DUP, "fn a1()"),
+                    function_record(DUP, "fn a2()"),
+                ],
+            ),
+            document(
+                "src/b.rs",
+                vec![occurrence(DUP, [10, 4, 5], Some(1))],
+                vec![function_record(DUP, "fn b()")],
+            ),
+        ]);
+        let definition_count = index
+            .documents
+            .iter()
+            .flat_map(|d| &d.occurrences)
+            .filter(|o| is_definition(o.symbol_roles))
+            .count();
+        let graph = build_call_graph(&index);
+        assert_eq!(graph.len(), definition_count);
+
+        // Each definition carries the record paired with it, in document order.
+        let mut by_location: Vec<(String, Vec<i32>, String)> = graph
+            .values()
+            .map(|n| {
+                (
+                    n.relative_path.clone(),
+                    n.range.clone(),
+                    n.signature_text.clone(),
+                )
+            })
+            .collect();
+        by_location.sort();
+        assert_eq!(
+            by_location,
+            vec![
+                (
+                    "src/a.rs".to_string(),
+                    vec![10, 4, 5],
+                    "fn a1()".to_string()
+                ),
+                (
+                    "src/a.rs".to_string(),
+                    vec![10, 20, 21],
+                    "fn a2()".to_string()
+                ),
+                ("src/b.rs".to_string(), vec![10, 4, 5], "fn b()".to_string()),
+            ]
+        );
+    }
+
+    /// One record for several definitions describes all of them.
+    #[test]
+    fn test_call_graph_single_record_for_several_definitions() {
+        let index = index_of(vec![document(
+            "src/a.rs",
+            vec![
+                occurrence(DUP, [30, 4, 5], Some(1)),
+                occurrence(DUP, [10, 4, 5], Some(1)),
+            ],
+            vec![function_record(DUP, "fn shared()")],
+        )]);
+        let graph = build_call_graph(&index);
+        assert_eq!(graph.len(), 2);
+        assert!(graph.values().all(|n| n.signature_text == "fn shared()"));
+    }
+
+    /// A call between two definitions that share a symbol is an edge, not
+    /// recursion; only the caller's own code_name is excluded.
+    #[test]
+    fn test_call_between_same_symbol_definitions_is_kept() {
+        let index = index_of(vec![document(
+            "src/a.rs",
+            vec![
+                occurrence(DUP, [10, 4, 5], Some(1)),
+                occurrence(DUP, [11, 8, 9], None),
+                occurrence(DUP, [20, 4, 5], Some(1)),
+            ],
+            vec![
+                function_record(DUP, "fn a()"),
+                function_record(DUP, "fn b()"),
+            ],
+        )]);
+        let atoms = convert_to_atoms_with_lines(&build_call_graph(&index));
+        let first = atoms
+            .iter()
+            .find(|a| a.code_text.lines_start == 11)
+            .unwrap();
+        let second = atoms
+            .iter()
+            .find(|a| a.code_text.lines_start == 21)
+            .unwrap();
+        assert_eq!(
+            first.dependencies.iter().collect::<Vec<_>>(),
+            vec![&second.code_name]
+        );
+        assert!(second.dependencies.is_empty());
+    }
+
+    /// Plain recursion is still not a dependency.
+    #[test]
+    fn test_recursive_call_is_not_a_dependency() {
+        let f = "rust-analyzer cargo c 1.0 m/f().";
+        let index = index_of(vec![document(
+            "src/a.rs",
+            vec![
+                occurrence(f, [10, 4, 5], Some(1)),
+                occurrence(f, [11, 8, 9], None),
+            ],
+            vec![function_record(f, "fn f()")],
+        )]);
+        let atoms = convert_to_atoms_with_lines(&build_call_graph(&index));
+        assert_eq!(atoms.len(), 1);
+        assert!(atoms[0].dependencies.is_empty());
     }
 
     // =========================================================================
@@ -2362,6 +2904,16 @@ mod tests {
             derive_module_path_from_code_path("src/lemmas/common_lemmas/bit_lemmas.rs"),
             "lemmas/common_lemmas/bit_lemmas"
         );
+    }
+
+    #[test]
+    fn test_derive_module_path_mod_and_crate_root() {
+        assert_eq!(
+            derive_module_path_from_code_path("curve25519-dalek/src/backend/serial/mod.rs"),
+            "backend/serial"
+        );
+        assert_eq!(derive_module_path_from_code_path("src/lib.rs"), "");
+        assert_eq!(derive_module_path_from_code_path("src/main.rs"), "");
     }
 
     #[test]

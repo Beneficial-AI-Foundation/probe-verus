@@ -84,6 +84,13 @@ Examples:
 In the rare case where the analyzer emits the same symbol for several definitions, each
 gets an `@<line>` suffix (e.g. `.../scalar/impl#[Scalar]from_spec()@1080`).
 
+Functions the analyzer does not index (e.g. in cfg-inactive impls) are added from the
+source parser. Their code-names follow the same shape, with the impl or trait rendered
+from the source text (`impl#[SelfType][Trait]method()`, `Trait#method()`). This rendering
+is best effort: it can differ from the name the analyzer would assign (the analyzer
+renders resolved types, e.g. `Self` in trait arguments, and inline `mod` blocks are not
+reflected), so such a function's code-name can change once the analyzer indexes it.
+
 The `code-name` is not serialized inside the value object (it is the key).
 
 ### `display-name` (string)

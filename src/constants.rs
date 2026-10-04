@@ -23,6 +23,9 @@ pub const SCIP_KIND_CONSTRUCTOR: i32 = 26;
 /// SCIP kind for macro definitions (used by verus-analyzer for some functions)
 pub const SCIP_KIND_MACRO: i32 = 80;
 
+/// SCIP kind for trait definitions
+pub const SCIP_KIND_TRAIT: i32 = 53;
+
 /// Check if a SCIP symbol kind represents a function-like entity.
 ///
 /// This includes regular functions, methods, constructors, and some macros

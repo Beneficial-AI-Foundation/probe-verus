@@ -12,11 +12,21 @@ what constitutes a breaking change.
 
 ### Breaking
 - **Requires verus-analyzer 2026-08-22 or later; code-names follow its SCIP symbols.** That release switched to rust-analyzer's symbol format (`impl#[SelfType][Trait]method()`), which names the Self type and trait and fixes the reversed module paths of older releases (`field/u64/serial/backend/...` is now `backend/serial/u64/field/...`). Code-names are now the symbol with the prefix and trailing `.` removed, lifetimes dropped and spaces replaced by `/`, e.g. ``probe:curve25519-dalek/4.1.3/montgomery/impl#[`&MontgomeryPoint`][`Mul<&Scalar>`]mul()`` (was `.../montgomery/&MontgomeryPoint#Mul<Scalar>#mul()`). Nearly every code-name changes; outputs from earlier versions must be regenerated. `atomize`/`extract` fail on a SCIP index from an older verus-analyzer (rerun with `--regenerate-scip` after upgrading).
-- **Library API:** `build_call_graph` returns only the call graph, and `convert_to_atoms_with_lines` / `convert_to_atoms_with_parsed_spans` no longer take the symbol-to-display-name map. `FunctionNode` lost `self_type` and `definition_type_context`; `CalleeInfo` lost `type_hints`.
+- **Library API:** `build_call_graph` returns only the call graph, keyed by symbol, document and definition range, and `convert_to_atoms_with_lines` / `convert_to_atoms_with_parsed_spans` no longer take the symbol-to-display-name map. `FunctionNode` lost `self_type` and `definition_type_context`; `CalleeInfo` lost `type_hints`. `code_name_has_owner_and_method` is replaced by `code_name_is_method` with a `MethodOwner`. `FunctionInfo` has a new `scip_owner` field.
+- **Backfilled methods are named after their impl or trait.** Functions added from the source parser (not indexed by the analyzer) get `impl#[SelfType][Trait]method()` / `Trait#method()` code-names and `Type::method` display names instead of `module/method()`, and `mod.rs`/crate-root files no longer add `mod` or an empty segment to the module path. Same-named methods of different impls in one module no longer collapse into one atom (22 more atoms on dalek-lite).
 
 ### Changed
+- An `assume_specification` with a qualified target (`<u64 as Trait>::m`) is attached only to the external stub with that Self type and trait, even when it is the only candidate; a lone stub with another Self type or the trait declaration no longer becomes `trusted`. `specify` records the target's `self-type` and `trait-type`.
+- `extract` stops when atomize fails, instead of running specify and merge on an atoms file left by an earlier run.
+- The legacy-index check uses the producer version (`0.3.N`, N < 266) and rejects any index with `Type#Trait#method()` symbols or methods owned by a non-trait type; trait-only indexes are accepted.
+- Before indexing, a warning is printed when the verus-analyzer predates 2026-08-22, or when the project uses Rust 1.92 (newer analyzers index about 10x slower with it).
 - Dependencies now include operator calls (`a * b` → the `Mul` impl), which the new analyzer resolves. On dalek-lite this adds the missing edges into `FieldElement51`/`Scalar` arithmetic impls, plus edges to `core`/`vstd` operator impls on primitive types.
 - Display names and `rust-qualified-name` of spec-trait impls on reference types now include the Self type (`Scalar::add_req` instead of `add_req`).
+
+### Fixed
+- Definitions sharing a SCIP symbol on the same line (different files or columns) are no longer merged into one atom.
+- A call between two definitions that share a symbol is kept as a dependency instead of being dropped as recursion.
+- Lifetime stripping keeps character literals in const generic arguments (`Tag<'a'>`).
 
 ### Removed
 - The verus-analyzer symbol repair: self-type pre-pass, signature-based trait-argument insertion, definition type-context disambiguation and call-site type hints.

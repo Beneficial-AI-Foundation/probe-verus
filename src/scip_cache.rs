@@ -35,6 +35,50 @@ impl std::fmt::Display for Analyzer {
     }
 }
 
+/// First line of a command's stdout, or empty if it cannot be run.
+fn command_first_line(program: &Path, args: &[&str], dir: &Path) -> String {
+    Command::new(program)
+        .args(args)
+        .current_dir(dir)
+        .stderr(Stdio::null())
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .next()
+                .map(str::to_string)
+        })
+        .unwrap_or_default()
+}
+
+/// Problems to report before a (slow) `verus-analyzer scip` run, from the
+/// analyzer's `--version` line (`verus-analyzer 0.3.269-standalone`) and the
+/// project's `rustc --version` line (`rustc 1.92.0 (...)`).
+fn analyzer_warnings(analyzer_version: &str, rustc_version: &str) -> Vec<String> {
+    let mut warnings = Vec::new();
+    let Some(patch) = analyzer_version
+        .split_whitespace()
+        .nth(1)
+        .and_then(crate::analyzer_patch_version)
+    else {
+        return warnings;
+    };
+    if patch < crate::FIRST_CURRENT_FORMAT_ANALYZER_PATCH {
+        warnings.push(format!(
+            "`{analyzer_version}` predates verus-analyzer 2026-08-22; its index will be \
+             rejected. Install a newer release (`probe-verus setup`)."
+        ));
+    } else if rustc_version.starts_with("rustc 1.92.") {
+        warnings.push(format!(
+            "verus-analyzer 2026-08-22 and later index about 10x slower with `{rustc_version}`; \
+             Rust 1.93 or later is not affected."
+        ));
+    }
+    warnings
+}
+
 /// Error types for SCIP operations
 #[derive(Debug)]
 pub enum ScipError {
@@ -259,6 +303,15 @@ impl ScipCache {
                 self.project_path.display(),
                 self.analyzer
             );
+        }
+
+        if self.analyzer == Analyzer::VerusAnalyzer {
+            for warning in analyzer_warnings(
+                &command_first_line(analyzer_bin, &["--version"], &self.project_path),
+                &command_first_line(Path::new("rustc"), &["--version"], &self.project_path),
+            ) {
+                eprintln!("  Warning: {warning}");
+            }
         }
 
         // verus-analyzer (2026-08-22 and later) enables `verus_keep_ghost` itself,
@@ -488,5 +541,17 @@ mod tests {
 
         let cache = ScipCache::new("/path/to/project").with_auto_install(false);
         assert!(!cache.auto_install);
+    }
+
+    #[test]
+    fn test_analyzer_warnings() {
+        let old = analyzer_warnings("rust-analyzer 0.3.264-standalone", "rustc 1.93.0 (x)");
+        assert!(old[0].contains("will be rejected"), "{old:?}");
+        let slow = analyzer_warnings("verus-analyzer 0.3.269-standalone", "rustc 1.92.0 (x)");
+        assert!(slow[0].contains("10x slower"), "{slow:?}");
+        assert!(
+            analyzer_warnings("verus-analyzer 0.3.269-standalone", "rustc 1.93.0 (x)").is_empty()
+        );
+        assert!(analyzer_warnings("", "").is_empty());
     }
 }

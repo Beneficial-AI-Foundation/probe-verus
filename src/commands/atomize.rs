@@ -3,10 +3,11 @@
 use crate::{
     add_external_stubs, backfill_atoms_from_parser, build_call_graph, build_module_visibility_map,
     convert_to_atoms_with_parsed_spans, find_duplicate_code_names, is_library_crate,
+    legacy_symbol_format_reason,
     metadata::{gather_metadata, get_default_output_path, wrap_in_envelope, AtomizeInternalConfig},
     parse_scip_json, public_api, resolve_package_root, resolve_workspace_root,
     scip_cache::{Analyzer, ScipCache},
-    uses_legacy_symbol_format, AtomWithLines, ScipIndex,
+    AtomWithLines, ScipIndex,
 };
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -203,13 +204,13 @@ fn validate_project(project_path: &Path) -> Result<(), String> {
 /// Reject SCIP indexes produced by verus-analyzer releases older than 2026-08-22,
 /// whose symbols omit Self types and collide across trait impls.
 fn check_symbol_format(scip_index: &ScipIndex) -> Result<(), String> {
-    if uses_legacy_symbol_format(scip_index) {
-        return Err("SCIP index uses the legacy verus-analyzer symbol format \
-             (`Type#Trait#method()`). Upgrade verus-analyzer to 2026-08-22 or later \
-             and rerun with --regenerate-scip."
-            .to_string());
+    match legacy_symbol_format_reason(scip_index) {
+        Some(reason) => Err(format!(
+            "SCIP index uses the legacy verus-analyzer symbol format: {reason}. \
+             Upgrade verus-analyzer to 2026-08-22 or later and rerun with --regenerate-scip."
+        )),
+        None => Ok(()),
     }
-    Ok(())
 }
 
 fn get_scip_json(cache: &mut ScipCache, regenerate: bool) -> Result<PathBuf, String> {

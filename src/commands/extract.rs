@@ -11,8 +11,8 @@ use crate::metadata::{
 use crate::verification::VerusRunner;
 use crate::verus_parser::AssumeSpecInfo;
 use crate::{
-    code_name_has_owner_and_method, resolve_workspace_root, AtomWithLines, CallLocation, DeclKind,
-    UnifiedAtom,
+    code_name_is_method, resolve_workspace_root, AtomWithLines, CallLocation, DeclKind,
+    MethodOwner, UnifiedAtom,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -173,6 +173,17 @@ pub fn cmd_extract(
             metadata: &metadata,
         };
         run_atomize_step(&config, &mut result);
+        // The later steps would fall back to an atoms file left by an earlier run
+        // and overwrite specs and unified output from it.
+        if result.atomize.as_ref().is_some_and(|step| !step.success) {
+            eprintln!("  Stopping: later steps need the atoms that atomize failed to produce");
+            print_summary(&result);
+            write_summary(&project_path, &metadata, &result);
+            return Err(format!(
+                "extract pipeline failed with status: {}",
+                result.status
+            ));
+        }
     }
 
     // Resolve the atoms path for subsequent steps: explicit --with-atoms > default from atomize > auto-discover
@@ -271,17 +282,21 @@ pub fn cmd_extract(
         println!();
     }
 
-    let summary_path = get_default_output_path(&project_path, &metadata, "extract_summary");
-    let envelope = wrap_in_envelope("probe-verus/extract-summary", "extract", &result, &metadata);
-    if let Ok(json) = serde_json::to_string_pretty(&envelope) {
-        if let Err(e) = std::fs::write(&summary_path, &json) {
-            eprintln!("Warning: Could not write summary: {}", e);
-        }
-    }
+    write_summary(&project_path, &metadata, &result);
 
     match result.status.as_str() {
         "success" | "verification_failed" => Ok(()),
         status => Err(format!("extract pipeline failed with status: {status}")),
+    }
+}
+
+fn write_summary(project_path: &Path, metadata: &ProjectMetadata, result: &ExtractPipelineResult) {
+    let summary_path = get_default_output_path(project_path, metadata, "extract_summary");
+    let envelope = wrap_in_envelope("probe-verus/extract-summary", "extract", result, metadata);
+    if let Ok(json) = serde_json::to_string_pretty(&envelope) {
+        if let Err(e) = std::fs::write(&summary_path, &json) {
+            eprintln!("Warning: Could not write summary: {}", e);
+        }
     }
 }
 
@@ -519,24 +534,40 @@ fn map_verification_status(status: &str) -> &'static str {
     }
 }
 
-/// Match `assume_specification` declarations to external stub atoms.
-///
-/// For each declaration, take the last 2 path segments (e.g. `["ConditionallySelectable",
-/// "conditional_swap"]`) and search atoms with empty `code-path` for code-names whose
-/// method is the last segment and whose impl Self type or trait is the first.
-/// Returns the set of matched atom code-names.
 /// Result of matching an `assume_specification` to an atom: the spec text to
 /// propagate onto the external stub.
 struct AssumeSpecMatch {
     spec_text: String,
 }
 
-/// The qualified Self type of a Verus path: `<u64 as Trait>::method` -> `u64`.
-fn qualified_self_type(path_display: &str) -> Option<&str> {
-    let inner = path_display.strip_prefix('<')?;
-    inner.split_once(" as ").map(|(self_ty, _)| self_ty.trim())
+/// The Self type and trait of a qualified `assume_specification` path.
+///
+/// Uses the parsed `self-type`/`trait-type` fields, falling back to the
+/// `path-display` text (`<u64 as Trait>::method`) for specs files written before
+/// those fields existed. Returns `None` for unqualified paths (`Type::method`).
+fn qualified_owner(aspec: &AssumeSpecInfo) -> Option<(String, Option<String>)> {
+    if let Some(self_type) = &aspec.self_type {
+        return Some((self_type.clone(), aspec.trait_type.clone()));
+    }
+    let inner = aspec.path_display.strip_prefix('<')?;
+    let (qualified, _) = inner.rsplit_once(">::")?;
+    Some(match qualified.split_once(" as ") {
+        Some((self_ty, trait_ty)) => (
+            self_ty.trim().to_string(),
+            Some(trait_ty.trim().to_string()),
+        ),
+        None => (qualified.trim().to_string(), None),
+    })
 }
 
+/// Match `assume_specification` declarations to external stub atoms (empty
+/// `code-path`). Returns the matched atom code-names with their spec text.
+///
+/// A qualified target (`<u64 as Trait>::method`) matches only the impl with that
+/// Self type and trait; `Type::method` matches impls on `Type` and the trait
+/// declaration `Type#method()`. See [`code_name_is_method`]. A spec is attached
+/// only when exactly one stub matches; otherwise it is left unattached with a
+/// warning, so no atom is marked trusted on a guess.
 fn match_assume_specs_to_atoms(
     assume_specs: &[AssumeSpecInfo],
     atoms: &BTreeMap<String, AtomWithLines>,
@@ -554,30 +585,21 @@ fn match_assume_specs_to_atoms(
 
         let type_seg = &aspec.path_segments[aspec.path_segments.len() - 2];
         let method_seg = &aspec.path_segments[aspec.path_segments.len() - 1];
+        let qualified = qualified_owner(aspec);
+        let owner = match &qualified {
+            Some((self_type, trait_type)) => MethodOwner::Qualified {
+                self_type,
+                trait_type: trait_type.as_deref(),
+            },
+            None => MethodOwner::Path(type_seg),
+        };
 
         let candidates: Vec<&String> = atoms
             .iter()
             .filter(|(_, atom)| atom.code_path.is_empty())
-            .filter(|(name, _)| code_name_has_owner_and_method(name, type_seg, method_seg))
+            .filter(|(name, _)| code_name_is_method(name, owner, method_seg))
             .map(|(name, _)| name)
             .collect();
-        // `<u64 as Trait>::method` also matches the trait's own declaration;
-        // narrow to the impl for the qualified Self type when that is ambiguous.
-        let candidates = match qualified_self_type(&aspec.path_display) {
-            Some(self_ty) if candidates.len() > 1 => {
-                let narrowed: Vec<&String> = candidates
-                    .iter()
-                    .copied()
-                    .filter(|name| code_name_has_owner_and_method(name, self_ty, method_seg))
-                    .collect();
-                if narrowed.is_empty() {
-                    candidates
-                } else {
-                    narrowed
-                }
-            }
-            _ => candidates,
-        };
 
         match candidates.len() {
             1 => {
@@ -2128,86 +2150,247 @@ mod tests {
             .is_none());
     }
 
+    /// Snapshot of every file under `dir`: relative path -> contents.
+    fn snapshot(dir: &Path) -> BTreeMap<PathBuf, String> {
+        let mut files = BTreeMap::new();
+        let mut stack = vec![dir.to_path_buf()];
+        while let Some(d) = stack.pop() {
+            for entry in std::fs::read_dir(&d).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else {
+                    let rel = path.strip_prefix(dir).unwrap().to_path_buf();
+                    files.insert(rel, std::fs::read_to_string(&path).unwrap());
+                }
+            }
+        }
+        files
+    }
+
+    /// When atomize rejects a legacy SCIP index, extract stops: specs and unified
+    /// output from an earlier run are not regenerated from the stale atoms file.
     #[test]
-    fn test_assume_spec_matching_single_match() {
-        let atoms_with_external = serde_json::json!({
-            "schema": "probe-verus/atoms",
-            "schema-version": "3.0",
-            "tool": {"name": "probe-verus", "version": "6.5.0", "command": "atomize"},
-            "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
-            "timestamp": "2026-04-07T00:00:00Z",
-            "data": {
-                "probe:subtle/2.6.1/Choice#From#from()": {
-                    "display-name": "from",
+    fn test_extract_stops_when_atomize_fails() {
+        let dir = TempDir::new().unwrap();
+        let project = dir.path();
+        std::fs::write(
+            project.join("Cargo.toml"),
+            "[package]\nname = \"legacy\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(project.join("src")).unwrap();
+        std::fs::write(project.join("src/lib.rs"), "pub fn f() {}\n").unwrap();
+
+        // A cached index from a pre-2026-08-22 analyzer, newer than the sources.
+        std::fs::create_dir_all(project.join("data")).unwrap();
+        let legacy_index = serde_json::json!({
+            "metadata": {
+                "tool_info": {"name": "rust-analyzer", "version": "0.3.264-standalone"},
+                "project_root": "",
+                "text_document_encoding": 0
+            },
+            "documents": []
+        });
+        std::fs::write(
+            project.join("data/index.scip.json"),
+            legacy_index.to_string(),
+        )
+        .unwrap();
+
+        // Outputs of an earlier run.
+        let metadata = gather_metadata(project);
+        let atoms_path = get_default_output_path(project, &metadata, "atoms");
+        std::fs::create_dir_all(atoms_path.parent().unwrap()).unwrap();
+        std::fs::write(&atoms_path, atoms_json().to_string()).unwrap();
+        let probes_dir = atoms_path.parent().unwrap().to_path_buf();
+        let before = snapshot(&probes_dir);
+
+        let result = cmd_extract(
+            project.to_path_buf(),
+            false,  // skip_atomize
+            false,  // skip_specify
+            true,   // skip_verify
+            None,   // package
+            false,  // regenerate_scip
+            false,  // verbose
+            false,  // use_rust_analyzer
+            false,  // allow_duplicates
+            false,  // auto_install
+            None,   // with_atoms
+            false,  // _with_spec_text
+            None,   // taxonomy_config
+            vec![], // verus_args
+            false,  // with_public_api
+            false,  // skip_enrich
+        );
+        assert!(result.is_err());
+
+        let mut after = snapshot(&probes_dir);
+        let summary = get_default_output_path(project, &metadata, "extract_summary");
+        assert!(
+            after
+                .remove(summary.strip_prefix(&probes_dir).unwrap())
+                .is_some(),
+            "the failed run's summary is written"
+        );
+        assert_eq!(before, after, "earlier outputs must be left untouched");
+    }
+
+    /// External stub atoms (empty `code-path`) with the given code-names.
+    fn external_stubs(code_names: &[&str]) -> BTreeMap<String, AtomWithLines> {
+        code_names
+            .iter()
+            .map(|name| {
+                let atom: AtomWithLines = serde_json::from_value(serde_json::json!({
+                    "display-name": "stub",
                     "dependencies": [],
                     "code-module": "",
                     "code-path": "",
                     "code-text": {"lines-start": 0, "lines-end": 0},
                     "kind": "exec",
                     "language": "rust"
-                }
-            }
-        });
-        let atoms_data: BTreeMap<String, AtomWithLines> =
-            serde_json::from_value(atoms_with_external["data"].clone()).unwrap();
+                }))
+                .unwrap();
+                (name.to_string(), atom)
+            })
+            .collect()
+    }
 
-        let assume_specs = vec![crate::verus_parser::AssumeSpecInfo {
-            path_segments: vec!["Choice".to_string(), "from".to_string()],
-            path_display: "Choice::from".to_string(),
+    fn assume_spec(
+        segments: &[&str],
+        path_display: &str,
+        self_type: Option<&str>,
+        trait_type: Option<&str>,
+    ) -> crate::verus_parser::AssumeSpecInfo {
+        crate::verus_parser::AssumeSpecInfo {
+            path_segments: segments.iter().map(|s| s.to_string()).collect(),
+            path_display: path_display.to_string(),
             file: Some("src/assumes.rs".to_string()),
             line: 10,
             has_requires: false,
             has_ensures: true,
             requires_text: None,
-            ensures_text: Some("ensures (u == 1) == choice_is_true(c)".to_string()),
-        }];
+            ensures_text: Some("ensures spec".to_string()),
+            self_type: self_type.map(str::to_string),
+            trait_type: trait_type.map(str::to_string),
+        }
+    }
 
-        let result = match_assume_specs_to_atoms(&assume_specs, &atoms_data);
+    const U64_SWAP: &str =
+        "probe:subtle/2.6.1/impl#[u64][ConditionallySelectable]conditional_swap()";
+    const U32_SWAP: &str =
+        "probe:subtle/2.6.1/impl#[u32][ConditionallySelectable]conditional_swap()";
+    const SWAP_DECL: &str = "probe:subtle/2.6.1/ConditionallySelectable#conditional_swap()";
+
+    fn u64_swap_spec() -> crate::verus_parser::AssumeSpecInfo {
+        assume_spec(
+            &["ConditionallySelectable", "conditional_swap"],
+            "<u64 as ConditionallySelectable>::conditional_swap",
+            Some("u64"),
+            Some("ConditionallySelectable"),
+        )
+    }
+
+    #[test]
+    fn test_assume_spec_matching_single_match() {
+        let atoms = external_stubs(&["probe:subtle/2.6.1/impl#[Choice][`From<u8>`]from()"]);
+        let specs = [assume_spec(&["Choice", "from"], "Choice::from", None, None)];
+        let result = match_assume_specs_to_atoms(&specs, &atoms);
         assert_eq!(result.len(), 1);
-        assert!(result.contains_key("probe:subtle/2.6.1/Choice#From#from()"));
-        let m = &result["probe:subtle/2.6.1/Choice#From#from()"];
-        assert_eq!(m.spec_text, "ensures (u == 1) == choice_is_true(c)");
+        let m = &result["probe:subtle/2.6.1/impl#[Choice][`From<u8>`]from()"];
+        assert_eq!(m.spec_text, "ensures spec");
     }
 
     #[test]
     fn test_assume_spec_matching_no_match() {
-        let atoms_with_external = serde_json::json!({
-            "schema": "probe-verus/atoms",
-            "schema-version": "3.0",
-            "tool": {"name": "probe-verus", "version": "6.5.0", "command": "atomize"},
-            "source": {"repo": "", "commit": "", "language": "rust", "package": "test", "package-version": "0.1.0"},
-            "timestamp": "2026-04-07T00:00:00Z",
-            "data": {
-                "probe:subtle/2.6.1/Choice#From#from()": {
-                    "display-name": "from",
-                    "dependencies": [],
-                    "code-module": "",
-                    "code-path": "",
-                    "code-text": {"lines-start": 0, "lines-end": 0},
-                    "kind": "exec",
-                    "language": "rust"
-                }
-            }
-        });
-        let atoms_data: BTreeMap<String, AtomWithLines> =
-            serde_json::from_value(atoms_with_external["data"].clone()).unwrap();
-
-        let assume_specs = vec![crate::verus_parser::AssumeSpecInfo {
-            path_segments: vec!["Formatter".to_string(), "write_str".to_string()],
-            path_display: "Formatter::write_str".to_string(),
-            file: Some("src/assumes.rs".to_string()),
-            line: 20,
-            has_requires: false,
-            has_ensures: false,
-            requires_text: None,
-            ensures_text: None,
-        }];
-
-        let result = match_assume_specs_to_atoms(&assume_specs, &atoms_data);
+        let atoms = external_stubs(&["probe:subtle/2.6.1/impl#[Choice][`From<u8>`]from()"]);
+        let specs = [assume_spec(
+            &["Formatter", "write_str"],
+            "Formatter::write_str",
+            None,
+            None,
+        )];
+        let result = match_assume_specs_to_atoms(&specs, &atoms);
         assert!(
             result.is_empty(),
             "No atom should match Formatter::write_str"
         );
+    }
+
+    #[test]
+    fn test_assume_spec_qualified_picks_self_type() {
+        let atoms = external_stubs(&[U64_SWAP, U32_SWAP, SWAP_DECL]);
+        let result = match_assume_specs_to_atoms(&[u64_swap_spec()], &atoms);
+        assert_eq!(result.keys().collect::<Vec<_>>(), vec![U64_SWAP]);
+    }
+
+    /// A lone stub with the wrong Self type must not receive the spec (it would
+    /// become trusted).
+    #[test]
+    fn test_assume_spec_qualified_rejects_wrong_self_singleton() {
+        let atoms = external_stubs(&[U32_SWAP]);
+        let result = match_assume_specs_to_atoms(&[u64_swap_spec()], &atoms);
+        assert!(result.is_empty(), "matched {:?}", result.keys());
+    }
+
+    /// Nor does a lone trait declaration, which is not the `u64` impl.
+    #[test]
+    fn test_assume_spec_qualified_rejects_trait_declaration() {
+        let atoms = external_stubs(&[SWAP_DECL]);
+        let result = match_assume_specs_to_atoms(&[u64_swap_spec()], &atoms);
+        assert!(result.is_empty(), "matched {:?}", result.keys());
+    }
+
+    /// Specs files written before `self-type`/`trait-type` existed fall back to
+    /// the `path-display` text.
+    #[test]
+    fn test_assume_spec_qualified_from_path_display() {
+        let atoms = external_stubs(&[U64_SWAP, U32_SWAP]);
+        let mut spec = u64_swap_spec();
+        spec.self_type = None;
+        spec.trait_type = None;
+        let result = match_assume_specs_to_atoms(&[spec], &atoms);
+        assert_eq!(result.keys().collect::<Vec<_>>(), vec![U64_SWAP]);
+    }
+
+    #[test]
+    fn test_assume_spec_qualified_generic_self_type() {
+        let array_hash = "probe:core/https://github.com/rust-lang/rust/library/core/array/impl#[`[T;/N]`][Hash]hash()";
+        let slice_hash = "probe:core/https://github.com/rust-lang/rust/library/core/slice/impl#[`[T]`][Hash]hash()";
+        let atoms = external_stubs(&[array_hash, slice_hash]);
+        let spec = assume_spec(
+            &["Hash", "hash"],
+            "<[T ; N] as core::hash::Hash>::hash",
+            Some("[T ; N]"),
+            Some("core::hash::Hash"),
+        );
+        let result = match_assume_specs_to_atoms(&[spec], &atoms);
+        assert_eq!(result.keys().collect::<Vec<_>>(), vec![array_hash]);
+    }
+
+    /// Trait generic arguments in the target separate impls of one trait.
+    #[test]
+    fn test_assume_spec_qualified_trait_arguments() {
+        let from_u8 = "probe:subtle/2.6.1/impl#[Choice][`From<u8>`]from()";
+        let from_bool = "probe:subtle/2.6.1/impl#[Choice][`From<bool>`]from()";
+        let atoms = external_stubs(&[from_u8, from_bool]);
+        let spec = assume_spec(
+            &["From", "from"],
+            "<Choice as From>::from",
+            Some("Choice"),
+            Some("From<u8>"),
+        );
+        let result = match_assume_specs_to_atoms(&[spec], &atoms);
+        assert_eq!(result.keys().collect::<Vec<_>>(), vec![from_u8]);
+        // Without them the target is ambiguous and nothing is attached.
+        let spec = assume_spec(
+            &["From", "from"],
+            "<Choice as From>::from",
+            Some("Choice"),
+            Some("From"),
+        );
+        assert!(match_assume_specs_to_atoms(&[spec], &atoms).is_empty());
     }
 
     #[test]
@@ -2230,7 +2413,7 @@ mod tests {
                     "kind": "exec",
                     "language": "rust"
                 },
-                "probe:subtle/2.6.1/Choice#unwrap_u8()": {
+                "probe:subtle/2.6.1/impl#[Choice]unwrap_u8()": {
                     "display-name": "unwrap_u8",
                     "dependencies": [],
                     "code-module": "",
@@ -2272,7 +2455,7 @@ mod tests {
 
         let result = merge_into_unified(&atoms_path, Some(&specs_path), None).unwrap();
 
-        let stub = &result["probe:subtle/2.6.1/Choice#unwrap_u8()"];
+        let stub = &result["probe:subtle/2.6.1/impl#[Choice]unwrap_u8()"];
         assert_eq!(
             stub.verification_status.as_deref(),
             Some("trusted"),

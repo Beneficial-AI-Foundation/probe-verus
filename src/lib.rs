@@ -555,6 +555,11 @@ pub(crate) fn analyzer_patch_version(version: &str) -> Option<u32> {
 ///   and is not a trait. In the current format `Owner#method()` only names a
 ///   trait method declaration, so an owner without a symbol record is no
 ///   evidence either way.
+///
+/// An index with no `0.3.N` producer version and no such symbols (e.g. only free
+/// functions, from an unknown producer) is accepted: the syntax cannot tell the
+/// formats apart, and rejecting unknown producers would also reject upstream
+/// rust-analyzer builds.
 #[must_use]
 pub fn legacy_symbol_format_reason(scip_data: &ScipIndex) -> Option<String> {
     let tool = &scip_data.metadata.tool_info;
@@ -577,16 +582,15 @@ pub fn legacy_symbol_format_reason(scip_data: &ScipIndex) -> Option<String> {
         if !is_function_like(symbol.kind) {
             continue;
         }
-        let last_segment = symbol.symbol.rsplit('/').next().unwrap_or("");
+        let last_segment = last_symbol_segment(&symbol.symbol);
         if last_segment.starts_with("impl#") {
             continue;
         }
-        match last_segment.matches('#').count() {
+        let hashes = unquoted_positions(last_segment, '#');
+        match hashes.len() {
             0 => {}
             1 => {
-                let owner_end = symbol.symbol.len() - last_segment.len()
-                    + last_segment.find('#').unwrap_or(0)
-                    + 1;
+                let owner_end = symbol.symbol.len() - last_segment.len() + hashes[0] + 1;
                 let owner = &symbol.symbol[..owner_end];
                 if kinds
                     .get(owner)
@@ -607,6 +611,29 @@ pub fn legacy_symbol_format_reason(scip_data: &ScipIndex) -> Option<String> {
         }
     }
     None
+}
+
+/// Byte positions of `needle` in `s` outside backtick-quoted descriptors.
+fn unquoted_positions(s: &str, needle: char) -> Vec<usize> {
+    let mut quoted = false;
+    let mut positions = Vec::new();
+    for (i, c) in s.char_indices() {
+        if c == '`' {
+            quoted = !quoted;
+        } else if c == needle && !quoted {
+            positions.push(i);
+        }
+    }
+    positions
+}
+
+/// The part of a SCIP symbol after its last `/` outside backtick-quoted
+/// descriptors (a quoted type may contain `/`, e.g. ``Tag<'/'>``).
+fn last_symbol_segment(symbol: &str) -> &str {
+    match unquoted_positions(symbol, '/').last() {
+        Some(&i) => &symbol[i + 1..],
+        None => symbol,
+    }
 }
 
 /// Whether [`legacy_symbol_format_reason`] finds evidence of the legacy format.
@@ -632,7 +659,9 @@ pub fn build_call_graph(scip_data: &ScipIndex) -> HashMap<String, FunctionNode> 
     // First pass: a node per definition occurrence of a function symbol that has
     // a `symbols[]` record in the same document. A symbol normally has one
     // definition and one record; analyzer bugs can yield several of each, in
-    // which case the nth record (in document order) describes the nth definition.
+    // which case the nth record (in document order) is assumed to describe the
+    // nth definition (by range). SCIP does not guarantee that order, so metadata
+    // (signature, visibility) of duplicated symbols is approximate.
     for doc in &scip_data.documents {
         let rel_path = doc.relative_path.trim_start_matches('/');
         let mut records: HashMap<&str, Vec<&Symbol>> = HashMap::new();
@@ -720,8 +749,10 @@ pub fn build_call_graph(scip_data: &ScipIndex) -> HashMap<String, FunctionNode> 
             }
             all_function_symbols.insert(occurrence.symbol.clone());
             // A reference to the caller's own symbol is kept: it may name another
-            // definition that shares the symbol. Self-edges are dropped when the
-            // symbol is resolved to code_names.
+            // definition that shares the symbol. A reference to a duplicated
+            // symbol cannot be resolved to one definition, so it fans out to all
+            // of them except the caller (self-edges are dropped when the symbol is
+            // resolved to code_names).
             if let Some(caller_node) = current_function_key
                 .as_ref()
                 .and_then(|key| call_graph.get_mut(key))
@@ -950,19 +981,41 @@ fn convert_to_atoms_with_lines_internal(
 
     // === Phase 2: Detect duplicates and compute final code_names ===
     // Symbols are unique per definition except for rare analyzer bugs; such
-    // duplicates get an `@line` suffix.
+    // duplicates get an `@line` suffix, or `@path:line:column` when that still
+    // collides (same line in different files or columns).
     let mut code_name_count: HashMap<&str, usize> = HashMap::new();
     for data in &node_data {
         *code_name_count.entry(&data.base_code_name).or_insert(0) += 1;
     }
-    let final_code_names: Vec<String> = node_data
+    let line_code_names: Vec<String> = node_data
         .iter()
         .map(|data| {
             let is_duplicate = code_name_count[data.base_code_name.as_str()] > 1;
             if is_duplicate && data.lines_start > 0 {
-                symbol_to_code_name(&data.node.symbol, Some(data.lines_start))
+                format!("{}@{}", data.base_code_name, data.lines_start)
             } else {
                 data.base_code_name.clone()
+            }
+        })
+        .collect();
+    let mut line_code_name_count: HashMap<&str, usize> = HashMap::new();
+    for name in &line_code_names {
+        *line_code_name_count.entry(name).or_insert(0) += 1;
+    }
+    let final_code_names: Vec<String> = node_data
+        .iter()
+        .zip(&line_code_names)
+        .map(|(data, name)| {
+            if line_code_name_count[name.as_str()] > 1 && data.node.range.len() >= 2 {
+                format!(
+                    "{}@{}:{}:{}",
+                    data.base_code_name,
+                    data.node.relative_path,
+                    data.lines_start,
+                    data.node.range[1] + 1
+                )
+            } else {
+                name.clone()
             }
         })
         .collect();
@@ -1695,6 +1748,7 @@ pub fn backfill_atoms_from_parser(
     );
 
     let mut added = 0usize;
+    let mut backfilled: HashSet<String> = HashSet::new();
 
     for fi in &parsed.functions {
         let raw_path = match &fi.file {
@@ -1717,28 +1771,6 @@ pub fn backfill_atoms_from_parser(
             format!("{}/{}", code_path_prefix, code_path)
         };
 
-        let already_present = atoms_dict.values().any(|atom| {
-            if atom.display_name != fi.name
-                && !atom.display_name.ends_with(&format!("::{}", fi.name))
-            {
-                return false;
-            }
-            let path_ok = paths_match_by_suffix(&code_path, &atom.code_path)
-                || extract_src_suffix(&code_path) == extract_src_suffix(&atom.code_path);
-            if !path_ok {
-                return false;
-            }
-            let diff = (fi.spec_text.lines_start as isize - atom.code_text.lines_start as isize)
-                .unsigned_abs();
-            diff <= LINE_TOLERANCE
-                || (atom.code_text.lines_start >= fi.spec_text.lines_start
-                    && atom.code_text.lines_start <= fi.spec_text.lines_end)
-        });
-
-        if already_present {
-            continue;
-        }
-
         let module_path = derive_module_path_from_code_path(&code_path);
 
         // Methods are named after their impl or trait as in SCIP-derived code_names
@@ -1760,16 +1792,57 @@ pub fn backfill_atoms_from_parser(
             owner,
             fi.name
         );
+        // `Type::method` like SCIP-derived display names (see `enrich_display_name`).
+        let display_name = match parse_impl_segment(&code_name) {
+            Some(seg) => format!("{}::{}", bare_type_name(seg.self_type), fi.name),
+            None => match fi.scip_owner.as_deref().and_then(|o| o.strip_suffix('#')) {
+                Some(trait_name) => format!("{}::{}", trait_name, fi.name),
+                None => fi.name.clone(),
+            },
+        };
 
-        let has_spec = fi.has_requires || fi.has_ensures;
-        let is_replacement = if let Some(existing) = atoms_dict.get(&code_name) {
-            if has_spec && existing.code_text.lines_start != fi.spec_text.lines_start {
-                true
-            } else {
-                continue;
+        // The function is already an atom if one for the same method sits at its
+        // location: the atom's (SCIP name) line lies inside the parsed span, or,
+        // for a nearby line, the owner-aware display names agree. The display name
+        // alone is not enough: the analyzer resolves type aliases
+        // (`FieldElement` -> `FieldElement51`), the parser does not.
+        let already_present = atoms_dict.values().any(|atom| {
+            let same_method = atom.display_name == fi.name
+                || atom.display_name.ends_with(&format!("::{}", fi.name));
+            if !same_method {
+                return false;
             }
-        } else {
-            false
+            let path_ok = paths_match_by_suffix(&code_path, &atom.code_path)
+                || extract_src_suffix(&code_path) == extract_src_suffix(&atom.code_path);
+            if !path_ok {
+                return false;
+            }
+            let inside_span = atom.code_text.lines_start >= fi.spec_text.lines_start
+                && atom.code_text.lines_start <= fi.spec_text.lines_end;
+            let diff = (fi.spec_text.lines_start as isize - atom.code_text.lines_start as isize)
+                .unsigned_abs();
+            inside_span || (diff <= LINE_TOLERANCE && atom.display_name == display_name)
+        });
+
+        if already_present {
+            continue;
+        }
+
+        // A name collision with an atom inserted earlier in this loop is a cfg
+        // alternative of the same function: keep the spec-bearing variant, whose
+        // lines are what verification reports. An analyzer-indexed atom is never
+        // replaced (it carries the dependencies); the parser variant is dropped.
+        let has_spec = fi.has_requires || fi.has_ensures;
+        let is_replacement = match atoms_dict.get(&code_name) {
+            None => false,
+            Some(existing)
+                if backfilled.contains(&code_name)
+                    && has_spec
+                    && existing.code_text.lines_start != fi.spec_text.lines_start =>
+            {
+                true
+            }
+            Some(_) => continue,
         };
 
         let code_module = if module_path.is_empty() {
@@ -1791,14 +1864,6 @@ pub fn backfill_atoms_from_parser(
         } else {
             // Backfill paths from verus_parser are relative to src/
             format!("{}/src/{}", pkg_name, output_code_path)
-        };
-        // `Type::method` like SCIP-derived display names (see `enrich_display_name`).
-        let display_name = match parse_impl_segment(&code_name) {
-            Some(seg) => format!("{}::{}", bare_type_name(seg.self_type), fi.name),
-            None => match fi.scip_owner.as_deref().and_then(|o| o.strip_suffix('#')) {
-                Some(trait_name) => format!("{}::{}", trait_name, fi.name),
-                None => fi.name.clone(),
-            },
         };
         let rqn = derive_rust_qualified_name(&rqn_path, &display_name);
         atoms_dict.insert(
@@ -1842,6 +1907,7 @@ pub fn backfill_atoms_from_parser(
                 ),
             },
         );
+        backfilled.insert(code_name);
         if !is_replacement {
             added += 1;
         }
@@ -2332,6 +2398,18 @@ mod tests {
         assert!(!uses_legacy_symbol_format(&with("0.3.2743-standalone")));
     }
 
+    /// `/` and `#` inside a quoted descriptor are not structure.
+    #[test]
+    fn test_current_format_quoted_descriptor() {
+        let quoted =
+            index_with_symbols(&["rust-analyzer cargo c 1.0 impl#[`Tag<'/', '#', '#'>`]read()."]);
+        assert!(!uses_legacy_symbol_format(&quoted));
+        assert_eq!(
+            last_symbol_segment("c 1.0 m/impl#[`Tag<'/'>`]read()."),
+            "impl#[`Tag<'/'>`]read()."
+        );
+    }
+
     #[test]
     fn test_legacy_format_mixed_index() {
         // One `impl#[` symbol does not vouch for the rest.
@@ -2340,6 +2418,96 @@ mod tests {
             "rust-analyzer cargo c 1.0 field/FieldElement51#Clone#clone().",
         ]);
         assert!(uses_legacy_symbol_format(&mixed));
+    }
+
+    // =========================================================================
+    // backfill_atoms_from_parser
+    // =========================================================================
+
+    /// A crate `c` 1.0 whose `src/lib.rs` is `source`.
+    fn crate_with_lib(source: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/lib.rs"), source).unwrap();
+        dir
+    }
+
+    fn backfill(dir: &Path, atoms: &mut BTreeMap<String, AtomWithLines>) -> usize {
+        backfill_atoms_from_parser(dir, atoms, "c", "1.0", &HashMap::new(), true, "")
+    }
+
+    fn analyzer_atom(display_name: &str, line: usize, deps: &[&str]) -> AtomWithLines {
+        serde_json::from_value(serde_json::json!({
+            "display-name": display_name,
+            "dependencies": deps,
+            "code-module": "",
+            "code-path": "src/lib.rs",
+            "code-text": {"lines-start": line, "lines-end": line + 2},
+            "kind": "exec",
+            "language": "rust"
+        }))
+        .unwrap()
+    }
+
+    /// Same-named methods of different impls next to each other are distinct atoms.
+    #[test]
+    fn test_backfill_keeps_adjacent_methods_of_different_impls() {
+        let dir =
+            crate_with_lib("struct A;\nstruct B;\nimpl A { fn f() {} }\nimpl B { fn f() {} }\n");
+        let mut atoms = BTreeMap::new();
+        assert_eq!(backfill(dir.path(), &mut atoms), 2);
+        let names: Vec<&String> = atoms.keys().collect();
+        assert_eq!(
+            names,
+            vec!["probe:c/1.0/impl#[A]f()", "probe:c/1.0/impl#[B]f()"]
+        );
+        assert_eq!(atoms["probe:c/1.0/impl#[B]f()"].display_name, "B::f");
+    }
+
+    /// An analyzer atom inside the parsed span is the same function, even when
+    /// the analyzer named the aliased type.
+    #[test]
+    fn test_backfill_recognises_analyzer_atom_through_type_alias() {
+        let dir = crate_with_lib("type Alias = Real;\nimpl Alias {\n    fn f() {\n    }\n}\n");
+        let mut atoms = BTreeMap::new();
+        atoms.insert(
+            "probe:c/1.0/impl#[Real]f()".to_string(),
+            analyzer_atom("Real::f", 3, &[]),
+        );
+        assert_eq!(backfill(dir.path(), &mut atoms), 0);
+    }
+
+    /// An analyzer atom is not replaced by a parser-found cfg alternative with
+    /// the same code-name, even one with a spec.
+    #[test]
+    fn test_backfill_does_not_replace_analyzer_atom() {
+        let mut source = String::from(
+            "struct S;\nverus! {\nimpl S {\n    #[cfg(feature = \"a\")]\n    fn f() { g() }\n",
+        );
+        source.push_str(&"\n".repeat(20));
+        source.push_str(
+            "    #[cfg(not(feature = \"a\"))]\n    fn f()\n        ensures true,\n    {}\n}\n}\n",
+        );
+        let dir = crate_with_lib(&source);
+        let mut atoms = BTreeMap::new();
+        atoms.insert(
+            "probe:c/1.0/impl#[S]f()".to_string(),
+            analyzer_atom("S::f", 5, &["probe:c/1.0/g()"]),
+        );
+        backfill(dir.path(), &mut atoms);
+        let atom = &atoms["probe:c/1.0/impl#[S]f()"];
+        assert_eq!(atom.code_text.lines_start, 5);
+        assert_eq!(atom.dependencies.len(), 1);
+    }
+
+    /// Between two parser-found cfg alternatives, the spec-bearing one wins.
+    #[test]
+    fn test_backfill_prefers_spec_bearing_cfg_alternative() {
+        let source = "verus! {\n#[cfg(feature = \"a\")]\nfn h() {}\n\n\n\n\n\n\n\n#[cfg(not(feature = \"a\"))]\nfn h()\n    ensures true,\n{}\n}\n";
+        let dir = crate_with_lib(source);
+        let mut atoms = BTreeMap::new();
+        assert_eq!(backfill(dir.path(), &mut atoms), 1);
+        assert_eq!(atoms["probe:c/1.0/h()"].code_text.lines_start, 11);
     }
 
     // =========================================================================
@@ -2423,6 +2591,21 @@ mod tests {
             .count();
         let graph = build_call_graph(&index);
         assert_eq!(graph.len(), definition_count);
+
+        // Final code_names stay distinct.
+        let mut names: Vec<String> = convert_to_atoms_with_lines(&graph)
+            .into_iter()
+            .map(|a| a.code_name)
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            vec![
+                "probe:c/1.0/m/impl#[S]f()@src/a.rs:11:21",
+                "probe:c/1.0/m/impl#[S]f()@src/a.rs:11:5",
+                "probe:c/1.0/m/impl#[S]f()@src/b.rs:11:5",
+            ]
+        );
 
         // Each definition carries the record paired with it, in document order.
         let mut by_location: Vec<(String, Vec<i32>, String)> = graph

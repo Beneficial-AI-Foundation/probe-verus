@@ -540,26 +540,6 @@ struct AssumeSpecMatch {
     spec_text: String,
 }
 
-/// The Self type and trait of a qualified `assume_specification` path.
-///
-/// Uses the parsed `self-type`/`trait-type` fields, falling back to the
-/// `path-display` text (`<u64 as Trait>::method`) for specs files written before
-/// those fields existed. Returns `None` for unqualified paths (`Type::method`).
-fn qualified_owner(aspec: &AssumeSpecInfo) -> Option<(String, Option<String>)> {
-    if let Some(self_type) = &aspec.self_type {
-        return Some((self_type.clone(), aspec.trait_type.clone()));
-    }
-    let inner = aspec.path_display.strip_prefix('<')?;
-    let (qualified, _) = inner.rsplit_once(">::")?;
-    Some(match qualified.split_once(" as ") {
-        Some((self_ty, trait_ty)) => (
-            self_ty.trim().to_string(),
-            Some(trait_ty.trim().to_string()),
-        ),
-        None => (qualified.trim().to_string(), None),
-    })
-}
-
 /// Match `assume_specification` declarations to external stub atoms (empty
 /// `code-path`). Returns the matched atom code-names with their spec text.
 ///
@@ -575,23 +555,39 @@ fn match_assume_specs_to_atoms(
     let mut matched = BTreeMap::new();
 
     for aspec in assume_specs {
-        if aspec.path_segments.len() < 2 {
+        let segments = &aspec.path_segments;
+        let Some(method_seg) = segments.last() else {
             eprintln!(
-                "  Warning: assume_specification has fewer than 2 path segments: {:?}",
+                "  Warning: assume_specification has no path segments: {:?}",
                 aspec.path_display
             );
             continue;
-        }
-
-        let type_seg = &aspec.path_segments[aspec.path_segments.len() - 2];
-        let method_seg = &aspec.path_segments[aspec.path_segments.len() - 1];
-        let qualified = qualified_owner(aspec);
-        let owner = match &qualified {
-            Some((self_type, trait_type)) => MethodOwner::Qualified {
+        };
+        let owner = match &aspec.self_type {
+            // `<Self as Trait>::method` or `<Self>::method`.
+            Some(self_type) => MethodOwner::Qualified {
                 self_type,
-                trait_type: trait_type.as_deref(),
+                trait_type: aspec.trait_type.as_deref(),
             },
-            None => MethodOwner::Path(type_seg),
+            // A qualified path from a specs file written before `self-type` was
+            // recorded: `path-display` has lost the trait's generic arguments, so
+            // the exact target cannot be established.
+            None if aspec.path_display.starts_with('<') => {
+                eprintln!(
+                    "  Warning: assume_specification[{}] has no self-type (specs file \
+                     predates probe-verus 9.0.0); rerun specify to match it",
+                    aspec.path_display
+                );
+                continue;
+            }
+            None if segments.len() >= 2 => MethodOwner::Path(&segments[segments.len() - 2]),
+            None => {
+                eprintln!(
+                    "  Warning: assume_specification has fewer than 2 path segments: {:?}",
+                    aspec.path_display
+                );
+                continue;
+            }
         };
 
         let candidates: Vec<&String> = atoms
@@ -2342,16 +2338,50 @@ mod tests {
         assert!(result.is_empty(), "matched {:?}", result.keys());
     }
 
-    /// Specs files written before `self-type`/`trait-type` existed fall back to
-    /// the `path-display` text.
+    /// A qualified target from a specs file written before `self-type` existed
+    /// is left unattached: its trait generic arguments are lost.
     #[test]
-    fn test_assume_spec_qualified_from_path_display() {
-        let atoms = external_stubs(&[U64_SWAP, U32_SWAP]);
+    fn test_assume_spec_qualified_without_self_type_is_skipped() {
+        let atoms = external_stubs(&[U64_SWAP]);
         let mut spec = u64_swap_spec();
         spec.self_type = None;
         spec.trait_type = None;
-        let result = match_assume_specs_to_atoms(&[spec], &atoms);
-        assert_eq!(result.keys().collect::<Vec<_>>(), vec![U64_SWAP]);
+        assert!(match_assume_specs_to_atoms(&[spec], &atoms).is_empty());
+    }
+
+    /// `<Choice>::unwrap_u8` parses to one path segment plus a Self type, and
+    /// still reaches the matcher (parser -> specs JSON -> match).
+    #[test]
+    fn test_assume_spec_inherent_qualified_end_to_end() {
+        use std::io::Write;
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            "verus! {{\n    pub assume_specification[ <Choice>::unwrap_u8 ](c: &Choice) -> (u: u8)\n        ensures u <= 1,\n    ;\n}}"
+        )
+        .unwrap();
+        let (_, parsed) = crate::verus_parser::parse_file_for_functions_ext(
+            file.path(),
+            true,
+            true,
+            true,
+            true,
+            true,
+            false,
+        )
+        .unwrap();
+        let json = serde_json::to_value(&parsed).unwrap();
+        let specs: Vec<AssumeSpecInfo> = serde_json::from_value(json).unwrap();
+        assert_eq!(specs[0].self_type.as_deref(), Some("Choice"));
+        let atoms = external_stubs(&[
+            "probe:subtle/2.6.1/impl#[Choice]unwrap_u8()",
+            "probe:subtle/2.6.1/impl#[Other]unwrap_u8()",
+        ]);
+        let result = match_assume_specs_to_atoms(&specs, &atoms);
+        assert_eq!(
+            result.keys().collect::<Vec<_>>(),
+            vec!["probe:subtle/2.6.1/impl#[Choice]unwrap_u8()"]
+        );
     }
 
     #[test]

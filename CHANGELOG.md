@@ -24,6 +24,7 @@ what constitutes a breaking change.
 - Display names and `rust-qualified-name` of spec-trait impls on reference types now include the Self type (`Scalar::add_req` instead of `add_req`).
 
 ### Fixed
+- Files that use `final(x)` in a postcondition (Verus 2026-09 and later) no longer fail to parse. Before, their functions lost their kind, specs and verification results without an error. `verus_syn` is now 0.0.0-2026-09-06-0133.
 - Definitions sharing a SCIP symbol on the same line (different files or columns) are no longer merged into one atom; their code-names get an `@<path>:<line>:<column>` suffix.
 - A call between two definitions that share a symbol is kept as a dependency instead of being dropped as recursion.
 - Lifetime stripping keeps character literals in const generic arguments (`Tag<'a'>`).

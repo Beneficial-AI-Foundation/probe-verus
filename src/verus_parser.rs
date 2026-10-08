@@ -2195,6 +2195,40 @@ fn another_function(x: i32) -> i32 {{
     }
 
     #[test]
+    fn test_parse_final_in_postcondition() {
+        // Verus 2026-09 and later write the updated value of a `&mut` parameter as `final(x)`.
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"
+verus! {{
+pub open spec fn bump_spec(x: u8) -> u8 {{
+    (x + 1) as u8
+}}
+
+fn bump(x: &mut u8)
+    requires
+        *x < 255,
+    ensures
+        *final(x) == *old(x) + 1,
+{{
+    *x = *x + 1;
+}}
+}}
+"#
+        )
+        .unwrap();
+
+        let spans = parse_file_for_spans(file.path()).unwrap();
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0].name, "bump_spec");
+        assert_eq!(spans[0].kind, DeclKind::Spec);
+        assert_eq!(spans[1].name, "bump");
+        assert_eq!(spans[1].kind, DeclKind::Exec);
+        assert!(spans[1].ensures_range.is_some());
+    }
+
+    #[test]
     fn test_parse_file_for_functions() {
         let mut file = NamedTempFile::new().unwrap();
         writeln!(

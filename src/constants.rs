@@ -23,6 +23,9 @@ pub const SCIP_KIND_CONSTRUCTOR: i32 = 26;
 /// SCIP kind for macro definitions (used by verus-analyzer for some functions)
 pub const SCIP_KIND_MACRO: i32 = 80;
 
+/// SCIP kind for trait definitions
+pub const SCIP_KIND_TRAIT: i32 = 53;
+
 /// Check if a SCIP symbol kind represents a function-like entity.
 ///
 /// This includes regular functions, methods, constructors, and some macros
@@ -59,12 +62,6 @@ pub fn is_definition(symbol_roles: Option<i32>) -> bool {
 /// due to differences in how they handle attributes and doc comments.
 /// This tolerance allows fuzzy matching within a reasonable range.
 pub const LINE_TOLERANCE: usize = 5;
-
-/// Number of lines to look back from a definition for type context.
-///
-/// Used when collecting nearby type references to help disambiguate
-/// trait implementations (e.g., `impl From<T> for Container<X>` vs `Container<Y>`).
-pub const TYPE_CONTEXT_LOOKBACK_LINES: i32 = 5;
 
 // =============================================================================
 // Cache Configuration

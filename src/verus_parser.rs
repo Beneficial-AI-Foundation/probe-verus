@@ -775,6 +775,11 @@ pub struct SpecText {
 pub struct FunctionInfo {
     #[serde(skip_serializing)]
     pub name: String,
+    /// The enclosing impl or trait written as a SCIP descriptor prefix
+    /// (`impl#[Self]`, ``impl#[`&Self`][`Trait<X>`]``, `Trait#`), lifetimes
+    /// dropped. `None` for free functions. See [`scip_type_descriptor`].
+    #[serde(skip)]
+    pub scip_owner: Option<String>,
     #[serde(rename = "code-path", skip_serializing_if = "Option::is_none")]
     pub file: Option<String>,
     #[serde(rename = "spec-text")]
@@ -974,6 +979,17 @@ pub struct AssumeSpecInfo {
     pub requires_text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ensures_text: Option<String>,
+    /// Self type of a qualified path (`u64` in `<u64 as Trait>::method`).
+    #[serde(rename = "self-type", skip_serializing_if = "Option::is_none", default)]
+    pub self_type: Option<String>,
+    /// Trait of a qualified path, generic arguments included
+    /// (`From<u8>` in `<Choice as From<u8>>::from`).
+    #[serde(
+        rename = "trait-type",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    pub trait_type: Option<String>,
 }
 
 /// Output format for function listing
@@ -1011,6 +1027,8 @@ struct FunctionInfoVisitor {
     include_extended_info: bool,
     /// Current impl block type name (set while visiting an impl block)
     current_impl_type: Option<String>,
+    /// SCIP descriptor prefix of the enclosing impl or trait (see `FunctionInfo::scip_owner`).
+    current_scip_owner: Option<String>,
     /// Whether we are currently inside an `impl Trait for Type` block.
     /// Trait impl methods are inherently public even without an explicit `pub` keyword.
     in_trait_impl: bool,
@@ -1051,6 +1069,7 @@ impl FunctionInfoVisitor {
             include_spec_text,
             include_extended_info: false,
             current_impl_type: None,
+            current_scip_owner: None,
             in_trait_impl: false,
             inside_cfg_impl: 0,
             inside_cfg_mod: 0,
@@ -1456,6 +1475,7 @@ impl FunctionInfoVisitor {
 
         self.functions.push(FunctionInfo {
             name,
+            scip_owner: self.current_scip_owner.clone(),
             file: self.file_path.clone(),
             spec_text: SpecText {
                 lines_start: start_line,
@@ -1564,6 +1584,17 @@ impl<'ast> Visit<'ast> for FunctionInfoVisitor {
         let prev_impl_type = self.current_impl_type.take();
         let prev_in_trait_impl = self.in_trait_impl;
         self.in_trait_impl = node.trait_.is_some();
+        let self_ty = &node.self_ty;
+        let self_descriptor = scip_type_descriptor(quote::quote! { #self_ty });
+        let trait_descriptor = node
+            .trait_
+            .as_ref()
+            .and_then(|(_, path, _)| path.segments.last())
+            .map(|seg| scip_type_descriptor(quote::quote! { #seg }));
+        let prev_scip_owner = self.current_scip_owner.replace(match trait_descriptor {
+            Some(t) => format!("impl#[{self_descriptor}][{t}]"),
+            None => format!("impl#[{self_descriptor}]"),
+        });
         if self.include_extended_info {
             let ty = &node.self_ty;
             let type_str = quote::quote! { #ty }.to_string();
@@ -1608,6 +1639,7 @@ impl<'ast> Visit<'ast> for FunctionInfoVisitor {
             self.inside_cfg_impl -= 1;
         }
         self.current_impl_type = prev_impl_type;
+        self.current_scip_owner = prev_scip_owner;
         self.in_trait_impl = prev_in_trait_impl;
     }
 
@@ -1616,8 +1648,10 @@ impl<'ast> Visit<'ast> for FunctionInfoVisitor {
         if self.include_extended_info {
             self.current_impl_type = Some(node.ident.to_string());
         }
+        let prev_scip_owner = self.current_scip_owner.replace(format!("{}#", node.ident));
         verus_syn::visit::visit_item_trait(self, node);
         self.current_impl_type = prev_impl_type;
+        self.current_scip_owner = prev_scip_owner;
     }
 
     fn visit_item_mod(&mut self, node: &'ast verus_syn::ItemMod) {
@@ -1666,6 +1700,7 @@ impl<'ast> Visit<'ast> for FunctionInfoVisitor {
 
         let path_segments = extract_assume_spec_segments(node);
         let path_display = format_assume_spec_path(node);
+        let (self_type, trait_type) = assume_spec_qualified_types(node);
 
         let has_requires = node.requires.is_some();
         let has_ensures = node.ensures.is_some();
@@ -1681,6 +1716,8 @@ impl<'ast> Visit<'ast> for FunctionInfoVisitor {
             has_ensures,
             requires_text,
             ensures_text,
+            self_type,
+            trait_type,
         });
 
         verus_syn::visit::visit_assume_specification(self, node);
@@ -1710,6 +1747,74 @@ fn extract_assume_spec_segments(node: &verus_syn::AssumeSpecification) -> Vec<St
     } else {
         segments
     }
+}
+
+/// Render a type as a SCIP symbol descriptor the way rust-analyzer writes it,
+/// minus lifetimes (which code-names drop): `& 'a mut Foo < T , U >` ->
+/// `` `&mut Foo<T, U>` ``, `Scalar` -> `Scalar`. Descriptors with characters
+/// other than identifier characters are wrapped in backticks.
+///
+/// Best effort: rust-analyzer renders the resolved type, which can differ from
+/// the written one (paths, aliases, `Self`).
+pub(crate) fn scip_type_descriptor(tokens: proc_macro2::TokenStream) -> String {
+    let is_word = |c: char| c.is_alphanumeric() || c == '_';
+    let text = tokens.to_string();
+    let mut out = String::with_capacity(text.len());
+    let mut pending_space = false;
+    for c in text.chars() {
+        if c.is_whitespace() {
+            pending_space = true;
+            continue;
+        }
+        if pending_space && is_word(c) && out.chars().last().is_some_and(is_word) {
+            out.push(' ');
+        }
+        pending_space = false;
+        out.push(c);
+        if c == ',' || c == ';' {
+            out.push(' ');
+        }
+    }
+    // Strip after compacting, so `Visitor < 'de >` loses its empty brackets.
+    let out = crate::strip_lifetimes(&out);
+    if out.chars().all(|c| is_word(c) || "+-$".contains(c)) {
+        out
+    } else {
+        format!("`{out}`")
+    }
+}
+
+/// Render tokens with the spacing used in `path-display` (`Foo<u8>`, `a::B`).
+fn tokens_to_display(tokens: proc_macro2::TokenStream) -> String {
+    tokens
+        .to_string()
+        .replace(" :: ", "::")
+        .replace("< ", "<")
+        .replace(" <", "<")
+        .replace(" >", ">")
+}
+
+/// The Self type and trait of a qualified `assume_specification` path:
+/// `<u64 as Trait<X>>::m` -> `(Some("u64"), Some("Trait<X>"))`,
+/// `<T>::m` -> `(Some("T"), None)`, `Type::m` -> `(None, None)`.
+fn assume_spec_qualified_types(
+    node: &verus_syn::AssumeSpecification,
+) -> (Option<String>, Option<String>) {
+    let Some(qself) = &node.qself else {
+        return (None, None);
+    };
+    let ty = &qself.ty;
+    let self_type = tokens_to_display(quote::quote! { #ty });
+    let trait_type = (qself.position > 0).then(|| {
+        node.path
+            .segments
+            .iter()
+            .take(qself.position)
+            .map(|seg| tokens_to_display(quote::quote! { #seg }))
+            .collect::<Vec<_>>()
+            .join("::")
+    });
+    (Some(self_type), trait_type)
 }
 
 /// Format the `assume_specification` path for human display.
@@ -2090,6 +2195,40 @@ fn another_function(x: i32) -> i32 {{
     }
 
     #[test]
+    fn test_parse_final_in_postcondition() {
+        // Verus 2026-09 and later write the updated value of a `&mut` parameter as `final(x)`.
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"
+verus! {{
+pub open spec fn bump_spec(x: u8) -> u8 {{
+    (x + 1) as u8
+}}
+
+fn bump(x: &mut u8)
+    requires
+        *x < 255,
+    ensures
+        *final(x) == *old(x) + 1,
+{{
+    *x = *x + 1;
+}}
+}}
+"#
+        )
+        .unwrap();
+
+        let spans = parse_file_for_spans(file.path()).unwrap();
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0].name, "bump_spec");
+        assert_eq!(spans[0].kind, DeclKind::Spec);
+        assert_eq!(spans[1].name, "bump");
+        assert_eq!(spans[1].kind, DeclKind::Exec);
+        assert!(spans[1].ensures_range.is_some());
+    }
+
+    #[test]
     fn test_parse_file_for_functions() {
         let mut file = NamedTempFile::new().unwrap();
         writeln!(
@@ -2189,6 +2328,7 @@ impl Bar {{
     ) -> FunctionInfo {
         FunctionInfo {
             name: "test_fn".to_string(),
+            scip_owner: None,
             file: Some("src/lib.rs".to_string()),
             spec_text: SpecText {
                 lines_start: 1,
@@ -2474,6 +2614,67 @@ verus! {{
         let unwrap = &assume_specs[1];
         assert_eq!(unwrap.path_segments, vec!["Choice", "unwrap_u8"]);
         assert!(unwrap.has_ensures);
+    }
+
+    #[test]
+    fn test_scip_type_descriptor() {
+        let ty: verus_syn::Type = verus_syn::parse_str("&'a mut Foo<'a, T, U>").unwrap();
+        assert_eq!(
+            scip_type_descriptor(quote::quote! { #ty }),
+            "`&mut Foo<T, U>`"
+        );
+        let ty: verus_syn::Type = verus_syn::parse_str("Scalar").unwrap();
+        assert_eq!(scip_type_descriptor(quote::quote! { #ty }), "Scalar");
+        let ty: verus_syn::Type = verus_syn::parse_str("[u8; 32]").unwrap();
+        assert_eq!(scip_type_descriptor(quote::quote! { #ty }), "`[u8; 32]`");
+        let ty: verus_syn::Type = verus_syn::parse_str("Visitor<'de>").unwrap();
+        assert_eq!(scip_type_descriptor(quote::quote! { #ty }), "Visitor");
+    }
+
+    /// Methods carry their impl/trait as a SCIP descriptor prefix, so that
+    /// backfilled code-names keep same-named methods apart.
+    #[test]
+    fn test_function_scip_owner() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"
+impl<'a> Add<&'a SubgroupPoint> for &'a EdwardsPoint {{
+    fn add(self, other: &'a SubgroupPoint) -> EdwardsPoint {{ todo!() }}
+}}
+impl<'a> Add<&'a SubgroupPoint> for &'a SubgroupPoint {{
+    fn add(self, other: &'a SubgroupPoint) -> SubgroupPoint {{ todo!() }}
+}}
+impl Scalar {{
+    fn from_bits(b: [u8; 32]) -> Scalar {{ todo!() }}
+}}
+trait IsIdentity {{
+    fn is_identity(&self) -> bool {{ true }}
+}}
+fn free() {{}}
+"#
+        )
+        .unwrap();
+        let (functions, _) =
+            parse_file_for_functions_ext(file.path(), true, true, true, true, false, false)
+                .unwrap();
+        let owners: Vec<(&str, Option<&str>)> = functions
+            .iter()
+            .map(|f| (f.name.as_str(), f.scip_owner.as_deref()))
+            .collect();
+        assert_eq!(
+            owners,
+            vec![
+                ("add", Some("impl#[`&EdwardsPoint`][`Add<&SubgroupPoint>`]")),
+                (
+                    "add",
+                    Some("impl#[`&SubgroupPoint`][`Add<&SubgroupPoint>`]")
+                ),
+                ("from_bits", Some("impl#[Scalar]")),
+                ("is_identity", Some("IsIdentity#")),
+                ("free", None),
+            ]
+        );
     }
 
     #[test]

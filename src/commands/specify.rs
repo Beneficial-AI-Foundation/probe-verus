@@ -345,6 +345,7 @@ mod tests {
     ) -> FunctionInfo {
         FunctionInfo {
             name: name.to_string(),
+            scip_owner: None,
             file: Some(file.to_string()),
             spec_text: SpecText {
                 lines_start: span_start,

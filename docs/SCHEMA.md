@@ -430,6 +430,8 @@ function without a proof).  Omitted when there are no such declarations.
 | `has_ensures` | boolean | yes | Whether an `ensures` clause is present |
 | `requires_text` | string | no | Raw `requires` text (when specify ran with spec text enabled) |
 | `ensures_text` | string | no | Raw `ensures` text (when specify ran with spec text enabled) |
+| `self-type` | string | no | Self type of a qualified path (`u64` in `<u64 as Trait>::m`) |
+| `trait-type` | string | no | Trait of a qualified path, generic arguments included (`From<u8>` in `<Choice as From<u8>>::from`) |
 
 ---
 
@@ -624,7 +626,10 @@ atoms):
 3. **`assume_specification` matched to an external stub** — An entry in
    `assume-specifications` is matched to an atom with empty `code-path`
    (external stub) using its path segments (v6.5.0).  That stub atom is marked
-   `"trusted"` even though it has no local body or proofs entry.
+   `"trusted"` even though it has no local body or proofs entry.  A qualified
+   target (`<u64 as Trait>::m`) matches only the impl with that Self type and
+   trait; `Type::m` matches impls on `Type` and the trait declaration
+   `Type#m()`.  The spec is attached only when exactly one stub matches.
 
 Functions with only `assume()` (no `admit()`, not `external_body`, and not a
 matched `assume_specification` stub) remain `"unverified"` when proofs report
@@ -760,7 +765,7 @@ Counts of atoms by final `verification-status` after merge overrides.  Keys:
   "montgomery/MontgomeryPoint_mul.md": {
     "code-line": 42,
     "code-path": "src/montgomery.rs",
-    "code-name": "probe:curve25519-dalek/4.1.3/montgomery/MontgomeryPoint#mul()"
+    "code-name": "probe:curve25519-dalek/4.1.3/montgomery/impl#[MontgomeryPoint]mul_clamped()"
   },
   "edwards/decompress.md": {
     "code-path": "src/edwards.rs"
@@ -855,7 +860,7 @@ field.
       "crate": "curve25519-dalek",
       "version": "4.1.3",
       "functions": [
-        "probe:curve25519-dalek/4.1.3/field/FieldElement51#mul()"
+        "probe:curve25519-dalek/4.1.3/backend/serial/u64/field/impl#[FieldElement51]square()"
       ]
     },
     {

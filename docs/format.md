@@ -63,16 +63,37 @@ The `data` payload is an **object** (dictionary), not an array. Keys are `code-n
 
 ### Dictionary key: `code-name` (string)
 
-A probe-style URI that uniquely identifies the function. Format:
+A probe-style URI that uniquely identifies the function. It is the function's SCIP
+symbol (rust-analyzer format, as emitted by verus-analyzer 2026-08-22 and later) with the
+`rust-analyzer cargo ` prefix and trailing `.` removed, lifetimes dropped, and spaces
+replaced by `/`. Format:
 
 ```
-probe:<crate>/<version>/<module>/<Type>#<Trait><TypeParam>#<method>()
+probe:<crate>/<version>/<module path>/<function>()
+probe:<crate>/<version>/<module path>/impl#[<SelfType>]<method>()
+probe:<crate>/<version>/<module path>/impl#[<SelfType>][<Trait>]<method>()
 ```
+
+Types containing special characters are wrapped in backticks, as in the SCIP symbol.
 
 Examples:
-- Free function: `probe:curve25519-dalek/4.1.3/field/reduce()`
-- Inherent method: `probe:curve25519-dalek/4.1.3/field/FieldElement51#square()`
-- Trait impl: `probe:curve25519-dalek/4.1.3/scalar/Scalar#Add<&Scalar>#add()`
+- Free function: `probe:curve25519-dalek/4.1.3/backend/serial/u64/field/reduce()`
+- Inherent method: `probe:curve25519-dalek/4.1.3/backend/serial/u64/field/impl#[FieldElement51]square()`
+- Trait impl: ``probe:curve25519-dalek/4.1.3/scalar/impl#[`&Scalar`][`Add<&Scalar>`]add()``
+
+In the rare case where the analyzer emits the same symbol for several definitions, each
+gets an `@<line>` suffix (e.g. `.../scalar/impl#[Scalar]from_spec()@1080`), or
+`@<path>:<line>:<column>` when definitions share a line. A call to such a symbol cannot be
+resolved to one definition, so it becomes a dependency on every definition sharing the
+symbol (except the caller itself). Their signature metadata is paired by document order,
+which SCIP does not guarantee, so it is approximate.
+
+Functions the analyzer does not index (e.g. in cfg-inactive impls) are added from the
+source parser. Their code-names follow the same shape, with the impl or trait rendered
+from the source text (`impl#[SelfType][Trait]method()`, `Trait#method()`). This rendering
+is best effort: it can differ from the name the analyzer would assign (the analyzer
+renders resolved types, e.g. `Self` in trait arguments, and inline `mod` blocks are not
+reflected), so such a function's code-name can change once the analyzer indexes it.
 
 The `code-name` is not serialized inside the value object (it is the key).
 
@@ -89,7 +110,7 @@ List of `code-name` URIs for functions called by this function.
 ```json
 "dependencies": [
   "probe:curve25519-dalek/4.1.3/scalar/UnpackedScalar#add()",
-  "probe:curve25519-dalek/4.1.3/scalar/Scalar#unpack()"
+  "probe:curve25519-dalek/4.1.3/scalar/impl#[Scalar]unpack()"
 ]
 ```
 
@@ -101,12 +122,12 @@ in the function a call occurs.
 ```json
 "dependencies-with-locations": [
   {
-    "code-name": "probe:curve25519-dalek/4.1.3/scalar/UnpackedScalar#add()",
+    "code-name": "probe:curve25519-dalek/4.1.3/scalar/impl#[UnpackedScalar]add()",
     "location": "inner",
     "line": 455
   },
   {
-    "code-name": "probe:curve25519-dalek/4.1.3/field/reduce()",
+    "code-name": "probe:curve25519-dalek/4.1.3/backend/serial/u64/field/reduce()",
     "location": "precondition",
     "line": 451
   }
@@ -209,11 +230,11 @@ external crates), it creates lightweight stub entries. Stubs can be identified b
       "kind": "exec",
       "language": "rust"
     },
-    "probe:curve25519-dalek/4.1.3/scalar/Scalar#Mul<&Scalar>#mul()": {
+    "probe:curve25519-dalek/4.1.3/scalar/impl#[`&Scalar`][`Mul<&Scalar>`]mul()": {
       "display-name": "Scalar::mul",
       "dependencies": [
-        "probe:curve25519-dalek/4.1.3/scalar/UnpackedScalar#mul()",
-        "probe:curve25519-dalek/4.1.3/scalar/Scalar#unpack()"
+        "probe:curve25519-dalek/4.1.3/scalar/impl#[UnpackedScalar]mul()",
+        "probe:curve25519-dalek/4.1.3/scalar/impl#[Scalar]unpack()"
       ],
       "code-module": "scalar",
       "code-path": "src/scalar.rs",

@@ -10,6 +10,11 @@ what constitutes a breaking change.
 
 ## [Unreleased]
 
+### Security
+- Upgraded `zip` from 8.1 to 9.x (9.6.1 in `Cargo.lock`). zip 8.x has a critical
+  advisory (fixed in 9.0.5) and three high advisories that are fixed only in 9.x.
+  No code changes were necessary.
+
 ## [8.0.1] - 2026-08-04
 
 ### Fixed

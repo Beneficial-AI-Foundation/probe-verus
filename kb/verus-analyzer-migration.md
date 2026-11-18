@@ -350,6 +350,7 @@ atom (same file, same name, overlapping span). Reports are in
 | 8.0.1, analyzer 2026-06-17 | 29 | 0 | 2 | 48 | extract fails |
 | 8.0.1, analyzer 2026-09-25 | 29 | 0 | 2 | 48 | 14 |
 | PR #50, analyzer 2026-09-25 | 6 | 5 | 29 | 63 | 49 |
+| PR 1 (5d685dc), analyzer 2026-09-25 | 0 | 0 | 0 | 0 | 0 |
 
 - The 8.0.1 misses on dalek-verus are mostly feature-gated impl methods
   (serde `serialize`, `deserialize`, `visit_seq`, group `random`,
@@ -359,3 +360,10 @@ atom (same file, same name, overlapping span). Reports are in
 - Gate for PR 1: no project has more unmatched declarations than with
   8.0.1 and analyzer 2026-09-25, and every remaining one is listed in
   `corpus/known-limitations.toml` with a reason.
+- PR 1 passes the gate with nothing to list: the run with `--gate`,
+  `--baseline` (8.0.1, analyzer 2026-09-25) and `--verify` has no unmatched
+  declarations. With Verus `0.2026.01.14.88f7396`, dalek-verus has 1,094
+  verified or transitively verified atoms, 0 failed, as with 8.0.1. The
+  differences against 8.0.1 are the 29 declarations that 8.0.1 missed, 2
+  atoms that operator edges change from transitively verified to verified,
+  and 3 cfg-inactive trusted atoms (#60).

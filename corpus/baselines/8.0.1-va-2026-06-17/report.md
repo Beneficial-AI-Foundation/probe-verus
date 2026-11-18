@@ -4,7 +4,7 @@
 | pmemlog | list-functions 0, extract 0 | 4 | 115 | 115 | 438 | 0 (0) |
 | vest | list-functions 0, extract 0 | 19 | 749 | 747 | 996 | 2 (2) |
 | capybarakv | list-functions 0, extract 0 | 24 | 1291 | 1243 | 3294 | 48 (48) |
-| verismo | list-functions 0, extract 1 | 0 | - | - | - | 0 (0) |
+| verismo | list-functions 0, extract 1 | 0 | - | - | - | error |
 
 - dalek-verus: `fill_bytes` [fn] src/core_assumes.rs:422-428 (standalone)
 - dalek-verus: `sha512_hash_bytes` [fn] src/core_assumes.rs:442-450 (standalone)

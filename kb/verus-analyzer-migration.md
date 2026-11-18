@@ -168,11 +168,11 @@ probe-verus version under test. It checks:
   number of declarations equals the summary count.
 - Every declaration in the inventory is a local atom, or is a listed known
   limitation (with `--gate`).
-- Run time, and counts of local atoms and edges, compared with the
-  previous run.
 
 Each project uses its own output directory. The script records the commit,
 `rustc -vV` and the probe-verus, verus-analyzer and scip versions it used.
+It also records the run time and the counts of local atoms and edges, but
+it does not compare them with an earlier run.
 It runs in CI weekly as a diagnostic, without `--gate`. PR 1 merges only
 after a manual run with `--gate` passes, and that run is a required step of
 every release.

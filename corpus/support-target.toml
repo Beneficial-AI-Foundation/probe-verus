@@ -8,6 +8,9 @@
 #   toolchain  Rust toolchain of the project's Verus version. The script sets
 #              RUSTUP_TOOLCHAIN to it. Leave it out when the project has its
 #              own rust-toolchain.toml; rustup then uses that file.
+#   verus      managed Verus release (directory name in ~/.probe-verus/tools
+#              without the `verus-` prefix) that --verify uses. Projects
+#              without it are not verified.
 
 [[project]]
 name = "dalek-verus"
@@ -15,6 +18,7 @@ repo = "https://github.com/Beneficial-AI-Foundation/dalek-verus.git"
 commit = "5b70dd7377ad8057008140155358f546a8e26c81"
 crate = "curve25519-dalek"
 toolchain = "1.92.0"      # vstd git rev 88f7396 (Verus 2026-01-14)
+verus = "0.2026.01.14.88f7396"
 
 [[project]]
 name = "pmemlog"
@@ -43,4 +47,4 @@ repo = "https://github.com/microsoft/verismo.git"
 commit = "c90240a3b66194367c7704f0c4733982ca8e275a"
 crate = "source/verismo"
 # rust-toolchain.toml in the repo: nightly-2023-12-22. Uses a Verus fork,
-# so verification is not part of the corpus run for this project.
+# so it has no `verus` version and is not verified.

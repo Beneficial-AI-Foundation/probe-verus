@@ -23,9 +23,16 @@ To run a specific verus-analyzer release without touching
 ~/.probe-verus/tools, pass --analyzer-version. The script then installs that
 release into its own HOME under the work directory and runs probe-verus
 with that HOME. RUSTUP_HOME and CARGO_HOME keep pointing to the real ones.
+
+--verify also runs Verus verification, for the projects that have a `verus`
+version in the manifest. That version must be installed in the real
+~/.probe-verus/tools (`PROBE_VERUS_VERSION=<version> probe-verus setup`).
+The script sets PROBE_VERUS_VERSION and links the version into the
+isolated HOME, and fails if extract used another cargo-verus.
 """
 
 import argparse
+import collections
 import gzip
 import json
 import os
@@ -105,6 +112,32 @@ def checkout(project, work_dir):
     if status:
         raise RuntimeError(f"{repo_dir} is not clean after reset:\n{status}")
     return repo_dir
+
+
+def verus_dir(version):
+    """Return the managed Verus directory for `version` in the real HOME."""
+    if not re.fullmatch(r"[0-9A-Za-z._-]+", version):
+        raise ValueError(f"invalid verus version: {version}")
+    path = Path.home() / ".probe-verus" / "tools" / f"verus-{version}"
+    if not (path / "cargo-verus").exists():
+        raise RuntimeError(f"Verus {version} is not installed in {path.parent}; "
+                           f"run `PROBE_VERUS_VERSION={version} probe-verus setup`")
+    return path
+
+
+def use_verus(version, env):
+    """Make probe-verus run Verus `version`. Return the cargo-verus path it must use."""
+    real = verus_dir(version)
+    tools = Path(env["HOME"]) / ".probe-verus" / "tools"
+    target = tools / real.name
+    if target.resolve() != real.resolve():
+        if target.is_symlink():
+            target.unlink()
+        elif target.exists():
+            raise RuntimeError(f"{target} exists and is not a link to {real}")
+        target.symlink_to(real)
+    env["PROBE_VERUS_VERSION"] = version
+    return target / "cargo-verus"
 
 
 def analyzer_home(version, work_dir, scip):
@@ -303,8 +336,12 @@ def run_project(project, args, env_base, out_dir, result):
     decls = parse_inventory((pdir / "list-functions.log").read_text())
 
     cmd = [args.probe_verus, "extract", str(crate), "--regenerate-scip"]
-    verify = args.verify and project["name"] not in args.no_verify
-    if not verify:
+    verify = args.verify and bool(project.get("verus"))
+    if verify:
+        cargo_verus = use_verus(project["verus"], env)
+        result["verus"] = project["verus"]
+    else:
+        env.pop("PROBE_VERUS_VERSION", None)
         cmd.append("--skip-verify")
     started = time.time()
     rc, secs = run(cmd, crate, env, pdir / "extract.log")
@@ -315,7 +352,20 @@ def run_project(project, args, env_base, out_dir, result):
         shutil.copytree(probes, pdir / "probes")
     if rc != 0:
         raise RuntimeError("extract failed; see extract.log")
+    if verify:
+        # probe-verus falls back to another installed Verus when the requested
+        # one is missing, so check the binary that extract reports.
+        used = f"Using cargo-verus: {cargo_verus}"
+        if used not in (pdir / "extract.log").read_text():
+            raise RuntimeError(f"extract did not use {cargo_verus}; see extract.log")
     result["atoms_file"], atoms, result["extract_status"] = check_extract(probes, started, verify)
+    if verify:
+        _, unified = load_fresh(probes, result["atoms_file"].removesuffix("_atoms.json") + ".json",
+                                started, "probe-verus/extract")
+        statuses = collections.Counter(
+            a.get("verification-status") or ("untracked" if a.get("untracked") else "none")
+            for a in unified.values() if a.get("code-path"))
+        result["verification"] = dict(sorted(statuses.items()))
 
     local = {k: a for k, a in atoms.items() if a.get("code-path")}
     unmatched, extra = check(decls, atoms)
@@ -351,6 +401,10 @@ def write_report(results, tools, out_dir, known):
         if r.get("error"):
             lines.append(f"- {r['name']}: ERROR {r['error'].splitlines()[0]}")
     for r in results:
+        if r.get("verification"):
+            counts = ", ".join(f"{k} {v}" for k, v in r["verification"].items())
+            lines.append(f"- {r['name']}: Verus {r['verus']}: {counts}")
+    for r in results:
         for u in r.get("unmatched", []):
             lines.append(f"- {r['name']}: `{u['name']}` [{u['kind']}] {u['file']}:{u['start']}-{u['end']} ({u.get('context')})")
     (out_dir / "report.md").write_text("\n".join(lines) + "\n")
@@ -372,7 +426,6 @@ def main():
     args.probe_verus = str(Path(args.probe_verus).resolve())
     if not os.access(args.probe_verus, os.X_OK):
         sys.exit(f"--probe-verus: {args.probe_verus} is not an executable file")
-    args.no_verify = {"verismo"}
     args.work_dir = args.work_dir.resolve()
     args.out = args.out.resolve()
     args.work_dir.mkdir(parents=True, exist_ok=True)
@@ -420,6 +473,7 @@ def main():
         if args.gate and new:
             failed = True
         print(f"   steps {result['steps']}  unmatched {len(unmatched)} (new {len(new)})"
+              + (f"  verification {result['verification']}" if "verification" in result else "")
               + (f"  ERROR {result['error'].splitlines()[0]}" if "error" in result else ""),
               flush=True)
         write_report(results, tools, args.out, known)

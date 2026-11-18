@@ -233,7 +233,12 @@ Options:
   ones. Use this until probe-verus supports analyzer pins (PR 2).
 - `--project NAME` runs one project. `--gate` fails on unmatched
   declarations that `corpus/known-limitations.toml` does not list.
-  `--verify` also runs Verus verification (not for verismo).
+  `--verify` also runs Verus verification, for projects with a `verus`
+  version in the manifest (now only dalek-verus). That version must be
+  installed in `~/.probe-verus/tools`. Install it with
+  `PROBE_VERUS_VERSION=<version> probe-verus setup`. The script fails if
+  `extract` uses another `cargo-verus`, and it reports the counts of each
+  verification status.
 
 The clones in the work directory belong to the script. Each run resets
 them to the pinned commit and deletes untracked files. Do not run two

@@ -9,7 +9,7 @@
 use crate::constants::SCIP_SYMBOL_PREFIX;
 use crate::path_utils::paths_match_by_suffix;
 use crate::verus_parser::AssumeSpecInfo;
-use crate::{ScipIndex, PROBE_URI_PREFIX};
+use crate::{Document, ScipIndex, PROBE_URI_PREFIX};
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -43,11 +43,7 @@ fn resolve_one(
         .map_err(|e| format!("cannot read {file}: {e}"))?;
     let (start, end) = target_range(&source, spec.line)
         .ok_or_else(|| format!("cannot find the target brackets at {file}:{}", spec.line))?;
-    let document = index
-        .documents
-        .iter()
-        .find(|d| paths_match_by_suffix(file, d.relative_path.trim_start_matches('/')))
-        .ok_or_else(|| format!("{file} is not in the SCIP index"))?;
+    let document = find_document(index, source_root, file)?;
 
     // Type and trait symbols referenced inside the brackets, by name.
     let referenced: Vec<(&str, &str)> = document
@@ -73,9 +69,40 @@ fn resolve_one(
     Ok(crates)
 }
 
+/// The index document of `file`. Its path relative to the index root decides;
+/// without that, the one document whose path ends with `file`.
+fn find_document<'a>(
+    index: &'a ScipIndex,
+    source_root: &Path,
+    file: &str,
+) -> Result<&'a Document, String> {
+    let index_root = index.metadata.project_root.strip_prefix("file://");
+    let exact = index_root.and_then(|root| {
+        let path = source_root.join(file);
+        let relative = path.strip_prefix(root).ok()?.to_str()?.to_owned();
+        index
+            .documents
+            .iter()
+            .find(|d| d.relative_path.trim_start_matches('/') == relative)
+    });
+    if let Some(document) = exact {
+        return Ok(document);
+    }
+    let mut matches = index
+        .documents
+        .iter()
+        .filter(|d| paths_match_by_suffix(file, d.relative_path.trim_start_matches('/')));
+    match (matches.next(), matches.next()) {
+        (Some(document), None) => Ok(document),
+        (None, _) => Err(format!("{file} is not in the SCIP index")),
+        (Some(_), Some(_)) => Err(format!("{file} matches several files in the SCIP index")),
+    }
+}
+
 /// Names of the Self type and trait of the target that need a SCIP symbol:
 /// identifiers that are not primitive types. `From<u8>` gives `From`,
-/// `core::hash::Hash` gives `Hash`, `[T; N]` gives nothing.
+/// `core::hash::Hash` gives `Hash`, `&'a mut Foo` gives `Foo`, `[T; N]` gives
+/// nothing.
 fn owner_names(spec: &AssumeSpecInfo) -> Vec<String> {
     let mut owners: Vec<&str> = Vec::new();
     match (&spec.self_type, &spec.trait_type) {
@@ -93,6 +120,7 @@ fn owner_names(spec: &AssumeSpecInfo) -> Vec<String> {
     owners
         .into_iter()
         .filter_map(|owner| {
+            let owner = strip_indirection(owner);
             let without_generics = owner.split('<').next().unwrap_or(owner).trim();
             let name = without_generics
                 .rsplit("::")
@@ -108,12 +136,37 @@ fn owner_names(spec: &AssumeSpecInfo) -> Vec<String> {
         .collect()
 }
 
+/// The type behind references and raw pointers: `Foo` of `& 'a mut Foo`.
+fn strip_indirection(mut ty: &str) -> &str {
+    loop {
+        ty = ty.trim_start();
+        let Some(rest) = ty.strip_prefix(['&', '*']) else {
+            return ty;
+        };
+        let mut rest = rest.trim_start();
+        if rest.starts_with('\'') {
+            rest = rest
+                .find(char::is_whitespace)
+                .map_or("", |i| &rest[i..])
+                .trim_start();
+        }
+        ty = rest
+            .strip_prefix("mut ")
+            .or_else(|| rest.strip_prefix("const "))
+            .unwrap_or(rest);
+    }
+}
+
 /// 0-based (line, column) of the `[` and `]` around the target of the
-/// `assume_specification` declared at 1-based `line`.
+/// `assume_specification` declared at 1-based `line`. Brackets inside the
+/// generics (`<T: AsRef<[u8]>>`) are skipped.
 fn target_range(source: &str, line: usize) -> Option<((i32, i32), (i32, i32))> {
     let mut start = None;
     let mut depth = 0usize;
     let mut seen_keyword = false;
+    // `<` depth of the generics before the target; the `>` of `->` does not count.
+    let mut angle = 0usize;
+    let mut prev = ' ';
     for (l, text) in source.lines().enumerate().skip(line.checked_sub(1)?) {
         let mut chars = text.char_indices().peekable();
         if !seen_keyword {
@@ -125,6 +178,9 @@ fn target_range(source: &str, line: usize) -> Option<((i32, i32), (i32, i32))> {
         }
         for (col, c) in chars {
             match c {
+                '<' if start.is_none() => angle += 1,
+                '>' if start.is_none() && angle > 0 && prev != '-' => angle -= 1,
+                '[' if start.is_none() && angle > 0 => {}
                 '[' => {
                     if depth == 0 && start.is_none() {
                         start = Some((l as i32, col as i32));
@@ -139,6 +195,7 @@ fn target_range(source: &str, line: usize) -> Option<((i32, i32), (i32, i32))> {
                 }
                 _ => {}
             }
+            prev = c;
         }
     }
     None
@@ -162,7 +219,7 @@ fn crate_prefix(symbol: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Document, Metadata, Occurrence, ScipToolInfo};
+    use crate::{Metadata, Occurrence, ScipToolInfo};
 
     fn spec(path: &[&str], self_type: Option<&str>, trait_type: Option<&str>) -> AssumeSpecInfo {
         serde_json::from_value(serde_json::json!({
@@ -262,6 +319,28 @@ mod tests {
         let source = "x\npub assume_specification<T, const N: usize>[ <[T; N] as Hash>::hash ](\n";
         assert_eq!(target_range(source, 2), Some(((1, 43), (1, 68))));
         assert_eq!(target_range(source, 1), None);
+        let source =
+            "pub assume_specification<T: AsRef<[u8]>, F: Fn() -> u8>[ Hasher::update::<T> ](\n";
+        assert_eq!(target_range(source, 1), Some(((0, 55), (0, 77))));
+    }
+
+    /// Two workspace members with the same file: the index root picks one, and
+    /// without it the suffix match is ambiguous.
+    #[test]
+    fn test_find_document_in_workspace() {
+        let mut idx = index(&[]);
+        idx.documents.push(Document {
+            language: "rust".to_string(),
+            relative_path: "crate-b/src/assumes.rs".to_string(),
+            occurrences: vec![],
+            symbols: vec![],
+        });
+        idx.metadata.project_root = "file:///ws".to_string();
+        let found = find_document(&idx, Path::new("/ws/crate-b"), "src/assumes.rs").unwrap();
+        assert_eq!(found.relative_path, "crate-b/src/assumes.rs");
+        idx.metadata.project_root = String::new();
+        let err = find_document(&idx, Path::new("/ws/crate-b"), "src/assumes.rs").unwrap_err();
+        assert!(err.contains("several"));
     }
 
     #[test]
@@ -277,6 +356,14 @@ mod tests {
         assert_eq!(
             owner_names(&spec(&["From", "from"], Some("Choice"), Some("From<u8>"))),
             vec!["Choice", "From"]
+        );
+        assert_eq!(
+            owner_names(&spec(&["Neg", "neg"], Some("& 'a mut Foo"), Some("Neg"))),
+            vec!["Foo", "Neg"]
+        );
+        assert_eq!(
+            owner_names(&spec(&["Hash", "hash"], Some("& u8"), Some("Hash"))),
+            vec!["Hash"]
         );
         assert!(owner_names(&spec(&["f"], None, None)).is_empty());
     }

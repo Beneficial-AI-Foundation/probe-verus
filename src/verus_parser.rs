@@ -1508,7 +1508,10 @@ impl FunctionInfoVisitor {
 
         self.functions.push(FunctionInfo {
             name,
-            scip_owner: self.current_scip_owner.clone(),
+            // A function nested in a method body is not an associated item.
+            scip_owner: matches!(context.as_deref(), Some("impl" | "trait"))
+                .then(|| self.current_scip_owner.clone())
+                .flatten(),
             file: self.file_path.clone(),
             spec_text: SpecText {
                 lines_start: start_line,
@@ -2708,10 +2711,10 @@ impl<'a> Add<&'a SubgroupPoint> for &'a SubgroupPoint {{
     fn add(self, other: &'a SubgroupPoint) -> SubgroupPoint {{ todo!() }}
 }}
 impl Scalar {{
-    fn from_bits(b: [u8; 32]) -> Scalar {{ todo!() }}
+    fn from_bits(b: [u8; 32]) -> Scalar {{ fn helper() {{}} todo!() }}
 }}
 trait IsIdentity {{
-    fn is_identity(&self) -> bool {{ true }}
+    fn is_identity(&self) -> bool {{ fn inner() {{}} true }}
 }}
 fn free() {{}}
 "#
@@ -2733,7 +2736,9 @@ fn free() {{}}
                     Some("impl#[`&SubgroupPoint`][`Add<&SubgroupPoint>`]")
                 ),
                 ("from_bits", Some("impl#[Scalar]")),
+                ("helper", None),
                 ("is_identity", Some("IsIdentity#")),
+                ("inner", None),
                 ("free", None),
             ]
         );

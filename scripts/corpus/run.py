@@ -7,13 +7,14 @@ For each project in corpus/support-target.toml:
 2. Build an inventory of function declarations with `list-functions`. It
    uses only verus_syn, so it does not depend on the analyzer.
 3. Run `extract`, always regenerating the SCIP index.
-4. Match every declaration to a local atom: same file, same name, and
-   overlapping line spans.
+4. Match every declaration to a local atom: same file, same name, same
+   owner kind (impl, trait or free function), and the atom's start line in
+   the declaration's span, or else overlapping spans.
 
 The script writes report.json and report.md to --out after each project. It
 exits nonzero if a step fails, if the inventory is empty or incomplete, or,
 with --gate, if a declaration has no atom and is not listed in the
-known-limitations file.
+known-limitations file or in the --baseline report.
 
 The clones under --work-dir belong to the script: it resets them to the
 pinned commit and deletes untracked files on every run. Do not run two
@@ -219,8 +220,34 @@ def atom_name(code_name, atom):
     return m.group(1) if m else code_name
 
 
+def owner_kind(code_name):
+    """Return "impl", "trait" or "standalone" for the owner in a code-name.
+
+    The owner is the last path segment before `name()`, outside backticks:
+    `impl#[S][T]f()` is an impl method, `T#f()` a trait method, `f()` free.
+    """
+    name = re.sub(r"@[^`]*$", "", code_name)
+    quoted, start = False, 0
+    for i, c in enumerate(name):
+        if c == "`":
+            quoted = not quoted
+        elif c == "/" and not quoted:
+            start = i + 1
+    segment = name[start:]
+    if segment.startswith("impl#"):
+        return "impl"
+    return "trait" if "#" in segment else "standalone"
+
+
 def check(decls, atoms):
-    """Match declarations to local atoms. Return (unmatched decls, extra atoms)."""
+    """Match declarations to local atoms. Return (unmatched decls, extra atoms).
+
+    An atom matches a declaration with the same file and name, and the same
+    owner kind (impl, trait or free function; list-functions does not print the
+    owner itself). The first pass matches atoms whose start line is inside the
+    declaration's span; the second pass matches the rest by span overlap. So
+    the order of atoms does not decide which declaration an atom matches.
+    """
     by_key = {}
     for code_name, atom in atoms.items():
         path = atom.get("code-path")
@@ -229,18 +256,28 @@ def check(decls, atoms):
         lines = atom.get("code-text") or {}
         entry = (code_name, lines.get("lines-start", 0), lines.get("lines-end", 0))
         by_key.setdefault((path, atom_name(code_name, atom)), []).append(entry)
-    used = set()
-    unmatched = []
-    for d in decls:
-        cands = by_key.get((d["file"], d["name"]), [])
-        hit = next(
-            (c for c in cands if c[0] not in used and c[1] <= d["end"] and d["start"] <= c[2]),
-            None,
-        )
-        if hit:
-            used.add(hit[0])
-        else:
-            unmatched.append(d)
+    for entries in by_key.values():
+        entries.sort()
+
+    def candidates(d):
+        kind = d.get("context")
+        return [c for c in by_key.get((d["file"], d["name"]), [])
+                if kind not in ("impl", "trait", "standalone") or owner_kind(c[0]) == kind]
+
+    used, matched = set(), set()
+    passes = (
+        lambda c, d: d["start"] <= c[1] <= d["end"],
+        lambda c, d: c[1] <= d["end"] and d["start"] <= c[2],
+    )
+    for fits in passes:
+        for i, d in enumerate(decls):
+            if i in matched:
+                continue
+            hit = next((c for c in candidates(d) if c[0] not in used and fits(c, d)), None)
+            if hit:
+                used.add(hit[0])
+                matched.add(i)
+    unmatched = [d for i, d in enumerate(decls) if i not in matched]
     extra = sorted(
         k for k, a in atoms.items() if a.get("code-path") and k not in used
     )
@@ -303,6 +340,14 @@ def load_known(path, project_names):
             sys.exit(f"{path}: limitation for unknown project {k['project']}")
         known.add((k["project"], k["file"], k["name"], k["start"]))
     return known
+
+
+def load_baseline(path):
+    """Unmatched declarations of an earlier report, as (project, file, name, start)."""
+    report = json.loads(path.read_text())
+    projects = report if isinstance(report, list) else report.get("projects", [])
+    return {(p["name"], u["file"], u["name"], u["start"])
+            for p in projects for u in p.get("unmatched", [])}
 
 
 def run_project(project, args, env_base, out_dir, result):
@@ -421,7 +466,10 @@ def main():
     ap.add_argument("--scip", help="scip binary for the isolated HOME (default: managed or PATH)")
     ap.add_argument("--project", action="append", help="only run this project (repeatable)")
     ap.add_argument("--verify", action="store_true", help="also run Verus verification")
-    ap.add_argument("--gate", action="store_true", help="fail on unmatched declarations not in --known")
+    ap.add_argument("--gate", action="store_true",
+                    help="fail on unmatched declarations not in --known or --baseline")
+    ap.add_argument("--baseline", type=Path,
+                    help="report.json of an earlier run: its unmatched declarations are not new")
     args = ap.parse_args()
     args.probe_verus = str(Path(args.probe_verus).resolve())
     if not os.access(args.probe_verus, os.X_OK):
@@ -441,6 +489,8 @@ def main():
             sys.exit(f"unknown project(s): {', '.join(unknown)}; known: {', '.join(names)}")
         projects = [p for p in projects if p["name"] in args.project]
     known = load_known(args.known, set(names))
+    if args.baseline:
+        known |= load_baseline(args.baseline)
 
     env = dict(os.environ)
     if args.analyzer_version:

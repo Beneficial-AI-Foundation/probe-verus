@@ -1,10 +1,12 @@
+probe-verus: probe-verus 8.0.1, verus-analyzer: verus-analyzer 0.3.269-standalone, scip: scip version v0.10.0
+
 | Project | Steps | Seconds | Declarations | Local atoms | Edges | Unmatched (new) |
 |---------|-------|---------|--------------|-------------|-------|-----------------|
-| dalek-verus | list-functions 0, extract 0 | 245 | 2048 | 2019 | 20903 | 29 (29) |
-| pmemlog | list-functions 0, extract 0 | 7 | 115 | 115 | 1030 | 0 (0) |
-| vest | list-functions 0, extract 0 | 3 | 749 | 747 | 1599 | 2 (2) |
-| capybarakv | list-functions 0, extract 0 | 7 | 1291 | 1243 | 7381 | 48 (48) |
-| verismo | list-functions 0, extract 0 | 25 | 1646 | 1713 | 5726 | 14 (14) |
+| dalek-verus | list-functions 0, extract 0 | 251 | 2048 | 2019 | 20903 | 29 (29) |
+| pmemlog | list-functions 0, extract 0 | 8 | 115 | 115 | 1030 | 0 (0) |
+| vest | list-functions 0, extract 0 | 6 | 749 | 747 | 1599 | 2 (2) |
+| capybarakv | list-functions 0, extract 0 | 11 | 1291 | 1243 | 7381 | 48 (48) |
+| verismo | list-functions 0, extract 0 | 27 | 1646 | 1713 | 5726 | 14 (14) |
 
 - dalek-verus: `fill_bytes` [fn] src/core_assumes.rs:422-428 (standalone)
 - dalek-verus: `sha512_hash_bytes` [fn] src/core_assumes.rs:442-450 (standalone)

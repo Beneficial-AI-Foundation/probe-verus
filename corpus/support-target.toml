@@ -35,7 +35,7 @@ name = "capybarakv"
 repo = "https://github.com/microsoft/verified-storage.git"
 commit = "83f1a7bb9e256f32aa84ce8a8df7f180bd766b46"
 crate = "capybaraKV/capybarakv"
-# rust-toolchain.toml in the repo: 1.91.0
+# rust-toolchain.toml in the crate directory: nightly-2025-09-01 (rustc 1.91.0-nightly)
 
 [[project]]
 name = "verismo"

@@ -157,19 +157,33 @@ as an optional field. This needs a probe KB change
 
 ### 7. Corpus test
 
-`scripts/corpus/run.py` runs `extract` with default flags on the support target, each at
+`scripts/corpus/run.py` runs `extract --skip-verify` on the support target, each at
 its pinned commit and toolchain. It always regenerates the index with the
 probe-verus version under test. It checks:
 
 - Every step succeeds. A failed step fails the script.
-- Every declaration in the `list-functions` inventory is a local atom, or
-  is a listed known limitation.
+- The `list-functions` inventory is complete: no parse errors, and the
+  number of declarations equals the summary count.
+- Every declaration in the inventory is a local atom, or is a listed known
+  limitation (with `--gate`).
 - Run time, and counts of local atoms and edges, compared with the
   previous run.
 
-Each project uses its own output directory. The script records the commit
-and `rustc -vV` it used. It runs in CI on a schedule, and it is a required
-step of every release. It needs network access and takes several minutes
+Each project uses its own output directory. The script records the commit,
+`rustc -vV` and the probe-verus, verus-analyzer and scip versions it used.
+It runs in CI weekly as a diagnostic, without `--gate`. PR 1 merges only
+after a manual run with `--gate` passes, and that run is a required step of
+every release.
+
+Known gaps, to close in PR 1 before the gate is used:
+
+- Matching ignores the owner (`Type::name`), and it is greedy, so the order
+  of atoms can change the result.
+- The gate counts unmatched declarations. It does not compare them by
+  identity with the baseline, so a fix can hide a new miss.
+- Call edges are counted, not checked. PR 1 adds small test projects for
+  trait impl owners, bodyless trait methods, and specific required and
+  forbidden edges. It needs network access and takes several minutes
 (dalek-verus indexing alone takes about 4 minutes on Rust 1.92).
 
 ### 8. Versioning
@@ -220,6 +234,10 @@ Options:
 - `--project NAME` runs one project. `--gate` fails on unmatched
   declarations that `corpus/known-limitations.toml` does not list.
   `--verify` also runs Verus verification (not for verismo).
+
+The clones in the work directory belong to the script. Each run resets
+them to the pinned commit and deletes untracked files. Do not run two
+instances on the same work directory at the same time.
 
 Pitfalls seen while measuring:
 

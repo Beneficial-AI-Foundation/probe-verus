@@ -10,9 +10,14 @@ For each project in corpus/support-target.toml:
 4. Match every declaration to a local atom: same file, same name, and
    overlapping line spans.
 
-The script writes report.json and report.md to --out. It exits nonzero if a
-step fails, or, with --gate, if a declaration has no atom and is not listed
-in the known-limitations file.
+The script writes report.json and report.md to --out after each project. It
+exits nonzero if a step fails, if the inventory is empty or incomplete, or,
+with --gate, if a declaration has no atom and is not listed in the
+known-limitations file.
+
+The clones under --work-dir belong to the script: it resets them to the
+pinned commit and deletes untracked files on every run. Do not run two
+instances with the same --work-dir at the same time.
 
 To run a specific verus-analyzer release without touching
 ~/.probe-verus/tools, pass --analyzer-version. The script then installs that
@@ -26,10 +31,12 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
 import tomllib
+import traceback
 import urllib.request
 from pathlib import Path
 
@@ -37,6 +44,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MANIFEST = REPO_ROOT / "corpus" / "support-target.toml"
 DEFAULT_KNOWN = REPO_ROOT / "corpus" / "known-limitations.toml"
 STEP_TIMEOUT = 3600
+GIT_TIMEOUT = 600
+DOWNLOAD_TIMEOUT = 300
 ANALYZER_ASSET = "verus-analyzer-x86_64-unknown-linux-gnu.gz"
 
 # `list-functions -f detailed --show-kind` line:
@@ -45,34 +54,56 @@ DETAILED_LINE = re.compile(
     r"^(?P<name>\S+) \[(?P<kind>[^\]]+)\] @ (?P<file>.+):(?P<start>\d+):(?P<end>\d+)"
     r"(?: in (?P<context>\S+))?$"
 )
+SUMMARY_LINE = re.compile(r"^Summary: (?P<count>\d+) functions in \d+ files$", re.M)
+# list-functions prints these on stderr for files it cannot parse, and goes on.
+PARSE_ERROR = re.compile(r"^(Warning|Error parsing file): ", re.M)
 
 
 def run(cmd, cwd, env, log_path):
     """Run a command, write its output to log_path, return (rc, seconds)."""
     start = time.monotonic()
     with open(log_path, "w") as log:
+        # A new session, so that a timeout kills the whole process group
+        # (cargo, rustc, the analyzer), not only the direct child.
+        proc = subprocess.Popen(
+            cmd, cwd=cwd, env=env, stdout=log, stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
         try:
-            rc = subprocess.run(
-                cmd, cwd=cwd, env=env, stdout=log, stderr=subprocess.STDOUT,
-                timeout=STEP_TIMEOUT,
-            ).returncode
+            rc = proc.wait(timeout=STEP_TIMEOUT)
         except subprocess.TimeoutExpired:
+            os.killpg(proc.pid, signal.SIGKILL)
+            proc.wait()
             log.write(f"\nTIMEOUT after {STEP_TIMEOUT} s\n")
             rc = 124
     return rc, round(time.monotonic() - start, 1)
 
 
+def git(args, cwd, **kw):
+    return subprocess.run(["git", *args], cwd=cwd, timeout=GIT_TIMEOUT, **kw)
+
+
 def checkout(project, work_dir):
+    """Return a clean clone of the project at its pinned commit."""
     repo_dir = work_dir / "repos" / project["name"]
     if not repo_dir.exists():
-        subprocess.run(["git", "clone", "--quiet", project["repo"], str(repo_dir)], check=True)
-    have = subprocess.run(
-        ["git", "cat-file", "-e", project["commit"] + "^{commit}"], cwd=repo_dir,
-    ).returncode == 0
+        repo_dir.parent.mkdir(parents=True, exist_ok=True)
+        git(["clone", "--quiet", project["repo"], str(repo_dir)], None, check=True)
+    # Only reset and clean a clone of the expected repo.
+    origin = git(["remote", "get-url", "origin"], repo_dir, capture_output=True, text=True)
+    if repo_dir.is_symlink() or origin.returncode != 0 or origin.stdout.strip() != project["repo"]:
+        raise RuntimeError(f"{repo_dir} is not a clone of {project['repo']}; remove it")
+    have = git(["cat-file", "-e", project["commit"] + "^{commit}"], repo_dir).returncode == 0
     if not have:
-        subprocess.run(["git", "fetch", "--quiet", "origin"], cwd=repo_dir, check=True)
-    subprocess.run(["git", "checkout", "--quiet", "--detach", project["commit"]], cwd=repo_dir, check=True)
-    subprocess.run(["git", "clean", "-fdxq"], cwd=repo_dir, check=True)
+        git(["fetch", "--quiet", "origin"], repo_dir, check=True)
+    git(["checkout", "--quiet", "--force", "--detach", project["commit"]], repo_dir, check=True)
+    git(["reset", "--quiet", "--hard", project["commit"]], repo_dir, check=True)
+    git(["clean", "-ffdxq"], repo_dir, check=True)
+    git(["submodule", "update", "--quiet", "--init", "--recursive", "--force"], repo_dir, check=True)
+    status = git(["status", "--porcelain", "--ignore-submodules=none"], repo_dir,
+                 capture_output=True, text=True, check=True).stdout
+    if status:
+        raise RuntimeError(f"{repo_dir} is not clean after reset:\n{status}")
     return repo_dir
 
 
@@ -86,15 +117,28 @@ def analyzer_home(version, work_dir, scip):
     binary = tools / "verus-analyzer"
     if not binary.exists():
         url = f"https://github.com/verus-lang/verus-analyzer/releases/download/{version}/{ANALYZER_ASSET}"
-        tmp = binary.with_suffix(".tmp")
-        with urllib.request.urlopen(url) as resp, open(tmp, "wb") as out:
+        tmp = tools / f"verus-analyzer.{os.getpid()}.tmp"
+        with urllib.request.urlopen(url, timeout=DOWNLOAD_TIMEOUT) as resp, open(tmp, "wb") as out:
             out.write(gzip.decompress(resp.read()))
         tmp.chmod(0o755)
         tmp.rename(binary)
+    # Point the link at the requested scip on every run.
     link = tools / "scip"
-    if not link.exists():
-        link.symlink_to(scip)
+    if link.is_symlink() or link.exists():
+        link.unlink()
+    link.symlink_to(scip)
     return home
+
+
+def tool_version(cmd, env=None):
+    """Return the first line of `cmd --version`, or an error string."""
+    try:
+        out = subprocess.run([*cmd, "--version"], env=env, capture_output=True, text=True,
+                             timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return f"error: {e}"
+    text = (out.stdout or out.stderr).strip()
+    return text.splitlines()[0] if out.returncode == 0 and text else f"error: rc {out.returncode}"
 
 
 def find_scip(explicit):
@@ -108,6 +152,17 @@ def find_scip(explicit):
 
 
 def parse_inventory(text):
+    """Return the declarations in `list-functions` output.
+
+    Raise ValueError if the output has parse errors, has no summary line, or
+    if the number of parsed lines differs from the summary count.
+    """
+    errors = PARSE_ERROR.findall(text)
+    if errors:
+        raise ValueError(f"list-functions could not parse {len(errors)} file(s); see list-functions.log")
+    summary = SUMMARY_LINE.search(text)
+    if not summary:
+        raise ValueError("list-functions printed no summary line")
     decls = []
     for line in text.splitlines():
         m = DETAILED_LINE.match(line.strip())
@@ -115,6 +170,11 @@ def parse_inventory(text):
             d = m.groupdict()
             d["start"], d["end"] = int(d["start"]), int(d["end"])
             decls.append(d)
+    expected = int(summary["count"])
+    if len(decls) != expected:
+        raise ValueError(f"parsed {len(decls)} declarations, list-functions reports {expected}")
+    if not decls:
+        raise ValueError("empty inventory")
     return decls
 
 
@@ -154,59 +214,84 @@ def check(decls, atoms):
     return unmatched, extra
 
 
-def load_atoms(probes_dir):
-    files = sorted(probes_dir.glob("*_atoms.json"))
-    if not files:
-        return None
-    return json.load(open(files[0]))["data"]
+def no_duplicate_keys(pairs):
+    obj = {}
+    for k, v in pairs:
+        if k in obj:
+            raise ValueError(f"duplicate key in atoms file: {k}")
+        obj[k] = v
+    return obj
 
 
-def load_known(path):
+def load_atoms(probes_dir, since):
+    """Load the atoms file that the extract run wrote (modified at or after `since`)."""
+    files = [f for f in probes_dir.glob("*_atoms.json") if f.stat().st_mtime >= since]
+    if len(files) != 1:
+        raise ValueError(f"expected one new *_atoms.json in {probes_dir}, found {len(files)}")
+    env = json.loads(files[0].read_text(), object_pairs_hook=no_duplicate_keys)
+    if not isinstance(env.get("data"), dict):
+        raise ValueError(f"{files[0].name} has no data object")
+    return files[0].name, env["data"]
+
+
+def load_known(path, project_names):
     if not path.exists():
         return set()
     data = tomllib.load(open(path, "rb"))
-    return {
-        (k["project"], k["file"], k["name"], k["start"]) for k in data.get("limitation", [])
-    }
+    known = set()
+    for k in data.get("limitation", []):
+        missing = [f for f in ("project", "file", "name", "start", "reason") if not k.get(f)]
+        if missing:
+            sys.exit(f"{path}: limitation {k} lacks {', '.join(missing)}")
+        if k["project"] not in project_names:
+            sys.exit(f"{path}: limitation for unknown project {k['project']}")
+        known.add((k["project"], k["file"], k["name"], k["start"]))
+    return known
 
 
-def run_project(project, args, env_base, out_dir):
+def run_project(project, args, env_base, out_dir, result):
+    """Run one project and fill `result`. Raise on any failure."""
     name = project["name"]
     pdir = out_dir / name
-    pdir.mkdir(parents=True, exist_ok=True)
+    if pdir.exists():
+        shutil.rmtree(pdir)
+    pdir.mkdir(parents=True)
     repo_dir = checkout(project, args.work_dir)
     crate = (repo_dir / project["crate"]).resolve()
     env = dict(env_base)
+    # Without a toolchain in the manifest, rustup must use the project's
+    # rust-toolchain.toml, so drop any toolchain override from the caller.
+    env.pop("RUSTUP_TOOLCHAIN", None)
     if project.get("toolchain"):
         env["RUSTUP_TOOLCHAIN"] = project["toolchain"]
-    result = {
-        "name": name,
-        "commit": subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo_dir,
-                                 capture_output=True, text=True).stdout.strip(),
-        "rustc": subprocess.run(["rustc", "-vV"], cwd=crate, env=env,
-                                capture_output=True, text=True).stdout.strip(),
-        "steps": {},
-    }
+    result["commit"] = git(["rev-parse", "HEAD"], repo_dir, capture_output=True, text=True,
+                           check=True).stdout.strip()
+    rustc = subprocess.run(["rustc", "-vV"], cwd=crate, env=env, capture_output=True,
+                           text=True, timeout=600)
+    if rustc.returncode != 0:
+        raise RuntimeError(f"rustc -vV failed in {crate}:\n{rustc.stderr}")
+    result["rustc"] = rustc.stdout.strip()
 
     rc, secs = run([args.probe_verus, "list-functions", "-f", "detailed", "--show-kind", str(crate)],
                    crate, env, pdir / "list-functions.log")
     result["steps"]["list-functions"] = {"rc": rc, "seconds": secs}
-    decls = parse_inventory((pdir / "list-functions.log").read_text()) if rc == 0 else []
+    if rc != 0:
+        raise RuntimeError("list-functions failed; see list-functions.log")
+    decls = parse_inventory((pdir / "list-functions.log").read_text())
 
     cmd = [args.probe_verus, "extract", str(crate), "--regenerate-scip"]
     if not args.verify or project["name"] in args.no_verify:
         cmd.append("--skip-verify")
+    started = time.time()
     rc, secs = run(cmd, crate, env, pdir / "extract.log")
     result["steps"]["extract"] = {"rc": rc, "seconds": secs}
 
     probes = crate / ".verilib" / "probes"
     if probes.exists():
-        shutil.copytree(probes, pdir / "probes", dirs_exist_ok=True)
-    atoms = load_atoms(probes) if probes.exists() else None
-    if atoms is None:
-        result["steps"]["extract"]["rc"] = result["steps"]["extract"]["rc"] or 1
-        result["error"] = "no atoms file"
-        return result, []
+        shutil.copytree(probes, pdir / "probes")
+    if rc != 0:
+        raise RuntimeError("extract failed; see extract.log")
+    result["atoms_file"], atoms = load_atoms(probes, started)
 
     local = {k: a for k, a in atoms.items() if a.get("code-path")}
     unmatched, extra = check(decls, atoms)
@@ -217,12 +302,13 @@ def run_project(project, args, env_base, out_dir):
         "unmatched": unmatched,
         "atoms_without_declaration": len(extra),
     })
-    return result, unmatched
+    return unmatched
 
 
-def write_report(results, out_dir, known):
-    (out_dir / "report.json").write_text(json.dumps(results, indent=2) + "\n")
-    lines = [
+def write_report(results, tools, out_dir, known):
+    report = {"tools": tools, "projects": results}
+    (out_dir / "report.json").write_text(json.dumps(report, indent=2) + "\n")
+    lines = [", ".join(f"{k}: {v}" for k, v in tools.items()), "",
         "| Project | Steps | Seconds | Declarations | Local atoms | Edges | Unmatched (new) |",
         "|---------|-------|---------|--------------|-------------|-------|-----------------|",
     ]
@@ -231,11 +317,15 @@ def write_report(results, out_dir, known):
         secs = sum(v["seconds"] for v in r["steps"].values())
         um = r.get("unmatched", [])
         new = [u for u in um if (r["name"], u["file"], u["name"], u["start"]) not in known]
+        counts = "error" if r.get("error") else f"{len(um)} ({len(new)})"
         lines.append(
             f"| {r['name']} | {steps} | {secs:.0f} | {r.get('declarations', '-')} | "
-            f"{r.get('local_atoms', '-')} | {r.get('edges', '-')} | {len(um)} ({len(new)}) |"
+            f"{r.get('local_atoms', '-')} | {r.get('edges', '-')} | {counts} |"
         )
     lines.append("")
+    for r in results:
+        if r.get("error"):
+            lines.append(f"- {r['name']}: ERROR {r['error'].splitlines()[0]}")
     for r in results:
         for u in r.get("unmatched", []):
             lines.append(f"- {r['name']}: `{u['name']}` [{u['kind']}] {u['file']}:{u['start']}-{u['end']} ({u.get('context')})")
@@ -256,33 +346,59 @@ def main():
     ap.add_argument("--gate", action="store_true", help="fail on unmatched declarations not in --known")
     args = ap.parse_args()
     args.probe_verus = str(Path(args.probe_verus).resolve())
+    if not os.access(args.probe_verus, os.X_OK):
+        sys.exit(f"--probe-verus: {args.probe_verus} is not an executable file")
     args.no_verify = {"verismo"}
+    args.work_dir = args.work_dir.resolve()
+    args.out = args.out.resolve()
     args.work_dir.mkdir(parents=True, exist_ok=True)
     args.out.mkdir(parents=True, exist_ok=True)
+
+    projects = tomllib.load(open(args.manifest, "rb")).get("project", [])
+    names = [p["name"] for p in projects]
+    if not projects or len(set(names)) != len(names):
+        sys.exit(f"{args.manifest}: no projects, or duplicate project names")
+    if args.project:
+        unknown = sorted(set(args.project) - set(names))
+        if unknown:
+            sys.exit(f"unknown project(s): {', '.join(unknown)}; known: {', '.join(names)}")
+        projects = [p for p in projects if p["name"] in args.project]
+    known = load_known(args.known, set(names))
 
     env = dict(os.environ)
     if args.analyzer_version:
         env["RUSTUP_HOME"] = env.get("RUSTUP_HOME", str(Path.home() / ".rustup"))
         env["CARGO_HOME"] = env.get("CARGO_HOME", str(Path.home() / ".cargo"))
         env["HOME"] = str(analyzer_home(args.analyzer_version, args.work_dir, find_scip(args.scip)))
-
-    projects = tomllib.load(open(args.manifest, "rb"))["project"]
-    if args.project:
-        projects = [p for p in projects if p["name"] in args.project]
-    known = load_known(args.known)
+    tools_dir = Path(env["HOME"]) / ".probe-verus" / "tools"
+    analyzer = tools_dir / "verus-analyzer"
+    scip = tools_dir / "scip"
+    tools = {
+        "probe-verus": tool_version([args.probe_verus]),
+        "verus-analyzer": tool_version([str(analyzer)]) if analyzer.exists() else "from PATH",
+        "scip": tool_version([str(scip)]) if scip.exists() else "from PATH",
+    }
 
     results, failed = [], False
     for project in projects:
         print(f"== {project['name']}", flush=True)
-        result, unmatched = run_project(project, args, env, args.out)
+        result = {"name": project["name"], "steps": {}}
         results.append(result)
-        if any(s["rc"] != 0 for s in result["steps"].values()):
+        unmatched = []
+        try:
+            unmatched = run_project(project, args, env, args.out, result)
+        except Exception as e:
+            result["error"] = f"{type(e).__name__}: {e}"
+            (args.out / project["name"]).mkdir(parents=True, exist_ok=True)
+            (args.out / project["name"] / "error.log").write_text(traceback.format_exc())
             failed = True
         new = [u for u in unmatched if (project["name"], u["file"], u["name"], u["start"]) not in known]
         if args.gate and new:
             failed = True
-        print(f"   steps {result['steps']}  unmatched {len(unmatched)} (new {len(new)})", flush=True)
-    write_report(results, args.out, known)
+        print(f"   steps {result['steps']}  unmatched {len(unmatched)} (new {len(new)})"
+              + (f"  ERROR {result['error'].splitlines()[0]}" if "error" in result else ""),
+              flush=True)
+        write_report(results, tools, args.out, known)
     print(f"report: {args.out / 'report.md'}")
     sys.exit(1 if failed else 0)
 

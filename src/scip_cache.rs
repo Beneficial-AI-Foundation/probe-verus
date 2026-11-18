@@ -10,6 +10,7 @@
 
 use crate::constants::{DATA_DIR, SCIP_INDEX_FILE, SCIP_INDEX_JSON_FILE};
 use crate::tool_manager::{self, Tool};
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -197,6 +198,29 @@ impl ScipCache {
     }
 
     /// Check if cached SCIP JSON exists.
+    /// Path of the analyzer's stderr from the last index generation.
+    pub fn stderr_path(&self) -> PathBuf {
+        self.data_dir().join("index.scip.stderr")
+    }
+
+    /// Error lines (containing "error", any case) of the analyzer's stderr from
+    /// the last index generation, at most `limit` of them.
+    pub fn analyzer_errors(&self, limit: usize) -> Vec<String> {
+        std::fs::read_to_string(self.stderr_path())
+            .unwrap_or_default()
+            .lines()
+            .filter(|l| l.to_lowercase().contains("error"))
+            .take(limit)
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// Delete the cached index, so that the next run regenerates it.
+    pub fn discard(&self) {
+        let _ = std::fs::remove_file(self.scip_path());
+        let _ = std::fs::remove_file(self.json_path());
+    }
+
     pub fn has_cached_json(&self) -> bool {
         self.json_path().exists()
     }
@@ -314,8 +338,14 @@ impl ScipCache {
             }
         }
 
+        let data_dir = self.data_dir();
+        if !data_dir.exists() {
+            std::fs::create_dir_all(&data_dir).map_err(ScipError::CreateDirFailed)?;
+        }
+
         // verus-analyzer (2026-08-22 and later) enables `verus_keep_ghost` itself,
         // so `#[cfg(verus_keep_ghost)]` items are indexed without extra config.
+        // stderr is kept in a file, so that a failed index check can show it.
         let status = Command::new(analyzer_bin)
             .args(["scip", "."])
             .current_dir(&self.project_path)
@@ -324,20 +354,28 @@ impl ScipCache {
             } else {
                 Stdio::null()
             })
-            .stderr(if verbose {
-                Stdio::inherit()
-            } else {
-                Stdio::null()
-            })
-            .status();
+            .stderr(Stdio::piped())
+            .spawn()
+            .and_then(|mut child| {
+                let stderr = child.stderr.take().expect("stderr is piped");
+                let mut log = String::new();
+                for line in BufReader::new(stderr).lines() {
+                    let line = line?;
+                    if verbose {
+                        eprintln!("{line}");
+                    }
+                    log.push_str(&line);
+                    log.push('\n');
+                }
+                // A missing log only loses diagnostics, so a write error is ignored.
+                let _ = std::fs::write(self.stderr_path(), &log);
+                child.wait()
+            });
 
         match status {
             Ok(s) if s.success() => {}
             Ok(s) => {
-                return Err(ScipError::AnalyzerFailed(
-                    self.analyzer,
-                    format!("exit status: {}", s),
-                ));
+                return Err(ScipError::AnalyzerFailed(self.analyzer, s.to_string()));
             }
             Err(e) => {
                 return Err(ScipError::AnalyzerFailed(self.analyzer, e.to_string()));
@@ -347,11 +385,6 @@ impl ScipCache {
         let generated_path = self.project_path.join("index.scip");
         if !generated_path.exists() {
             return Err(ScipError::IndexNotGenerated(self.analyzer));
-        }
-
-        let data_dir = self.data_dir();
-        if !data_dir.exists() {
-            std::fs::create_dir_all(&data_dir).map_err(ScipError::CreateDirFailed)?;
         }
 
         let cached_path = self.scip_path();
@@ -395,10 +428,7 @@ impl ScipCache {
 
                 Ok(())
             }
-            Ok(o) => Err(ScipError::ScipPrintFailed(format!(
-                "exit status: {}",
-                o.status
-            ))),
+            Ok(o) => Err(ScipError::ScipPrintFailed(o.status.to_string())),
             Err(e) => Err(ScipError::ScipPrintFailed(e.to_string())),
         }
     }

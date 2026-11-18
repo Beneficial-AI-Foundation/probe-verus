@@ -3,11 +3,10 @@
 use crate::{
     add_external_stubs, backfill_atoms_from_parser, build_call_graph, build_module_visibility_map,
     convert_to_atoms_with_parsed_spans, find_duplicate_code_names, is_library_crate,
-    legacy_symbol_format_reason,
     metadata::{gather_metadata, get_default_output_path, wrap_in_envelope, AtomizeInternalConfig},
     parse_scip_json, public_api, resolve_package_root, resolve_workspace_root,
     scip_cache::{Analyzer, ScipCache},
-    AtomWithLines, ScipIndex,
+    validate_index, verus_dependencies, AtomWithLines, IndexError, ScipIndex,
 };
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -60,13 +59,13 @@ pub fn cmd_atomize(
 
     let scip_index = parse_scip_json(json_path.to_string_lossy().as_ref())
         .map_err(|e| format!("Failed to parse SCIP JSON: {}", e))?;
-    check_symbol_format(&scip_index)?;
+    let pkg_root = resolve_package_root(&project_path, None);
+    check_index(&scip_cache, &scip_index, &pkg_root)?;
 
     let call_graph = build_call_graph(&scip_index);
     println!("  ✓ Call graph built with {} functions", call_graph.len());
     println!();
 
-    let pkg_root = resolve_package_root(&project_path, None);
     let file_module_pub = build_module_visibility_map(&pkg_root);
     let is_library = is_library_crate(&pkg_root);
 
@@ -204,13 +203,39 @@ fn validate_project(project_path: &Path) -> Result<(), String> {
 /// Get the SCIP JSON path, generating if necessary.
 /// Reject SCIP indexes produced by verus-analyzer releases older than 2026-08-22,
 /// whose symbols omit Self types and collide across trait impls.
-fn check_symbol_format(scip_index: &ScipIndex) -> Result<(), String> {
-    match legacy_symbol_format_reason(scip_index) {
-        Some(reason) => Err(format!(
-            "SCIP index uses the legacy verus-analyzer symbol format: {reason}. \
-             Upgrade verus-analyzer to 2026-08-22 or later and rerun with --regenerate-scip."
-        )),
-        None => Ok(()),
+/// Validate the index ([`validate_index`]) against the package's Verus
+/// dependencies. Print warnings. On an error, delete the cached index and
+/// return the error with the analyzer's error lines, if it printed any.
+fn check_index(cache: &ScipCache, scip_index: &ScipIndex, pkg_root: &Path) -> Result<(), String> {
+    let manifest = std::fs::read_to_string(pkg_root.join("Cargo.toml")).unwrap_or_default();
+    match validate_index(scip_index, &verus_dependencies(&manifest)) {
+        Ok(warnings) => {
+            for warning in warnings {
+                eprintln!("  Warning: {warning}");
+            }
+            Ok(())
+        }
+        Err(IndexError::Legacy(e)) => {
+            cache.discard();
+            Err(format!("SCIP index rejected: {e}"))
+        }
+        Err(IndexError::Incomplete(e)) => {
+            cache.discard();
+            let errors = cache.analyzer_errors(20);
+            let detail = if errors.is_empty() {
+                format!(
+                    "verus-analyzer printed no errors (its output is in {}).",
+                    cache.stderr_path().display()
+                )
+            } else {
+                format!(
+                    "verus-analyzer errors (from {}):\n  {}",
+                    cache.stderr_path().display(),
+                    errors.join("\n  ")
+                )
+            };
+            Err(format!("SCIP index rejected: {e}\n{detail}"))
+        }
     }
 }
 
@@ -319,11 +344,11 @@ pub fn atomize_internal(config: &AtomizeInternalConfig) -> Result<usize, String>
 
     let scip_index = parse_scip_json(json_path.to_string_lossy().as_ref())
         .map_err(|e| format!("Failed to parse SCIP JSON: {}", e))?;
-    check_symbol_format(&scip_index)?;
+    let pkg_root = resolve_package_root(&project_path, config.package);
+    check_index(&cache, &scip_index, &pkg_root)?;
 
     let call_graph = build_call_graph(&scip_index);
 
-    let pkg_root = resolve_package_root(&project_path, config.package);
     let file_module_pub = build_module_visibility_map(&pkg_root);
     let is_library = is_library_crate(&pkg_root);
 

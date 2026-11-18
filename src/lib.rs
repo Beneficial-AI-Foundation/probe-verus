@@ -85,9 +85,12 @@ pub struct Metadata {
     pub text_document_encoding: i32,
 }
 
+/// Producer of a SCIP index. Both fields can be missing; they are then empty.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ScipToolInfo {
+    #[serde(default)]
     pub name: String,
+    #[serde(default)]
     pub version: String,
 }
 
@@ -567,7 +570,7 @@ pub fn legacy_symbol_format_reason(scip_data: &ScipIndex) -> Option<String> {
         .is_some_and(|patch| patch < FIRST_CURRENT_FORMAT_ANALYZER_PATCH)
     {
         return Some(format!(
-            "it was produced by {} {}, older than verus-analyzer 2026-08-22 (0.3.{})",
+            "producer {} {} is older than 0.3.{}",
             tool.name, tool.version, FIRST_CURRENT_FORMAT_ANALYZER_PATCH
         ));
     }
@@ -627,11 +630,15 @@ fn unquoted_positions(s: &str, needle: char) -> Vec<usize> {
     positions
 }
 
-/// The part of a SCIP symbol after its last `/` outside backtick-quoted
-/// descriptors (a quoted type may contain `/`, e.g. ``Tag<'/'>``).
+/// The part of a SCIP symbol after its last `/`, or after the package fields
+/// (`rust-analyzer cargo <package> <version> `) for a crate-root item. `/` and
+/// spaces inside backtick-quoted descriptors do not count (``Tag<'/'>``,
+/// ``&'a Scalar``).
 fn last_symbol_segment(symbol: &str) -> &str {
-    match unquoted_positions(symbol, '/').last() {
-        Some(&i) => &symbol[i + 1..],
+    let slash = unquoted_positions(symbol, '/').last().copied();
+    let space = unquoted_positions(symbol, ' ').last().copied();
+    match slash.max(space) {
+        Some(i) => &symbol[i + 1..],
         None => symbol,
     }
 }
@@ -640,6 +647,120 @@ fn last_symbol_segment(symbol: &str) -> &str {
 #[must_use]
 pub fn uses_legacy_symbol_format(scip_data: &ScipIndex) -> bool {
     legacy_symbol_format_reason(scip_data).is_some()
+}
+
+/// Crates whose absence from an index shows that the analyzer did not load the
+/// project: the Verus standard library and builtins.
+const VERUS_DEPENDENCY_CRATES: [&str; 3] = ["vstd", "verus_builtin", "builtin"];
+
+/// The direct, non-dev dependencies of a package manifest that are Verus crates
+/// ([`VERUS_DEPENDENCY_CRATES`]), by package name (a `package = "vstd"` rename
+/// counts as `vstd`). Returns an empty list if the manifest cannot be parsed.
+pub fn verus_dependencies(manifest: &str) -> Vec<String> {
+    let Ok(doc) = manifest.parse::<toml::Table>() else {
+        return Vec::new();
+    };
+    let mut tables: Vec<&toml::Table> = Vec::new();
+    if let Some(deps) = doc.get("dependencies").and_then(|d| d.as_table()) {
+        tables.push(deps);
+    }
+    if let Some(targets) = doc.get("target").and_then(|t| t.as_table()) {
+        for target in targets.values() {
+            if let Some(deps) = target.get("dependencies").and_then(|d| d.as_table()) {
+                tables.push(deps);
+            }
+        }
+    }
+    let mut names: Vec<String> = tables
+        .iter()
+        .flat_map(|t| t.iter())
+        .map(|(key, value)| {
+            value
+                .get("package")
+                .and_then(|p| p.as_str())
+                .unwrap_or(key)
+                .to_string()
+        })
+        .filter(|name| VERUS_DEPENDENCY_CRATES.contains(&name.as_str()))
+        .collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// Why [`validate_index`] rejects an index.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IndexError {
+    /// The index uses the symbol format of verus-analyzer before 2026-08-22.
+    Legacy(String),
+    /// The index misses a crate that the package depends on.
+    Incomplete(String),
+}
+
+impl std::fmt::Display for IndexError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            IndexError::Legacy(m) | IndexError::Incomplete(m) => f.write_str(m),
+        }
+    }
+}
+
+/// Check a SCIP index before converting it. Returns warnings, or an error that
+/// must stop the run:
+/// - the index uses the legacy symbol format ([`legacy_symbol_format_reason`]);
+/// - a Verus crate in `verus_deps` (see [`verus_dependencies`]) is never
+///   referenced. The analyzer then did not load the project, and the index
+///   misses most calls. This is a heuristic: it does not prove completeness.
+///
+/// The warning case is an index with no evidence of either format: no known
+/// producer version and no `impl#[` method symbol.
+pub fn validate_index(
+    scip_data: &ScipIndex,
+    verus_deps: &[String],
+) -> Result<Vec<String>, IndexError> {
+    if let Some(reason) = legacy_symbol_format_reason(scip_data) {
+        return Err(IndexError::Legacy(format!(
+            "this index comes from a verus-analyzer older than 2026-08-22 ({reason}). \
+             Use verus-analyzer 2026-08-22 or later, or probe-verus 8.x."
+        )));
+    }
+
+    let referenced: HashSet<&str> = scip_data
+        .documents
+        .iter()
+        .flat_map(|d| &d.occurrences)
+        .filter_map(|o| o.symbol.strip_prefix(SCIP_SYMBOL_PREFIX))
+        .filter_map(|rest| rest.split(' ').next())
+        .collect();
+    let missing: Vec<&str> = verus_deps
+        .iter()
+        .map(String::as_str)
+        .filter(|dep| !referenced.contains(dep))
+        .collect();
+    if !missing.is_empty() {
+        return Err(IndexError::Incomplete(format!(
+            "the index has no references to {}, a direct dependency of the package. \
+             verus-analyzer probably failed to load the project, so the index is incomplete.",
+            missing.join(", ")
+        )));
+    }
+
+    let tool = &scip_data.metadata.tool_info;
+    let known_version = analyzer_patch_version(&tool.version).is_some();
+    let has_impl_symbol = scip_data
+        .documents
+        .iter()
+        .flat_map(|d| &d.symbols)
+        .any(|s| is_function_like(s.kind) && last_symbol_segment(&s.symbol).starts_with("impl#"));
+    let mut warnings = Vec::new();
+    if !known_version && !has_impl_symbol {
+        warnings.push(format!(
+            "cannot tell which verus-analyzer produced this index (producer `{} {}`, \
+             no impl method symbols). probe-verus assumes 2026-08-22 or later.",
+            tool.name, tool.version
+        ));
+    }
+    Ok(warnings)
 }
 
 /// Build a call graph from SCIP data, with one node per definition occurrence of
@@ -2456,6 +2577,101 @@ mod tests {
             last_symbol_segment("c 1.0 m/impl#[`Tag<'/'>`]read()."),
             "impl#[`Tag<'/'>`]read()."
         );
+        assert_eq!(
+            last_symbol_segment("rust-analyzer cargo c 1.0 impl#[`&'a S`][T]f()."),
+            "impl#[`&'a S`][T]f()."
+        );
+    }
+
+    #[test]
+    fn test_verus_dependencies() {
+        let manifest = r#"
+[dependencies]
+vstd = { workspace = true }
+serde = "1"
+vb = { package = "verus_builtin", version = "0.1" }
+
+[target.'cfg(unix)'.dependencies]
+builtin = { path = "../builtin" }
+
+[dev-dependencies]
+verus_builtin_macros = "0.1"
+"#;
+        assert_eq!(
+            verus_dependencies(manifest),
+            vec!["builtin", "verus_builtin", "vstd"]
+        );
+        assert!(verus_dependencies("not toml [").is_empty());
+    }
+
+    /// An index without references to a Verus dependency of the package is
+    /// rejected: the analyzer did not load the project.
+    #[test]
+    fn test_validate_index_requires_verus_dependency_references() {
+        let free_fn = "rust-analyzer cargo c 1.0 lemmas/lemma_foo().";
+        let mut index = index_with_kinds(
+            "0.3.269-standalone",
+            &[(free_fn, constants::SCIP_KIND_FUNCTION)],
+        );
+        let deps = vec!["vstd".to_string()];
+        let err = validate_index(&index, &deps).unwrap_err().to_string();
+        assert!(err.contains("no references to vstd"), "{err}");
+
+        index.documents[0].occurrences.push(Occurrence {
+            range: vec![5, 0, 3],
+            symbol: "rust-analyzer cargo vstd 0.0.0-2026-01-11-0057 seq/Seq#len().".to_string(),
+            symbol_roles: None,
+        });
+        assert_eq!(validate_index(&index, &deps), Ok(vec![]));
+    }
+
+    #[test]
+    fn test_validate_index_rejects_legacy_index() {
+        let legacy = index_with_kinds(
+            "0.3.264-standalone",
+            &[(
+                "rust-analyzer cargo c 1.0 f().",
+                constants::SCIP_KIND_FUNCTION,
+            )],
+        );
+        let err = validate_index(&legacy, &[]).unwrap_err();
+        assert!(matches!(err, IndexError::Legacy(_)));
+        let err = err.to_string();
+        assert!(err.contains("older than 2026-08-22"), "{err}");
+        assert!(err.contains("probe-verus 8.x"), "{err}");
+    }
+
+    /// Without a known producer version and without `impl#[` method symbols,
+    /// nothing shows the format: a warning, not an error.
+    #[test]
+    fn test_validate_index_warns_without_format_evidence() {
+        let free_fn = [(
+            "rust-analyzer cargo c 1.0 f().",
+            constants::SCIP_KIND_FUNCTION,
+        )];
+        let unknown = index_with_kinds("", &free_fn);
+        let warnings = validate_index(&unknown, &[]).unwrap();
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("cannot tell"), "{}", warnings[0]);
+
+        let known = index_with_kinds("0.3.269-standalone", &free_fn);
+        assert_eq!(validate_index(&known, &[]), Ok(vec![]));
+        let with_impl = index_with_kinds(
+            "",
+            &[(
+                "rust-analyzer cargo c 1.0 impl#[S]f().",
+                constants::SCIP_KIND_METHOD,
+            )],
+        );
+        assert_eq!(validate_index(&with_impl, &[]), Ok(vec![]));
+    }
+
+    /// The producer version may be missing from the metadata.
+    #[test]
+    fn test_parse_index_without_tool_version() {
+        let json = r#"{"metadata": {"tool_info": {"name": "x"}, "project_root": "", "text_document_encoding": 0}, "documents": []}"#;
+        let index: ScipIndex = serde_json::from_str(json).unwrap();
+        assert_eq!(index.metadata.tool_info.version, "");
     }
 
     #[test]

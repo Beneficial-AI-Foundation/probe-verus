@@ -629,7 +629,13 @@ atoms):
    `"trusted"` even though it has no local body or proofs entry.  A qualified
    target (`<u64 as Trait>::m`) matches only the impl with that Self type and
    trait; `Type::m` matches impls on `Type` and the trait declaration
-   `Type#m()`.  The spec is attached only when exactly one stub matches.
+   `Type#m()`.  The stub must also belong to a crate that defines the
+   target's Self type or trait.  `extract` reads these crates from the SCIP
+   index, which resolves the type and trait names in the target path (for
+   example `Choice` in `Choice::from` to the `subtle` crate).  The spec is
+   attached only when exactly one stub matches.  If the index does not
+   resolve the names, or there is no index, the spec stays unattached and
+   `extract` prints a warning.
 
 Functions with only `assume()` (no `admit()`, not `external_body`, and not a
 matched `assume_specification` stub) remain `"unverified"` when proofs report

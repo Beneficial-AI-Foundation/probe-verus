@@ -29,14 +29,22 @@ To speed up subsequent runs, the tool caches generated SCIP data:
 ```
 <project_path>/
 └── data/
-    ├── index.scip       # Binary SCIP index
-    └── index.scip.json  # JSON conversion (used by the tool)
+    ├── index.scip         # Binary SCIP index
+    ├── index.scip.json    # JSON conversion (used by the tool)
+    └── index.scip.stderr  # verus-analyzer's log from the last generation
 ```
 
 **Benefits:**
 - Subsequent runs skip the slow `verus-analyzer scip` and `scip print --json` steps
 - When using cached data, `verus-analyzer` and `scip` tools don't need to be installed
 - Use `--regenerate-scip` when your source code changes and you need fresh data
+
+**Index checks:** before it uses an index, probe-verus checks it. It rejects an
+index from a verus-analyzer older than 2026-08-22. It also rejects an index with
+no references to `vstd`, `verus_builtin` or `builtin` when the package depends on
+that crate directly. In that case, verus-analyzer did not load the project, and
+the error shows the error lines from `index.scip.stderr`. probe-verus deletes a
+rejected index, so the next run generates a new one.
 
 ### Accurate Line Spans with verus_syn
 
@@ -69,6 +77,16 @@ The code-name is derived from the symbol directly. If the analyzer still emits t
 symbol for several definitions (e.g. spec-only `FromSpecImpl<u8>`/`<u16>` impls, whose
 trait it drops), those code-names get an `@line` suffix. Indexes from older
 verus-analyzer releases (`Type#Trait#method()` symbols) are rejected.
+
+### Functions the analyzer does not index
+
+verus-analyzer does not index code that is not compiled under its cfg, for
+example a `#[cfg(not(verus_keep_ghost))]` alternative. probe-verus adds atoms for
+these functions from the `verus_syn` parse ("backfill"). A parsed function
+already has an atom if an atom of the same name starts inside its span. A cfg
+alternative of an indexed function gets its own atom with an `@line` suffix, for
+example `core_assumes/fill_bytes()@422`. If a function has no free code-name,
+`atomize` stops unless `--allow-duplicates` is given.
 
 ---
 

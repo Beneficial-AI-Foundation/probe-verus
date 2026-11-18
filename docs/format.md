@@ -95,6 +95,11 @@ is best effort: it can differ from the name the analyzer would assign (the analy
 renders resolved types, e.g. `Self` in trait arguments, and inline `mod` blocks are not
 reflected), so such a function's code-name can change once the analyzer indexes it.
 
+A parsed function whose code-name is already taken gets an `@<line>` suffix, or
+`@<path>:<line>` if that is taken too. This happens for cfg alternatives of one function,
+for example `.../core_assumes/fill_bytes()@422` next to the indexed `fill_bytes()`. If all
+three forms are taken, `atomize` stops unless `--allow-duplicates` is given.
+
 The `code-name` is not serialized inside the value object (it is the key).
 
 ### `display-name` (string)

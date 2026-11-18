@@ -25,7 +25,7 @@ probe-verus extract <PROJECT_PATH> [OPTIONS]
 | `--regenerate-scip` | | Force regeneration of the SCIP index |
 | `--verbose` | `-v` | Verbose output |
 | `--rust-analyzer` | | Use rust-analyzer instead of verus-analyzer for SCIP |
-| `--allow-duplicates` | | Allow duplicate probe-names (normally fatal) |
+| `--allow-duplicates` | | Go on when two functions get the same code-name (normally fatal) |
 | `--auto-install` | | **Deprecated.** Use `probe-verus setup --from-project` instead |
 | `--with-atoms <PATH>` | `-a` | Path to atoms.json (for use with `--skip-atomize`) |
 | `--with-spec-text` | | Include raw specification text in specify output |
@@ -79,8 +79,16 @@ probe-verus atomize <PROJECT_PATH> [OPTIONS]
 | `--output <FILE>` | `-o` | Output file path (default: `.verilib/probes/verus_<pkg>_<ver>_atoms.json`) |
 | `--regenerate-scip` | `-r` | Force regeneration of the SCIP index |
 | `--with-locations` | | Include detailed per-call location info (precondition/postcondition/inner) |
+| `--rust-analyzer` | | Use rust-analyzer instead of verus-analyzer for SCIP |
+| `--allow-duplicates` | | Go on when two functions get the same code-name (normally fatal) |
 | `--auto-install` | | **Deprecated.** Use `probe-verus setup --from-project` instead |
 | `--with-public-api` | | Use `cargo public-api` to override `is-public-api` (requires `cargo-public-api`; [install instructions](#installing-cargo-public-api-for---with-public-api)) |
+
+`atomize` needs verus-analyzer 2026-08-22 or later. It rejects an index from
+an older release, and an index with no references to `vstd`, `verus_builtin` or
+`builtin` when the package depends on that crate. The second case means that
+verus-analyzer did not load the project. The error then shows the analyzer's
+error lines, which probe-verus keeps in `<project>/data/index.scip.stderr`.
 
 ### Examples
 

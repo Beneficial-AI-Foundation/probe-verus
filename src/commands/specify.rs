@@ -284,7 +284,7 @@ fn match_functions_to_atoms(
 ///    ends with `::func.name` (handles impl methods where SCIP enriches
 ///    display names to `Type::method` while verus_syn yields bare identifiers)
 /// 3. SCIP line must fall within the function's span [start_line, end_line]
-///    OR be within LINE_TOLERANCE of fn_line
+///    OR be within LINE_TOLERANCE of fn_line. A match inside the span wins.
 ///
 /// Uses `fn_line` (the `fn` keyword line) for distance calculation since it
 /// closely matches SCIP's definition line, unlike `spec_text.lines_start`
@@ -293,8 +293,10 @@ fn find_matching_atom(func: &FunctionInfo, atoms: &BTreeMap<String, AtomEntry>) 
     let func_path = func.file.as_deref().unwrap_or("");
     let func_suffix = extract_src_suffix(func_path);
 
+    // Best match so far, ranked by (outside the span, line distance): an atom
+    // inside the span beats a nearby one, such as a cfg alternative.
     let mut best_match: Option<&str> = None;
-    let mut best_line_diff = usize::MAX;
+    let mut best_rank = (true, usize::MAX);
 
     for (code_name, atom) in atoms {
         let atom_suffix = extract_src_suffix(&atom.code_path);
@@ -316,13 +318,10 @@ fn find_matching_atom(func: &FunctionInfo, atoms: &BTreeMap<String, AtomEntry>) 
             let line_diff = (func.fn_line as isize - atom_line as isize).unsigned_abs();
             let within_tolerance = line_diff <= LINE_TOLERANCE;
 
-            if (within_span || within_tolerance) && line_diff < best_line_diff {
+            let rank = (!within_span, line_diff);
+            if (within_span || within_tolerance) && rank < best_rank {
                 best_match = Some(code_name);
-                best_line_diff = line_diff;
-
-                if line_diff == 0 {
-                    break;
-                }
+                best_rank = rank;
             }
         }
     }
@@ -491,6 +490,32 @@ mod tests {
         assert_eq!(
             result_b,
             Some("probe:crate/1.0/edwards/RistrettoPoint#Add#add()".to_string())
+        );
+    }
+
+    /// cfg alternatives a few lines apart (dalek `core_assumes::fill_bytes`):
+    /// each one matches the atom inside its own span, not the nearer atom of
+    /// the other alternative.
+    #[test]
+    fn test_cfg_alternative_matches_atom_inside_its_span() {
+        let first = make_func("fill_bytes", "src/core_assumes.rs", 426, 422, 428);
+        let second = make_func("fill_bytes", "src/core_assumes.rs", 436, 430, 440);
+        let mut atoms = BTreeMap::new();
+        atoms.insert(
+            "probe:c/1.0/core_assumes/fill_bytes()".to_string(),
+            make_atom("fill_bytes", "src/core_assumes.rs", 430),
+        );
+        atoms.insert(
+            "probe:c/1.0/core_assumes/fill_bytes()@422".to_string(),
+            make_atom("fill_bytes", "src/core_assumes.rs", 422),
+        );
+        assert_eq!(
+            find_matching_atom(&first, &atoms).as_deref(),
+            Some("probe:c/1.0/core_assumes/fill_bytes()@422")
+        );
+        assert_eq!(
+            find_matching_atom(&second, &atoms).as_deref(),
+            Some("probe:c/1.0/core_assumes/fill_bytes()")
         );
     }
 

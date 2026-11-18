@@ -1083,7 +1083,7 @@ struct AtomEntry {
 ///    ends with `::loc.display_name` (handles impl methods where SCIP enriches
 ///    display names to `Type::method` while verus_syn yields bare identifiers)
 /// 3. Atom line must fall within the function's span [lines_start, lines_end]
-///    OR be within LINE_TOLERANCE of lines_start.
+///    OR be within LINE_TOLERANCE of lines_start. A match inside the span wins.
 ///    The span check is needed because loc.code_text comes from verus_syn's
 ///    spec_text (which includes doc comments/attributes), while atom lines
 ///    come from SCIP (the fn keyword line).
@@ -1093,8 +1093,10 @@ fn find_code_name_in_atoms(
 ) -> Option<String> {
     let loc_suffix = extract_src_suffix(&loc.code_path);
 
+    // Ranked by (outside the span, line distance): an atom inside the span
+    // beats a nearby one, such as a cfg alternative.
     let mut best_match: Option<&String> = None;
-    let mut best_line_diff: usize = usize::MAX;
+    let mut best_rank = (true, usize::MAX);
 
     for (code_name, atom) in atoms {
         let atom_suffix = extract_src_suffix(&atom.code_path);
@@ -1124,13 +1126,13 @@ fn find_code_name_in_atoms(
                     line_diff
                 };
 
-                let is_better = effective_diff < best_line_diff
-                    || (effective_diff == best_line_diff
-                        && best_match.is_some_and(|prev| code_name < prev));
+                let rank = (!within_span, effective_diff);
+                let is_better = rank < best_rank
+                    || (rank == best_rank && best_match.is_some_and(|prev| code_name < prev));
 
                 if is_better {
                     best_match = Some(code_name);
-                    best_line_diff = effective_diff;
+                    best_rank = rank;
                 }
             }
         }
@@ -1408,6 +1410,26 @@ mod tests {
         assert_eq!(
             find_code_name_in_atoms(&loc, &atoms).as_deref(),
             Some("code_baz_close")
+        );
+    }
+
+    /// A cfg alternative right after the span is nearer than the atom at the
+    /// span's end, but the atom inside the span wins.
+    #[test]
+    fn test_find_code_name_prefers_atom_inside_span() {
+        let loc = make_loc("baz", "src/mod.rs", 100, 110);
+        let mut atoms = BTreeMap::new();
+        atoms.insert(
+            "code_baz_inside".to_string(),
+            make_atom_entry("baz", "src/mod.rs", 104),
+        );
+        atoms.insert(
+            "code_baz_before".to_string(),
+            make_atom_entry("baz", "src/mod.rs", 98),
+        );
+        assert_eq!(
+            find_code_name_in_atoms(&loc, &atoms).as_deref(),
+            Some("code_baz_inside")
         );
     }
 

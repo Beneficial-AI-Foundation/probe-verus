@@ -19,8 +19,8 @@ pub mod verus_parser;
 pub use error::{ProbeError, ProbeResult};
 
 use constants::{
-    is_definition, is_external_function_symbol, is_function_like_kind, LINE_TOLERANCE,
-    PROBE_URI_PREFIX, SCIP_SYMBOL_PREFIX,
+    is_definition, is_external_function_symbol, is_function_like_kind, PROBE_URI_PREFIX,
+    SCIP_SYMBOL_PREFIX,
 };
 use path_utils::{extract_src_suffix, paths_match_by_suffix};
 
@@ -1747,8 +1747,13 @@ pub fn backfill_atoms_from_parser(
         false, // include_spec_text
     );
 
-    let mut added = 0usize;
-    let mut backfilled: HashSet<String> = HashSet::new();
+    struct PendingAtom {
+        atom: AtomWithLines,
+        has_spec: bool,
+        /// Path as the parser and `file_module_pub` see it (no package prefix).
+        parsed_path: String,
+    }
+    let mut pending: Vec<PendingAtom> = Vec::new();
 
     for fi in &parsed.functions {
         let raw_path = match &fi.file {
@@ -1802,48 +1807,22 @@ pub fn backfill_atoms_from_parser(
         };
 
         // The function is already an atom if one for the same method sits at its
-        // location: the atom's (SCIP name) line lies inside the parsed span, or,
-        // for a nearby line, the owner-aware display names agree. The display name
-        // alone is not enough: the analyzer resolves type aliases
-        // (`FieldElement` -> `FieldElement51`), the parser does not.
+        // location: the atom's (SCIP name) line lies inside the parsed span. Names
+        // alone cannot decide it: the analyzer resolves type aliases
+        // (`FieldElement` -> `FieldElement51`), the parser does not, and a nearby
+        // method of another impl on the same Self type has the same display name.
         let already_present = atoms_dict.values().any(|atom| {
             let same_method = atom.display_name == fi.name
                 || atom.display_name.ends_with(&format!("::{}", fi.name));
-            if !same_method {
-                return false;
-            }
-            let path_ok = paths_match_by_suffix(&code_path, &atom.code_path)
-                || extract_src_suffix(&code_path) == extract_src_suffix(&atom.code_path);
-            if !path_ok {
-                return false;
-            }
-            let inside_span = atom.code_text.lines_start >= fi.spec_text.lines_start
-                && atom.code_text.lines_start <= fi.spec_text.lines_end;
-            let diff = (fi.spec_text.lines_start as isize - atom.code_text.lines_start as isize)
-                .unsigned_abs();
-            inside_span || (diff <= LINE_TOLERANCE && atom.display_name == display_name)
+            same_method
+                && (paths_match_by_suffix(&code_path, &atom.code_path)
+                    || extract_src_suffix(&code_path) == extract_src_suffix(&atom.code_path))
+                && atom.code_text.lines_start >= fi.spec_text.lines_start
+                && atom.code_text.lines_start <= fi.spec_text.lines_end
         });
-
         if already_present {
             continue;
         }
-
-        // A name collision with an atom inserted earlier in this loop is a cfg
-        // alternative of the same function: keep the spec-bearing variant, whose
-        // lines are what verification reports. An analyzer-indexed atom is never
-        // replaced (it carries the dependencies); the parser variant is dropped.
-        let has_spec = fi.has_requires || fi.has_ensures;
-        let is_replacement = match atoms_dict.get(&code_name) {
-            None => false,
-            Some(existing)
-                if backfilled.contains(&code_name)
-                    && has_spec
-                    && existing.code_text.lines_start != fi.spec_text.lines_start =>
-            {
-                true
-            }
-            Some(_) => continue,
-        };
 
         let code_module = if module_path.is_empty() {
             String::new()
@@ -1866,11 +1845,11 @@ pub fn backfill_atoms_from_parser(
             format!("{}/src/{}", pkg_name, output_code_path)
         };
         let rqn = derive_rust_qualified_name(&rqn_path, &display_name);
-        atoms_dict.insert(
-            code_name.clone(),
-            AtomWithLines {
+        pending.push(PendingAtom {
+            has_spec: fi.has_requires || fi.has_ensures,
+            atom: AtomWithLines {
                 display_name,
-                code_name: code_name.clone(),
+                code_name,
                 dependencies: BTreeSet::new(),
                 dependencies_with_locations: Vec::new(),
                 code_module,
@@ -1888,14 +1867,7 @@ pub fn backfill_atoms_from_parser(
                 .to_string(),
                 rust_qualified_name: rqn,
                 is_public: Some(vis_public),
-                is_public_api: classify_public_api(
-                    vis_public,
-                    &code_name,
-                    &code_path,
-                    fi.kind,
-                    file_module_pub,
-                    is_library,
-                ),
+                is_public_api: None,
                 has_body: Some(fi.has_body),
                 is_external: Some(fi.is_external),
                 is_cfg_gated: Some(
@@ -1906,11 +1878,69 @@ pub fn backfill_atoms_from_parser(
                             .unwrap_or(false),
                 ),
             },
+            parsed_path: code_path,
+        });
+    }
+
+    // Functions that share a code-name are cfg alternatives (or functions whose
+    // owner the parser renders like another's). Each one is an atom. The
+    // spec-bearing one, then the first by line, takes the plain code-name unless
+    // an analyzer atom holds it. The others get `@line`, or `@path:line` if that
+    // collides too. An external stub with the plain code-name is replaced: it
+    // stands for this function, which the analyzer did not index.
+    pending.sort_by(|a, b| {
+        a.atom
+            .code_name
+            .cmp(&b.atom.code_name)
+            .then(b.has_spec.cmp(&a.has_spec))
+            .then(a.atom.code_path.cmp(&b.atom.code_path))
+            .then(
+                a.atom
+                    .code_text
+                    .lines_start
+                    .cmp(&b.atom.code_text.lines_start),
+            )
+    });
+    let mut added = 0usize;
+    for PendingAtom {
+        mut atom,
+        parsed_path,
+        ..
+    } in pending
+    {
+        let base = atom.code_name.clone();
+        let plain_free = atoms_dict
+            .get(&base)
+            .is_none_or(|existing| existing.code_path.is_empty());
+        let key = if plain_free {
+            base
+        } else {
+            let with_line = format!("{base}@{}", atom.code_text.lines_start);
+            if !atoms_dict.contains_key(&with_line) {
+                with_line
+            } else {
+                let with_path = format!("{base}@{}:{}", atom.code_path, atom.code_text.lines_start);
+                if atoms_dict.contains_key(&with_path) {
+                    eprintln!(
+                        "Warning: backfill skipped {base} at {}:{}: code-name already taken",
+                        atom.code_path, atom.code_text.lines_start
+                    );
+                    continue;
+                }
+                with_path
+            }
+        };
+        atom.is_public_api = classify_public_api(
+            atom.is_public.unwrap_or(false),
+            &key,
+            &parsed_path,
+            atom.kind,
+            file_module_pub,
+            is_library,
         );
-        backfilled.insert(code_name);
-        if !is_replacement {
-            added += 1;
-        }
+        atom.code_name = key.clone();
+        atoms_dict.insert(key, atom);
+        added += 1;
     }
 
     added
@@ -2470,6 +2500,40 @@ mod tests {
         assert_eq!(atoms["probe:c/1.0/impl#[B]f()"].display_name, "B::f");
     }
 
+    /// A method of another trait impl on the same Self type, next to an analyzer
+    /// atom, is a distinct function (Codex PR #50 review, round 2, finding 3).
+    #[test]
+    fn test_backfill_keeps_same_self_type_method_of_other_trait_impl() {
+        let dir = crate_with_lib(
+            "struct R;\ntrait A { fn f(); }\ntrait B { fn f(); }\nimpl A for R {\n    fn f() {}\n}\nimpl B for R {\n    fn f() {}\n}\n",
+        );
+        let mut atoms = BTreeMap::new();
+        atoms.insert(
+            "probe:c/1.0/impl#[R][A]f()".to_string(),
+            analyzer_atom("R::f", 5, &[]),
+        );
+        backfill(dir.path(), &mut atoms);
+        let atom = &atoms["probe:c/1.0/impl#[R][B]f()"];
+        assert_eq!(atom.code_text.lines_start, 8);
+        assert!(atoms.keys().all(|k| !k.contains('@')), "{:?}", atoms.keys());
+        assert_eq!(atoms["probe:c/1.0/impl#[R][A]f()"].code_text.lines_start, 5);
+    }
+
+    /// A cfg alternative that the analyzer did not index is an atom of its own,
+    /// keyed `@line`, so that every declaration has an atom (KB P25 classifies
+    /// it as out of scope when its cfg is inactive).
+    #[test]
+    fn test_backfill_keeps_cfg_alternative_of_analyzer_atom() {
+        let dir = crate_with_lib(
+            "verus! {\n#[cfg(feature = \"a\")]\nfn h() {}\n#[cfg(not(feature = \"a\"))]\nfn h()\n    ensures true,\n{}\n}\n",
+        );
+        let mut atoms = BTreeMap::new();
+        atoms.insert("probe:c/1.0/h()".to_string(), analyzer_atom("h", 3, &[]));
+        assert_eq!(backfill(dir.path(), &mut atoms), 1);
+        assert_eq!(atoms["probe:c/1.0/h()"].code_text.lines_start, 3);
+        assert_eq!(atoms["probe:c/1.0/h()@4"].code_text.lines_start, 4);
+    }
+
     /// An analyzer atom inside the parsed span is the same function, even when
     /// the analyzer named the aliased type.
     #[test]
@@ -2506,14 +2570,28 @@ mod tests {
         assert_eq!(atom.dependencies.len(), 1);
     }
 
-    /// Between two parser-found cfg alternatives, the spec-bearing one wins.
+    /// Two parser-found cfg alternatives are both atoms. The spec-bearing one
+    /// takes the plain code-name.
     #[test]
     fn test_backfill_prefers_spec_bearing_cfg_alternative() {
         let source = "verus! {\n#[cfg(feature = \"a\")]\nfn h() {}\n\n\n\n\n\n\n\n#[cfg(not(feature = \"a\"))]\nfn h()\n    ensures true,\n{}\n}\n";
         let dir = crate_with_lib(source);
         let mut atoms = BTreeMap::new();
-        assert_eq!(backfill(dir.path(), &mut atoms), 1);
+        assert_eq!(backfill(dir.path(), &mut atoms), 2);
         assert_eq!(atoms["probe:c/1.0/h()"].code_text.lines_start, 11);
+        assert_eq!(atoms["probe:c/1.0/h()@2"].code_text.lines_start, 2);
+    }
+
+    /// A backfilled function replaces the external stub that stands for it.
+    #[test]
+    fn test_backfill_replaces_stub_with_same_code_name() {
+        let dir = crate_with_lib("fn h() {}\n");
+        let mut atoms = BTreeMap::new();
+        let mut stub = analyzer_atom("h", 0, &[]);
+        stub.code_path = String::new();
+        atoms.insert("probe:c/1.0/h()".to_string(), stub);
+        assert_eq!(backfill(dir.path(), &mut atoms), 1);
+        assert_eq!(atoms["probe:c/1.0/h()"].code_path, "src/lib.rs");
     }
 
     // =========================================================================

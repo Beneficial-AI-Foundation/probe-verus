@@ -353,12 +353,15 @@ struct FunctionSpanVisitor {
     /// declared on the impl block (an individual trait-impl item cannot be
     /// marked external), so the attribute must be propagated to the methods.
     inside_external_impl: usize,
+    /// `verus!` / `cfg_if!` bodies that failed to parse (their items are skipped).
+    macro_errors: Vec<String>,
 }
 
 impl FunctionSpanVisitor {
     fn new() -> Self {
         Self {
             functions: Vec::new(),
+            macro_errors: Vec::new(),
             inside_verus: 0,
             inside_cfg_impl: 0,
             inside_cfg_mod: 0,
@@ -502,7 +505,11 @@ impl<'ast> Visit<'ast> for FunctionSpanVisitor {
     fn visit_item_macro(&mut self, node: &'ast ItemMacro) {
         if let Some(ident) = &node.mac.path.get_ident() {
             if *ident == "verus" {
-                if let Ok(items) = verus_syn::parse2::<VerusMacroBody>(node.mac.tokens.clone()) {
+                let parsed = verus_syn::parse2::<VerusMacroBody>(node.mac.tokens.clone());
+                if let Err(e) = &parsed {
+                    self.macro_errors.push(macro_error("verus!", e));
+                }
+                if let Ok(items) = parsed {
                     self.inside_verus += 1;
                     for item in items.items {
                         self.visit_item(&item);
@@ -510,7 +517,11 @@ impl<'ast> Visit<'ast> for FunctionSpanVisitor {
                     self.inside_verus -= 1;
                 }
             } else if *ident == "cfg_if" {
-                if let Ok(branches) = verus_syn::parse2::<CfgIfMacroBody>(node.mac.tokens.clone()) {
+                let parsed = verus_syn::parse2::<CfgIfMacroBody>(node.mac.tokens.clone());
+                if let Err(e) = &parsed {
+                    self.macro_errors.push(macro_error("cfg_if!", e));
+                }
+                if let Ok(branches) = parsed {
                     self.inside_cfg_if += 1;
                     for items in branches.all_items {
                         for item in items {
@@ -607,6 +618,24 @@ impl verus_syn::parse::Parse for CfgIfMacroBody {
     }
 }
 
+/// Describe a macro body that failed to parse, with the position of the error.
+fn macro_error(macro_name: &str, e: &verus_syn::Error) -> String {
+    let start = e.span().start();
+    format!(
+        "cannot parse {macro_name} body ({e} at line {}:{}), its items are skipped",
+        start.line,
+        start.column + 1
+    )
+}
+
+/// Print parse failures of macro bodies. They use the `Warning: ` prefix of
+/// other parse failures, so that tools reading the output can count them.
+fn report_macro_errors(file_path: &Path, errors: &[String]) {
+    for error in errors {
+        eprintln!("Warning: {}: {error}", file_path.display());
+    }
+}
+
 /// Parse a single source file and extract all function spans.
 ///
 /// Returns a vector of (function_name, start_line, end_line) tuples.
@@ -619,6 +648,7 @@ pub fn parse_file_for_spans(file_path: &Path) -> Result<Vec<FunctionSpan>, Strin
 
     let mut visitor = FunctionSpanVisitor::new();
     visitor.visit_file(&syntax_tree);
+    report_macro_errors(file_path, &visitor.macro_errors);
 
     Ok(visitor.functions)
 }
@@ -1015,6 +1045,8 @@ pub struct ParseSummary {
 /// Visitor that collects detailed function information
 struct FunctionInfoVisitor {
     functions: Vec<FunctionInfo>,
+    /// `verus!` / `cfg_if!` bodies that failed to parse (their items are skipped).
+    macro_errors: Vec<String>,
     assume_specifications: Vec<AssumeSpecInfo>,
     file_path: Option<String>,
     file_content: Option<String>,
@@ -1076,6 +1108,7 @@ impl FunctionInfoVisitor {
             inside_cfg_if: 0,
             inside_external_impl: 0,
             cfg_stack: Vec::new(),
+            macro_errors: Vec::new(),
         }
     }
 
@@ -1675,13 +1708,21 @@ impl<'ast> Visit<'ast> for FunctionInfoVisitor {
     fn visit_item_macro(&mut self, node: &'ast ItemMacro) {
         if let Some(ident) = &node.mac.path.get_ident() {
             if *ident == "verus" {
-                if let Ok(items) = verus_syn::parse2::<VerusMacroBody>(node.mac.tokens.clone()) {
+                let parsed = verus_syn::parse2::<VerusMacroBody>(node.mac.tokens.clone());
+                if let Err(e) = &parsed {
+                    self.macro_errors.push(macro_error("verus!", e));
+                }
+                if let Ok(items) = parsed {
                     for item in items.items {
                         self.visit_item(&item);
                     }
                 }
             } else if *ident == "cfg_if" {
-                if let Ok(branches) = verus_syn::parse2::<CfgIfMacroBody>(node.mac.tokens.clone()) {
+                let parsed = verus_syn::parse2::<CfgIfMacroBody>(node.mac.tokens.clone());
+                if let Err(e) = &parsed {
+                    self.macro_errors.push(macro_error("cfg_if!", e));
+                }
+                if let Ok(branches) = parsed {
                     self.inside_cfg_if += 1;
                     for items in branches.all_items {
                         for item in items {
@@ -1917,6 +1958,7 @@ pub fn parse_file_for_functions_ext(
     );
     visitor.include_extended_info = include_extended_info;
     visitor.visit_file(&syntax_tree);
+    report_macro_errors(file_path, &visitor.macro_errors);
 
     Ok((visitor.functions, visitor.assume_specifications))
 }
@@ -2226,6 +2268,26 @@ fn bump(x: &mut u8)
         assert_eq!(spans[1].name, "bump");
         assert_eq!(spans[1].kind, DeclKind::Exec);
         assert!(spans[1].ensures_range.is_some());
+    }
+
+    /// A `verus!` body that does not parse is recorded, not dropped silently.
+    /// `b as int < c` reads as the start of generic arguments.
+    #[test]
+    fn test_unparseable_verus_body_is_recorded() {
+        let source = "verus! {\nspec fn f(b: u32) -> bool { b as int < 3 as int }\n}\nfn g() {}\n";
+        let tree = verus_syn::parse_file(source).unwrap();
+
+        let mut spans = FunctionSpanVisitor::new();
+        spans.visit_file(&tree);
+        assert_eq!(spans.macro_errors.len(), 1);
+        assert!(spans.macro_errors[0].contains("verus! body"));
+        assert!(spans.macro_errors[0].contains("line 2:"));
+        let names: Vec<&str> = spans.functions.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, vec!["g"]);
+
+        let mut infos = FunctionInfoVisitor::new(None, None, true, true, false, false, false);
+        infos.visit_file(&tree);
+        assert_eq!(infos.macro_errors.len(), 1);
     }
 
     #[test]

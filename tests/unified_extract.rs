@@ -53,7 +53,7 @@ fn merge_fixture_files(
     specs_path: Option<&Path>,
     proofs_path: Option<&Path>,
 ) -> BTreeMap<String, UnifiedAtom> {
-    probe_verus::commands::merge_into_unified(atoms_path, specs_path, proofs_path)
+    probe_verus::commands::merge_into_unified(atoms_path, specs_path, proofs_path, None)
         .expect("merge_into_unified should succeed on the fixtures")
 }
 

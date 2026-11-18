@@ -98,12 +98,14 @@ Before it converts an index, probe-verus checks it:
    (finding 4).
 5. If atomize fails, `extract` stops with a nonzero exit code. Later
    steps do not run.
-6. `assume_specification` matching fails closed. A spec attaches only when
-   its target is fully qualified, with the crate of the Self type and of
-   the trait, and matches exactly one stub with the same crates. A target
-   that depends on an import or alias, such as `Record::read`, stays
-   unattached with a warning. This attaches fewer specs than 8.x. Resolving
-   targets through SCIP is #53.
+6. `assume_specification` matching checks the crate through SCIP (decided
+   2026-11-18, replacing the syntax-only rule, which would have dropped 4
+   of the 5 dalek-verus specs). The index resolves the Self type and the
+   trait inside the target brackets, but not the method. A spec attaches
+   only when exactly one stub in one of those crates matches by name. If
+   the index does not resolve a named type or trait, or no index exists,
+   the spec stays unattached with a warning. Resolving the method itself
+   is #53.
 
 ### 4. Analyzer selection
 

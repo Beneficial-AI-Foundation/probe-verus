@@ -2322,7 +2322,10 @@ mod tests {
     }
 
     fn index_with_symbols(symbols: &[&str]) -> ScipIndex {
-        let with_kinds: Vec<(&str, i32)> = symbols.iter().map(|s| (*s, 6)).collect();
+        let with_kinds: Vec<(&str, i32)> = symbols
+            .iter()
+            .map(|s| (*s, constants::SCIP_KIND_METHOD))
+            .collect();
         index_with_kinds("0", &with_kinds)
     }
 
@@ -2348,7 +2351,7 @@ mod tests {
                 ),
                 (
                     "rust-analyzer cargo c 1.0 montgomery/MontgomeryPoint#to_bytes().",
-                    6,
+                    constants::SCIP_KIND_METHOD,
                 ),
             ],
         );
@@ -2366,7 +2369,10 @@ mod tests {
                     "rust-analyzer cargo c 1.0 Trait#",
                     constants::SCIP_KIND_TRAIT,
                 ),
-                ("rust-analyzer cargo c 1.0 Trait#method().", 6),
+                (
+                    "rust-analyzer cargo c 1.0 Trait#method().",
+                    constants::SCIP_KIND_TRAIT_METHOD,
+                ),
             ],
         );
         assert!(!uses_legacy_symbol_format(&trait_only));
@@ -2389,7 +2395,7 @@ mod tests {
         let free_fn = ["rust-analyzer cargo c 1.0 lemmas/lemma_foo()."];
         // Syntax alone cannot tell; the producer version can.
         assert!(!uses_legacy_symbol_format(&index_with_symbols(&free_fn)));
-        let with = |v| index_with_kinds(v, &[(free_fn[0], 6)]);
+        let with = |v| index_with_kinds(v, &[(free_fn[0], constants::SCIP_KIND_FUNCTION)]);
         assert!(uses_legacy_symbol_format(&with("0.3.264-standalone")));
         assert!(uses_legacy_symbol_format(&with("0.3.259")));
         assert!(!uses_legacy_symbol_format(&with("0.3.266-standalone")));
@@ -2525,7 +2531,7 @@ mod tests {
     fn function_record(symbol: &str, signature: &str) -> Symbol {
         Symbol {
             symbol: symbol.to_string(),
-            kind: 6,
+            kind: constants::SCIP_KIND_METHOD,
             display_name: Some("f".to_string()),
             documentation: None,
             signature_documentation: SignatureDocumentation {
@@ -2560,6 +2566,40 @@ mod tests {
     }
 
     const DUP: &str = "rust-analyzer cargo c 1.0 m/impl#[S]f().";
+
+    /// Trait method declarations (SCIP kind `TraitMethod`), with or without a
+    /// body, are local definitions. A call to one resolves to its atom, not to
+    /// an external stub.
+    #[test]
+    fn test_trait_method_declaration_is_local_atom() {
+        const DECL: &str = "rust-analyzer cargo c 1.0 m/Tr#inv().";
+        const CALLER: &str = "rust-analyzer cargo c 1.0 m/check().";
+        let mut decl = function_record(DECL, "spec fn inv(self) -> bool;");
+        decl.kind = constants::SCIP_KIND_TRAIT_METHOD;
+        let mut caller = function_record(CALLER, "fn check()");
+        caller.kind = constants::SCIP_KIND_FUNCTION;
+        let index = index_of(vec![document(
+            "src/m.rs",
+            vec![
+                occurrence(DECL, [3, 12, 15], Some(1)),
+                occurrence(CALLER, [6, 3, 8], Some(1)),
+                occurrence(DECL, [7, 4, 7], None),
+            ],
+            vec![decl, caller],
+        )]);
+        let atoms = convert_to_atoms_with_lines(&build_call_graph(&index));
+        let decl_atom = atoms
+            .iter()
+            .find(|a| a.code_name == "probe:c/1.0/m/Tr#inv()")
+            .expect("trait method declaration is an atom");
+        assert_eq!(decl_atom.code_path, "src/m.rs");
+        assert_eq!(decl_atom.code_text.lines_start, 4);
+        let caller_atom = atoms
+            .iter()
+            .find(|a| a.code_name == "probe:c/1.0/m/check()")
+            .unwrap();
+        assert!(caller_atom.dependencies.contains("probe:c/1.0/m/Tr#inv()"));
+    }
 
     /// Definitions sharing a symbol on the same line (in different files, or in
     /// different columns of one file) each get a node.

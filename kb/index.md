@@ -44,3 +44,5 @@ Located at `../probe/.claude/skills/`. Run these after significant changes
 | File | Description |
 |------|-------------|
 | [docs/HOW_IT_WORKS.md](../docs/HOW_IT_WORKS.md) | SCIP pipeline, verus_syn spans, trait disambiguation, verification parsing |
+| [verus-analyzer-migration.md](verus-analyzer-migration.md) | Plan for moving to the verus-analyzer 2026-08-22 symbol format (#57): design, support target, corpus test, measurements |
+| [reports/verus-analyzer-migration-codex-review.md](reports/verus-analyzer-migration-codex-review.md) | Codex reviews of that plan (revisions 1, 2 and 4) |

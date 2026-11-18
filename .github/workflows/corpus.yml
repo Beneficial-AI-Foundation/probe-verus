@@ -1,0 +1,84 @@
+name: Corpus
+
+# Runs probe-verus on the support target (corpus/support-target.toml) and
+# checks that every function declaration is an atom.
+# See kb/verus-analyzer-migration.md, "Corpus test".
+#
+# The scheduled run is a diagnostic: it does not pass --gate. Before PR 1 of
+# issue #57 merges, a manual run with gate=true must pass.
+
+on:
+  schedule:
+    - cron: "0 4 * * 1"
+  workflow_dispatch:
+    inputs:
+      analyzer-version:
+        description: "verus-analyzer release to run"
+        default: "2026-09-25"
+      gate:
+        description: "Fail on unmatched declarations not in corpus/known-limitations.toml"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  corpus:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      ANALYZER_VERSION: ${{ inputs.analyzer-version || '2026-09-25' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # Keep in sync with corpus/support-target.toml and the projects'
+      # rust-toolchain.toml files.
+      - name: Install project toolchains
+        run: |
+          rustup toolchain install 1.91.0 1.92.0 nightly-2025-09-01 --profile minimal
+          rustup toolchain install nightly-2023-12-22 --profile minimal \
+            --component rust-src,rustc-dev,llvm-tools-preview
+
+      - name: Install scip
+        run: |
+          wget -q "https://github.com/sourcegraph/scip/releases/download/v0.10.0/scip-linux-amd64.tar.gz" -O scip-linux.tar.gz
+          tar -xzf scip-linux.tar.gz
+          chmod +x scip
+          sudo mv scip /usr/local/bin/
+
+      - name: Build probe-verus
+        run: cargo build --release
+
+      - name: Run corpus
+        run: |
+          python3 scripts/corpus/run.py \
+            --probe-verus target/release/probe-verus \
+            --analyzer-version "$ANALYZER_VERSION" \
+            --scip /usr/local/bin/scip \
+            --out corpus-out \
+            ${{ inputs.gate && '--gate' || '' }}
+
+      - name: Summary
+        if: always()
+        run: |
+          if [ -f corpus-out/report.md ]; then
+            cat corpus-out/report.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No report: the corpus script stopped before the first project." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: corpus-${{ env.ANALYZER_VERSION }}
+          path: |
+            corpus-out/report.*
+            corpus-out/*/*.log
+            corpus-out/*/probes/*_atoms.json

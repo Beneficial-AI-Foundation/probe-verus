@@ -1,0 +1,46 @@
+# Support target: projects that every probe-verus release must handle.
+# See kb/verus-analyzer-migration.md, "Support target" and "Corpus test".
+#
+# Fields:
+#   repo       git URL to clone
+#   commit     pinned commit (full hash)
+#   crate      crate directory inside the repo, given to probe-verus
+#   toolchain  Rust toolchain of the project's Verus version. The script sets
+#              RUSTUP_TOOLCHAIN to it. Leave it out when the project has its
+#              own rust-toolchain.toml; rustup then uses that file.
+
+[[project]]
+name = "dalek-verus"
+repo = "https://github.com/Beneficial-AI-Foundation/dalek-verus.git"
+commit = "5b70dd7377ad8057008140155358f546a8e26c81"
+crate = "curve25519-dalek"
+toolchain = "1.92.0"      # vstd git rev 88f7396 (Verus 2026-01-14)
+
+[[project]]
+name = "pmemlog"
+repo = "https://github.com/Beneficial-AI-Foundation/pmemlog_with_callgraph.git"
+commit = "10388d911acdf7e6267750e226b459e731bc9866"
+crate = "."
+toolchain = "1.91.0"      # vstd 0.0.0-2025-11-30
+
+[[project]]
+name = "vest"
+repo = "https://github.com/secure-foundations/vest.git"
+commit = "ca0e93debdd4593d265ba7ad6607dba06bdfdd41"
+crate = "vest"
+toolchain = "1.92.0"      # vstd 0.0.0-2026-01-11
+
+[[project]]
+name = "capybarakv"
+repo = "https://github.com/microsoft/verified-storage.git"
+commit = "83f1a7bb9e256f32aa84ce8a8df7f180bd766b46"
+crate = "capybaraKV/capybarakv"
+# rust-toolchain.toml in the repo: 1.91.0
+
+[[project]]
+name = "verismo"
+repo = "https://github.com/microsoft/verismo.git"
+commit = "c90240a3b66194367c7704f0c4733982ca8e275a"
+crate = "source/verismo"
+# rust-toolchain.toml in the repo: nightly-2023-12-22. Uses a Verus fork,
+# so verification is not part of the corpus run for this project.

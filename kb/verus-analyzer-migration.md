@@ -1,0 +1,329 @@
+# Plan: move probe-verus to the new verus-analyzer symbol format
+
+Status: draft, revision 5. Tracks issue #57 and replaces the approach of
+PR #50. Codex reviewed revisions 1, 2 and 4
+(`kb/reports/verus-analyzer-migration-codex-review.md`). Revision 3 kept two symbol
+paths to keep code-names stable. Revision 4 dropped that, for the two
+reasons below. Revision 5 applies the review of revision 4.
+
+## Background
+
+verus-analyzer 2026-08-22 changed its SCIP symbol format to the upstream
+rust-analyzer format. Trait impl methods became `impl#[Self][Trait]m()`, and
+module paths are no longer reversed. probe-verus 8.x repairs the old format
+and mangles the new one. PR #50 adopts the new format.
+
+The concern with PR #50 was that it breaks older projects. Two findings
+from 2026-11-17 answer it:
+
+1. Code-name changes do not matter to consumers (decision of the project
+   owner). Nothing keeps code-names from one run to the next that a rename
+   breaks. So the rename protections of revision 3 are not needed.
+2. The new analyzer works on the projects that must keep working (support
+   target, below), on the toolchain of their own Verus version, although
+   all of them are below the analyzer's stated minimum of Rust 1.94.
+
+## Support target
+
+These projects must work with every probe-verus release:
+
+| Project | Commit | Verus dependency | Toolchain |
+|---------|--------|------------------|-----------|
+| dalek-verus | 5b70dd73 | `vstd` git rev 88f7396 | 1.92.0 |
+| pmemlog | 10388d9 | `vstd` 0.0.0-2025-11-30 | 1.91.0 |
+| vest (`vest/`) | ca0e93d | `vstd` 0.0.0-2026-01-11 | 1.92.0 |
+| capybarakv (verified-storage) | 83f1a7bb | `vstd` 0.0.0-2026-01-25 | 1.91.0 (project file) |
+| verismo (`source/verismo`) | c90240a | `builtin` from a Verus fork | nightly-2023-12-22 (project file) |
+
+"Work" means: `extract` succeeds with default flags, and every function
+declaration in the project inventory is a local atom. The inventory comes
+from `list-functions`, which uses only `verus_syn`, so it does not depend
+on either analyzer. A declaration matches an atom by file, owner, name and
+span. Every unmatched declaration must be explained in the corpus report,
+as a known limitation or a bug.
+
+## Design
+
+### 1. One symbol path
+
+probe-verus reads only the new symbol format. Code-names come from the
+symbol, as in PR #50: the symbol without the `rust-analyzer cargo ` prefix
+and the trailing `.`, lifetimes dropped, spaces turned into `/`. The symbol
+repair code goes: the self-type pre-pass, `extract_impl_type_info`,
+type-context disambiguation, call-site type hints and the
+`verus_keep_ghost` config file.
+
+### 2. Index validation
+
+Before it converts an index, probe-verus checks it:
+
+- Old format: the producer version is a known release older than
+  2026-08-22 (`0.3.N` with N < 266). Old method syntax in a defining
+  occurrence is also evidence: `Type#Trait#m()`, or a method owned by a
+  non-trait type.
+  The run stops with: "this index comes from a verus-analyzer older than
+  2026-08-22. Use 2026-08-22 or later, or probe-verus 8.x." Symbol parsing
+  respects backtick quoting.
+- Producer name: both formats report `rust-analyzer`, so the name is not
+  evidence. `ScipToolInfo.version` becomes optional.
+- No evidence either way (unknown version, no methods): probe-verus prints a
+  warning and continues. In normal use probe-verus runs a known analyzer
+  itself, so this only happens with a `path` pin.
+- Partial index (a heuristic, not a completeness test): if the selected
+  package depends directly on `vstd`, `verus_builtin` or `builtin`, the
+  index must contain references to that crate. Otherwise the run stops.
+  The corpus run saw a partial index on verdict, where a submodule was
+  missing and the analyzer exited without an error.
+- probe-verus keeps the analyzer's stderr. If validation fails, the
+  message shows the analyzer's errors, or a probe-verus explanation when
+  there are none. An index that fails validation is not cached.
+
+### 3. Fixes to the PR #50 conversion
+
+1. Trait method declarations without a body (for example
+   `spec fn inv(self) -> bool;` in a trait) stay local atoms with their
+   location. PR #50 turns them into stubs without a `code-path`. With the
+   new analyzer, 8.0.1 also loses some, for example `fn len(&self)` in
+   vest's `trait VestInput`.
+2. Backfill never replaces an atom from the index. It only enriches an atom
+   when file and span match (Codex PR #50 round 2, finding 2).
+3. Conversion keeps the raw SCIP symbol of each definition internally.
+   Backfill deduplication compares the full owner (Self type and trait),
+   not only `Type::method` and a line window. `impl A for R { fn f }` and
+   `impl B for R { fn f }` stay two atoms (finding 3).
+4. After conversion and backfill, probe-verus checks that every key is
+   unique. If `@line` collides, the key uses `@path:line:column`. If that
+   still collides, for example for definitions generated by one macro
+   call, the run stops with an error. No atom is silently overwritten
+   (finding 4).
+5. If atomize fails, `extract` stops with a nonzero exit code. Later
+   steps do not run.
+6. `assume_specification` matching fails closed. A spec attaches only when
+   its target is fully qualified, with the crate of the Self type and of
+   the trait, and matches exactly one stub with the same crates. A target
+   that depends on an import or alias, such as `Record::read`, stays
+   unattached with a warning. This attaches fewer specs than 8.x. Resolving
+   targets through SCIP is #53.
+
+### 4. Analyzer selection
+
+The analyzer version is resolved once per run:
+
+1. `PROBE_VERUS_ANALYZER_VERSION`.
+2. A pin in `Cargo.toml`. A `[package.metadata.probe-verus]` pin in the
+   selected package manifest wins over a
+   `[workspace.metadata.probe-verus]` pin in the workspace manifest. The
+   value is a release tag or `path`. Any other value causes an error.
+3. The default compiled into probe-verus: 2026-09-25. A new release becomes
+   the default only in a probe-verus release, after the support target
+   passes with it. `latest` from GitHub is no longer used.
+
+The lookup takes two separate inputs: the selected package manifest and
+the workspace manifest. `resolve_workspace_root` returns a member package,
+so it cannot give the workspace manifest by itself. `setup` and all
+commands use the same lookup. Tests: invocation at the workspace root and
+inside a member, a package pin over a workspace pin, a workspace pin
+alone, and `setup --from-project` selecting the same analyzer as
+`extract`.
+
+Pins apply only to verus-analyzer. `--rust-analyzer` mode keeps today's
+behavior.
+
+The run uses the selected version. If it is not installed,
+`--auto-install` installs it, otherwise the run stops. It never falls back
+to another installed version or to `PATH`. With the pin `path`, the run
+resolves the analyzer on `PATH` once. Analyzers install in versioned
+directories (`verus-analyzer-{version}/`). An install downloads to a
+temporary file and renames it into place. probe-verus makes sure that a
+version string is a safe directory name before it uses it in a path.
+
+probe-verus does not set the toolchain of the analyzer subprocess. It
+inherits the environment, as today.
+
+### 5. SCIP cache
+
+The cache key holds the selector, the resolved binary path, a SHA-256
+hash of the binary, the output of `rustc -vV` in the project environment,
+and hashes of `Cargo.toml` and `Cargo.lock`. If any of them differs,
+probe-verus regenerates the index. The index and its key go to temporary
+files and are renamed into place together. Caches from 8.x have no key, so
+the first 9.x run regenerates them.
+
+### 6. Provenance
+
+The envelope records the producer name and version from the SCIP metadata,
+as an optional field. This needs a probe KB change
+(`kb/engineering/schema.md`). It is for debugging only.
+
+### 7. Corpus test
+
+`scripts/corpus/run.py` runs `extract` with default flags on the support target, each at
+its pinned commit and toolchain. It always regenerates the index with the
+probe-verus version under test. It checks:
+
+- Every step succeeds. A failed step fails the script.
+- Every declaration in the `list-functions` inventory is a local atom, or
+  is a listed known limitation.
+- Run time, and counts of local atoms and edges, compared with the
+  previous run.
+
+Each project uses its own output directory. The script records the commit
+and `rustc -vV` it used. It runs in CI on a schedule, and it is a required
+step of every release. It needs network access and takes several minutes
+(dalek-verus indexing alone takes about 4 minutes on Rust 1.92).
+
+### 8. Versioning
+
+9.0.0. The `Breaking` section lists:
+
+- New code-names for nearly every atom.
+- Indexes from verus-analyzer older than 2026-08-22 cause an error.
+- The default analyzer is 2026-09-25, not `latest`.
+
+The Docker entrypoint, `action` and `action-extract` use the default
+analyzer.
+
+### 9. PR split
+
+0. Corpus script and 8.0.1 baseline, before any code change (done:
+   `scripts/corpus/run.py`, `corpus/`).
+1. PR #50 reworked: one symbol path, index validation, the fixes of
+   section 3. The corpus check must pass.
+2. Analyzer selection and SCIP cache identity.
+3. Provenance field, after the KB change.
+
+Not in this work:
+
+- Resolving `assume_specification` targets through SCIP (#53).
+- Stale artifacts across `extract` runs (#54).
+- Locks for concurrent runs, beyond write-then-rename (#54).
+- The Verus fallback in `managed_verus_binary`.
+
+## Running the corpus
+
+The manifest is `corpus/support-target.toml`. The script clones each repo
+once into `~/.cache/probe-verus-corpus/repos/` and writes `report.md` and
+`report.json` to `--out`.
+
+```bash
+cargo build --release
+python3 scripts/corpus/run.py --probe-verus target/release/probe-verus \
+    --out /tmp/corpus-out
+```
+
+Options:
+
+- `--analyzer-version 2026-09-25` runs that verus-analyzer release in a
+  separate `HOME` under the work directory, without touching
+  `~/.probe-verus/tools`. `RUSTUP_HOME` and `CARGO_HOME` stay the real
+  ones. Use this until probe-verus supports analyzer pins (PR 2).
+- `--project NAME` runs one project. `--gate` fails on unmatched
+  declarations that `corpus/known-limitations.toml` does not list.
+  `--verify` also runs Verus verification (not for verismo).
+
+Pitfalls seen while measuring:
+
+- To compare two probe-verus builds, give each its own
+  `CARGO_TARGET_DIR`. A shared target directory (for example
+  `~/.cargo-target`) makes the second build overwrite the first.
+- Projects without a `rust-toolchain.toml` take their toolchain from the
+  manifest, through `RUSTUP_TOOLCHAIN`. Without it, the analyzer runs with
+  the default toolchain, which changes timings (dalek-verus: 13 s on
+  1.93.1, 249 s on 1.92.0).
+
+Baselines are in `corpus/baselines/`.
+
+## Open items
+
+1. On dalek, analyzer 2026-09-25 logs 5 errors that report a definition
+   missing from the SCIP documents. They point at macro calls
+   (`define_add_variants!`, `define_mul_variants!`) and a
+   `#[derive(Copy, Clone)]`. Backfill cannot rebuild generated
+   definitions. Find the missing symbols and edges, then add corpus
+   assertions or list them as known limitations.
+2. Report the missed calls (measurement 2) upstream to verus-analyzer.
+3. dalek-verus takes about 4 minutes to index on Rust 1.92, against 13 s on
+   1.93.1. Document it. After dalek moves to a newer Verus, the slowdown goes
+   away.
+
+## Measurements
+
+All from 2026-11-17, `atomize` only. "Old" is probe-verus 8.0.1 with
+analyzer 2026-06-17. "New" is analyzer 2026-09-25, with 8.0.1 or with
+PR #50 (`48b909e`).
+
+### 1. Support target on its own toolchain
+
+| Project | Toolchain | Old analyzer | New analyzer | Local atoms, old / PR #50 | Edges, old / new |
+|---------|-----------|--------------|--------------|---------------------------|------------------|
+| dalek-verus | 1.92.0 | 40 s | 249 s | 2019 / 2042 | 11581 / 20903 |
+| vest | 1.92.0 | 19 s | 4 s | 747 / 720 | 996 / 1599 |
+| pmemlog | 1.91.0 | 4 s | 8 s | 115 / 110 | 438 / 1030 |
+| capybarakv | 1.91.0 | 54 s | 6 s | 1243 / 1228 | 3536 / 7602 |
+| verismo | nightly-2023-12-22 | failed | 32 s | n/a / 1678 | n/a |
+
+- The old analyzer fails on verismo because the project sets a
+  `target.json` build target. The new analyzer resolves `vstd` (2239
+  references) and `builtin` (6066).
+- The location sets differ between analyzers. Compared with the old
+  analyzer, 8.0.1 with the new analyzer misses 31 locations in vest (24
+  moved by one or two lines, 7 further off) and 3 in capybarakv, and none
+  in dalek-verus or pmemlog. The far cases are trait method declarations.
+  An earlier draft compared only counts and wrongly reported no
+  difference.
+- PR #50 generating its own index gives output identical to the runs that
+  reused 8.0.1's index, on all five projects. The new analyzer rejects
+  8.0.1's `verus_keep_ghost` config, so removing it changes nothing here.
+- All five pass with default flags, without `--allow-duplicates`. The
+  duplicate warnings in the logs come from the analyzer.
+- The lower PR #50 counts come mostly from trait method declarations
+  (section 3, item 1). capybarakv has 55 legacy-only and 40 new-only
+  locations against PR #50, so not every difference is explained yet.
+- dalek-verus, pmemlog and vest give the same atoms and edges on Rust
+  1.93.1. vest on 1.92.0 is fast, so the dalek-verus slowdown on 1.92 is
+  not general.
+
+### 2. Edges that only the old analyzer reports
+
+Checked against the source of each function:
+
+- Most are wrong. dalek-lite lemmas with a parameter `p` get an edge to the
+  spec function `p()`. A vest function whose body is
+  `C::is_prefix_secure()` gets 9 edges to sibling methods it never calls.
+- The new analyzer misses at least one real call in 16 of about 3,900
+  atoms: 5 in capybarakv, 11 in vest, none in dalek-lite or pmemlog. It also
+  misses all calls in the `external_body` function `copy_from_slice` in
+  capybarakv. Example: in `Pair::spec_new(self.0, |r: Fst::Type| self.1).wf(v)`
+  the `.wf(v)` call is missing. This looks like a type inference gap after
+  a closure.
+
+### 3. Other projects
+
+- dalek-lite HEAD c3cfb9a1 and the Verus bump branch e22fe6e1 (Verus
+  956d529): both analyzers work.
+- verdict: not in the support target. Its `deps/verus` submodule was not
+  initialized in the test copy, so both analyzers lacked `vstd`. The new
+  analyzer wrote a partial index without an error, which is the case that
+  section 2 now catches.
+
+### 4. Corpus baseline
+
+`scripts/corpus/run.py`, `extract` without verification, default flags.
+Unmatched declarations are `list-functions` declarations without a local
+atom (same file, same name, overlapping span). Reports are in
+`corpus/baselines/`.
+
+| Configuration | dalek-verus | pmemlog | vest | capybarakv | verismo |
+|---------------|-------------|---------|------|------------|---------|
+| 8.0.1, analyzer 2026-06-17 | 29 | 0 | 2 | 48 | extract fails |
+| 8.0.1, analyzer 2026-09-25 | 29 | 0 | 2 | 48 | 14 |
+| PR #50, analyzer 2026-09-25 | 6 | 5 | 29 | 63 | 49 |
+
+- The 8.0.1 misses on dalek-verus are mostly feature-gated impl methods
+  (serde `serialize`, `deserialize`, `visit_seq`, group `random`,
+  `identity`, `double`) that backfill drops because it compares only method
+  names.
+- 132 of the 152 PR #50 misses are trait method declarations.
+- Gate for PR 1: no project has more unmatched declarations than with
+  8.0.1 and analyzer 2026-09-25, and every remaining one is listed in
+  `corpus/known-limitations.toml` with a reason.

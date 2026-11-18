@@ -1,0 +1,66 @@
+name: Corpus
+
+# Runs probe-verus on the support target (corpus/support-target.toml) and
+# checks that every function declaration is an atom.
+# See kb/verus-analyzer-migration.md, "Corpus test".
+
+on:
+  schedule:
+    - cron: "0 4 * * 1"
+  workflow_dispatch:
+    inputs:
+      analyzer-version:
+        description: "verus-analyzer release to run"
+        default: "2026-09-25"
+      gate:
+        description: "Fail on unmatched declarations not in corpus/known-limitations.toml"
+        type: boolean
+        default: false
+
+jobs:
+  corpus:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      ANALYZER_VERSION: ${{ inputs.analyzer-version || '2026-09-25' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install project toolchains
+        run: |
+          rustup toolchain install 1.91.0 1.92.0 nightly-2023-12-22 --profile minimal
+
+      - name: Install scip
+        run: |
+          wget -q "https://github.com/sourcegraph/scip/releases/latest/download/scip-linux-amd64.tar.gz" -O scip-linux.tar.gz
+          tar -xzf scip-linux.tar.gz
+          chmod +x scip
+          sudo mv scip /usr/local/bin/
+
+      - name: Build probe-verus
+        run: cargo build --release
+
+      - name: Run corpus
+        run: |
+          python3 scripts/corpus/run.py \
+            --probe-verus target/release/probe-verus \
+            --analyzer-version "$ANALYZER_VERSION" \
+            --scip /usr/local/bin/scip \
+            --out corpus-out \
+            ${{ inputs.gate && '--gate' || '' }}
+
+      - name: Summary
+        if: always()
+        run: cat corpus-out/report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: corpus-${{ env.ANALYZER_VERSION }}
+          path: |
+            corpus-out/report.*
+            corpus-out/*/*.log

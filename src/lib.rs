@@ -1714,6 +1714,16 @@ pub fn classify_public_api(
     Some(false)
 }
 
+/// Result of [`backfill_atoms_from_parser`].
+#[derive(Debug, Default)]
+pub struct Backfill {
+    /// Number of atoms added.
+    pub added: usize,
+    /// Functions (`code-name at path:line`) that got no atom because their
+    /// code-name, `@line` and `@path:line` keys were all taken.
+    pub collisions: Vec<String>,
+}
+
 /// Backfill atoms from `verus_parser` for functions that SCIP missed.
 ///
 /// Runs the verus source parser over the project, identifies functions that are not yet
@@ -1721,7 +1731,8 @@ pub fn classify_public_api(
 /// for code inside `#[cfg(verus_keep_ghost)] verus! { … }` blocks that verus-analyzer's
 /// SCIP mode cannot expand.
 ///
-/// Returns the number of atoms added.
+/// Returns the number of atoms added and the functions that got no atom
+/// because every candidate code-name was taken.
 pub fn backfill_atoms_from_parser(
     project_path: &Path,
     atoms_dict: &mut BTreeMap<String, AtomWithLines>,
@@ -1730,7 +1741,7 @@ pub fn backfill_atoms_from_parser(
     file_module_pub: &HashMap<String, ModuleInfo>,
     is_library: bool,
     code_path_prefix: &str,
-) -> usize {
+) -> Backfill {
     let src_dir = project_path.join("src");
     let parsed_from_src = src_dir.is_dir();
     let parse_root: &Path = if parsed_from_src {
@@ -1902,6 +1913,7 @@ pub fn backfill_atoms_from_parser(
             )
     });
     let mut added = 0usize;
+    let mut collisions = Vec::new();
     for PendingAtom {
         mut atom,
         parsed_path,
@@ -1921,10 +1933,10 @@ pub fn backfill_atoms_from_parser(
             } else {
                 let with_path = format!("{base}@{}:{}", atom.code_path, atom.code_text.lines_start);
                 if atoms_dict.contains_key(&with_path) {
-                    eprintln!(
-                        "Warning: backfill skipped {base} at {}:{}: code-name already taken",
+                    collisions.push(format!(
+                        "{base} at {}:{}",
                         atom.code_path, atom.code_text.lines_start
-                    );
+                    ));
                     continue;
                 }
                 with_path
@@ -1943,7 +1955,7 @@ pub fn backfill_atoms_from_parser(
         added += 1;
     }
 
-    added
+    Backfill { added, collisions }
 }
 
 fn derive_module_path_from_code_path(code_path: &str) -> String {
@@ -2469,7 +2481,9 @@ mod tests {
     }
 
     fn backfill(dir: &Path, atoms: &mut BTreeMap<String, AtomWithLines>) -> usize {
-        backfill_atoms_from_parser(dir, atoms, "c", "1.0", &HashMap::new(), true, "")
+        let result = backfill_atoms_from_parser(dir, atoms, "c", "1.0", &HashMap::new(), true, "");
+        assert!(result.collisions.is_empty(), "{:?}", result.collisions);
+        result.added
     }
 
     fn analyzer_atom(display_name: &str, line: usize, deps: &[&str]) -> AtomWithLines {
@@ -2580,6 +2594,40 @@ mod tests {
         assert_eq!(backfill(dir.path(), &mut atoms), 2);
         assert_eq!(atoms["probe:c/1.0/h()"].code_text.lines_start, 11);
         assert_eq!(atoms["probe:c/1.0/h()@2"].code_text.lines_start, 2);
+    }
+
+    /// Functions without a free code-name are reported, not dropped silently
+    /// and never overwrite an atom.
+    #[test]
+    fn test_backfill_reports_code_name_collisions() {
+        let dir = crate_with_lib(
+            "struct S;\nimpl S { fn f() {} } impl S { fn f() {} } impl S { fn f() {} } impl S { fn f() {} }\n",
+        );
+        let mut atoms = BTreeMap::new();
+        let result = backfill_atoms_from_parser(
+            dir.path(),
+            &mut atoms,
+            "c",
+            "1.0",
+            &HashMap::new(),
+            true,
+            "",
+        );
+        assert_eq!(result.added, 3);
+        assert_eq!(
+            result.collisions,
+            vec!["probe:c/1.0/impl#[S]f() at src/lib.rs:2"]
+        );
+        let mut keys: Vec<&String> = atoms.keys().collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                "probe:c/1.0/impl#[S]f()",
+                "probe:c/1.0/impl#[S]f()@2",
+                "probe:c/1.0/impl#[S]f()@src/lib.rs:2",
+            ]
+        );
     }
 
     /// A backfilled function replaces the external stub that stands for it.

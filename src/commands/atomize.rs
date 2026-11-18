@@ -128,7 +128,7 @@ pub fn cmd_atomize(
     }
 
     // Backfill atoms for functions that SCIP missed (e.g. cfg-gated verus! blocks)
-    let backfill_count = backfill_atoms_from_parser(
+    let backfill = backfill_atoms_from_parser(
         &pkg_root,
         &mut atoms_dict,
         &metadata.pkg_name,
@@ -137,10 +137,11 @@ pub fn cmd_atomize(
         is_library,
         &code_path_prefix,
     );
-    if backfill_count > 0 {
+    check_backfill_collisions(&backfill.collisions, allow_duplicates)?;
+    if backfill.added > 0 {
         println!(
             "  ✓ Backfilled {} atom(s) from verus_parser (not found in SCIP index)",
-            backfill_count
+            backfill.added
         );
     }
 
@@ -237,6 +238,26 @@ fn get_scip_json(cache: &mut ScipCache, regenerate: bool) -> Result<PathBuf, Str
 }
 
 /// Format a human-readable report of duplicate code_names.
+/// Stop on backfilled functions that got no atom because every candidate
+/// code-name was taken, unless `--allow-duplicates` was given.
+fn check_backfill_collisions(collisions: &[String], allow_duplicates: bool) -> Result<(), String> {
+    if collisions.is_empty() {
+        return Ok(());
+    }
+    for c in collisions {
+        eprintln!("  {c}: no free code-name, function skipped");
+    }
+    if allow_duplicates {
+        eprintln!("    Continuing because --allow-duplicates was specified.");
+        Ok(())
+    } else {
+        Err(format!(
+            "Found {} backfilled function(s) without a free code-name",
+            collisions.len()
+        ))
+    }
+}
+
 fn format_duplicate_report(duplicates: &[crate::DuplicateCodeName]) -> String {
     let mut msg = format!(
         "WARNING: Found {} duplicate code_name(s):\n",
@@ -341,7 +362,7 @@ pub fn atomize_internal(config: &AtomizeInternalConfig) -> Result<usize, String>
 
     add_external_stubs(&mut atoms_dict);
 
-    backfill_atoms_from_parser(
+    let backfill = backfill_atoms_from_parser(
         &pkg_root,
         &mut atoms_dict,
         &config.metadata.pkg_name,
@@ -350,6 +371,7 @@ pub fn atomize_internal(config: &AtomizeInternalConfig) -> Result<usize, String>
         is_library,
         &code_path_prefix,
     );
+    check_backfill_collisions(&backfill.collisions, config.allow_duplicates)?;
 
     if config.with_public_api {
         match public_api::run_cargo_public_api(&pkg_root) {

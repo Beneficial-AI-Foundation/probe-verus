@@ -177,16 +177,20 @@ It runs in CI weekly as a diagnostic, without `--gate`. PR 1 merges only
 after a manual run with `--gate` passes, and that run is a required step of
 every release.
 
-Known gaps, to close in PR 1 before the gate is used:
+Gaps closed in PR 1:
 
-- Matching ignores the owner (`Type::name`), and it is greedy, so the order
-  of atoms can change the result.
-- The gate counts unmatched declarations. It does not compare them by
-  identity with the baseline, so a fix can hide a new miss.
-- Call edges are counted, not checked. PR 1 adds small test projects for
-  trait impl owners, bodyless trait methods, and specific required and
-  forbidden edges. It needs network access and takes several minutes
-(dalek-verus indexing alone takes about 4 minutes on Rust 1.92).
+- Matching checks the owner kind (impl, trait or free function) and runs in
+  two passes, so the order of atoms does not change the result.
+  `list-functions` does not print the owner itself, so two impls of the same
+  method name in one file are told apart only by their spans.
+- `--baseline` compares unmatched declarations by identity with an earlier
+  report.
+- Call edges are checked by `tests/atomize_fixture.rs` on a small project
+  with trait impl owners, bodyless trait methods, and required and forbidden
+  edges. The corpus counts edges only.
+
+The corpus needs network access and takes several minutes (dalek-verus
+indexing alone takes about 4 minutes on Rust 1.92).
 
 ### 8. Versioning
 
@@ -235,6 +239,9 @@ Options:
   ones. Use this until probe-verus supports analyzer pins (PR 2).
 - `--project NAME` runs one project. `--gate` fails on unmatched
   declarations that `corpus/known-limitations.toml` does not list.
+  `--baseline report.json` compares unmatched declarations by identity
+  (file, name, start line) with an earlier report: only declarations that
+  are not in it count as new, and `--gate` fails on those.
   `--verify` also runs Verus verification, for projects with a `verus`
   version in the manifest (now only dalek-verus). That version must be
   installed in `~/.probe-verus/tools`. Install it with

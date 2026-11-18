@@ -223,15 +223,38 @@ def no_duplicate_keys(pairs):
     return obj
 
 
-def load_atoms(probes_dir, since):
-    """Load the atoms file that the extract run wrote (modified at or after `since`)."""
-    files = [f for f in probes_dir.glob("*_atoms.json") if f.stat().st_mtime >= since]
+def load_fresh(probes_dir, pattern, since, schema):
+    """Load the one file matching `pattern` that was written at or after `since`.
+
+    Check its envelope schema and return (file name, data).
+    """
+    files = [f for f in probes_dir.glob(pattern) if f.stat().st_mtime >= since]
     if len(files) != 1:
-        raise ValueError(f"expected one new *_atoms.json in {probes_dir}, found {len(files)}")
+        raise ValueError(f"expected one new {pattern} in {probes_dir}, found {len(files)}")
     env = json.loads(files[0].read_text(), object_pairs_hook=no_duplicate_keys)
-    if not isinstance(env.get("data"), dict):
-        raise ValueError(f"{files[0].name} has no data object")
+    if env.get("schema") != schema or not isinstance(env.get("data"), dict):
+        raise ValueError(f"{files[0].name}: expected schema {schema} with a data object")
     return files[0].name, env["data"]
+
+
+def check_extract(probes_dir, since, verify):
+    """Check the extract summary and the unified output. Return the atoms data.
+
+    extract can exit 0 when it skips verification (no cargo-verus) or cannot
+    write the unified output, so the exit code alone is not enough.
+    """
+    summary_file, summary = load_fresh(probes_dir, "*_extract_summary.json", since,
+                                       "probe-verus/extract-summary")
+    status = summary.get("status")
+    if status not in ("success", "verification_failed"):
+        raise ValueError(f"extract status {status}")
+    for step in ("atomize", "specify") + (("verify",) if verify else ()):
+        if not (summary.get(step) or {}).get("success"):
+            raise ValueError(f"extract step {step} did not run or failed; see extract.log")
+    unified = summary_file.removesuffix("_extract_summary.json") + ".json"
+    load_fresh(probes_dir, unified, since, "probe-verus/extract")
+    atoms_file, atoms = load_fresh(probes_dir, "*_atoms.json", since, "probe-verus/atoms")
+    return atoms_file, atoms, status
 
 
 def load_known(path, project_names):
@@ -280,7 +303,8 @@ def run_project(project, args, env_base, out_dir, result):
     decls = parse_inventory((pdir / "list-functions.log").read_text())
 
     cmd = [args.probe_verus, "extract", str(crate), "--regenerate-scip"]
-    if not args.verify or project["name"] in args.no_verify:
+    verify = args.verify and project["name"] not in args.no_verify
+    if not verify:
         cmd.append("--skip-verify")
     started = time.time()
     rc, secs = run(cmd, crate, env, pdir / "extract.log")
@@ -291,7 +315,7 @@ def run_project(project, args, env_base, out_dir, result):
         shutil.copytree(probes, pdir / "probes")
     if rc != 0:
         raise RuntimeError("extract failed; see extract.log")
-    result["atoms_file"], atoms = load_atoms(probes, started)
+    result["atoms_file"], atoms, result["extract_status"] = check_extract(probes, started, verify)
 
     local = {k: a for k, a in atoms.items() if a.get("code-path")}
     unmatched, extra = check(decls, atoms)

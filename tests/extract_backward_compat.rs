@@ -8,7 +8,9 @@
 //! - New fields are allowed (Extra = INFO, printed but passes)
 //!
 //! Volatile envelope fields (timestamp, commit, repo, tool version) are
-//! automatically ignored by `probe_extract_check::golden::compare`.
+//! automatically ignored by `probe_extract_check::golden::compare`. The
+//! `indexer` field depends on the analyzer that runs the test, so this test
+//! removes it before blessing and comparing, and checks it separately.
 //!
 //! ## Bless mode
 //!
@@ -66,6 +68,14 @@ fn tools_available() -> bool {
     resolve_tool(Tool::VerusAnalyzer).is_ok() && resolve_tool(Tool::Scip).is_ok()
 }
 
+/// `json` without its top-level `indexer` field.
+fn without_indexer(mut json: serde_json::Value) -> serde_json::Value {
+    if let Some(map) = json.as_object_mut() {
+        map.remove("indexer");
+    }
+    json
+}
+
 #[test]
 fn extract_backward_compat() {
     let fixture = Path::new(VERUS_MICRO);
@@ -118,6 +128,11 @@ fn extract_backward_compat() {
         "indexer: {indexer}"
     );
 
+    // The indexer depends on the analyzer that runs the test (its version and
+    // selection change with PROBE_VERUS_ANALYZER_VERSION or a new default), so
+    // it is neither blessed nor compared. The assertions above check it.
+    let actual_json = without_indexer(actual_json);
+
     if std::env::var("BLESS").is_ok() {
         let golden_path = Path::new(GOLDEN_FILE);
         if let Some(parent) = golden_path.parent() {
@@ -137,9 +152,10 @@ fn extract_backward_compat() {
             golden_path.display()
         );
     }
-    let golden_json: serde_json::Value =
+    let golden_json: serde_json::Value = without_indexer(
         serde_json::from_str(&std::fs::read_to_string(golden_path).unwrap())
-            .expect("failed to parse golden file");
+            .expect("failed to parse golden file"),
+    );
 
     let diffs = compare(&golden_json, &actual_json);
 

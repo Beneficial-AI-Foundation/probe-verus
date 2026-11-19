@@ -227,17 +227,11 @@ impl<T> Envelope<T> {
     }
 }
 
-/// Read the `indexer` field of the envelope in `path`. Returns `None` if the
-/// file cannot be read or parsed, or has no such field.
+/// The `indexer` field of a parsed envelope. Returns `None` if `json` has no
+/// such field or the field is malformed.
 #[must_use]
-pub fn read_envelope_indexer(path: &Path) -> Option<IndexerInfo> {
-    #[derive(Deserialize)]
-    struct IndexerOnly {
-        indexer: Option<IndexerInfo>,
-    }
-    let file = std::fs::File::open(path).ok()?;
-    let parsed: IndexerOnly = serde_json::from_reader(std::io::BufReader::new(file)).ok()?;
-    parsed.indexer
+pub fn envelope_indexer(json: &serde_json::Value) -> Option<IndexerInfo> {
+    serde_json::from_value(json.get("indexer")?.clone()).ok()
 }
 
 /// Wrap merged data in a Schema 3.0 merged-atoms envelope.
@@ -703,26 +697,20 @@ mod tests {
     }
 
     #[test]
-    fn test_read_envelope_indexer() {
-        let dir = tempfile::tempdir().unwrap();
+    fn test_envelope_indexer() {
         let indexer = IndexerInfo::from_scip(&rust_analyzer_tool_info(), Some("rust-analyzer"));
-
-        let with = dir.path().join("with.json");
         let envelope = wrap_in_envelope("probe-verus/atoms", "atomize", 1, &test_metadata())
             .with_indexer(Some(indexer.clone()));
-        std::fs::write(&with, serde_json::to_string(&envelope).unwrap()).unwrap();
-        assert_eq!(read_envelope_indexer(&with), Some(indexer));
+        let json = serde_json::to_value(&envelope).unwrap();
+        assert_eq!(envelope_indexer(&json), Some(indexer));
 
         // An atoms file from probe-verus 8.x has no indexer.
-        let without = dir.path().join("without.json");
         let envelope = wrap_in_envelope("probe-verus/atoms", "atomize", 1, &test_metadata());
-        std::fs::write(&without, serde_json::to_string(&envelope).unwrap()).unwrap();
-        assert_eq!(read_envelope_indexer(&without), None);
+        let json = serde_json::to_value(&envelope).unwrap();
+        assert_eq!(envelope_indexer(&json), None);
 
-        assert_eq!(
-            read_envelope_indexer(&dir.path().join("missing.json")),
-            None
-        );
+        let malformed = serde_json::json!({"indexer": "rust-analyzer"});
+        assert_eq!(envelope_indexer(&malformed), None);
     }
 
     #[test]

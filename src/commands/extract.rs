@@ -4,8 +4,8 @@ use super::atomize::atomize_internal;
 use super::run_verus::{run_verus_internal, VerifySummary};
 use super::specify::specify_internal;
 use crate::metadata::{
-    find_default_atoms_path, gather_metadata, get_default_output_path, read_envelope_indexer,
-    unwrap_envelope, wrap_in_envelope, AtomizeInternalConfig, ExtractInternalConfig,
+    envelope_indexer, find_default_atoms_path, gather_metadata, get_default_output_path,
+    unwrap_envelope, wrap_in_envelope, AtomizeInternalConfig, ExtractInternalConfig, IndexerInfo,
     ProjectMetadata, SpecifyInternalConfig,
 };
 use crate::verification::VerusRunner;
@@ -699,7 +699,20 @@ pub fn merge_into_unified(
     proofs_path: Option<&Path>,
     scip: Option<ScipSource<'_>>,
 ) -> Result<BTreeMap<String, UnifiedAtom>, String> {
-    let atoms = load_enveloped_data::<AtomWithLines>(atoms_path, "atoms")?;
+    merge_into_unified_with_indexer(atoms_path, specs_path, proofs_path, scip)
+        .map(|(unified, _)| unified)
+}
+
+/// [`merge_into_unified`], and the `indexer` of the atoms envelope. Both come
+/// from one read of the atoms file, so they describe the same index even if
+/// another run rewrites the file.
+pub fn merge_into_unified_with_indexer(
+    atoms_path: &Path,
+    specs_path: Option<&Path>,
+    proofs_path: Option<&Path>,
+    scip: Option<ScipSource<'_>>,
+) -> Result<(BTreeMap<String, UnifiedAtom>, Option<IndexerInfo>), String> {
+    let (atoms, indexer) = load_atoms_with_indexer(atoms_path)?;
 
     let specs_raw: Option<SpecsDataRaw> = specs_path
         .filter(|p| p.exists())
@@ -869,7 +882,7 @@ pub fn merge_into_unified(
         );
     }
 
-    Ok(unified)
+    Ok((unified, indexer))
 }
 
 /// Apply KB P25/P26: classify atoms whose `#[cfg(...)]` predicate is inactive in
@@ -933,6 +946,25 @@ fn load_enveloped_data<T: serde::de::DeserializeOwned>(
             e
         )
     })
+}
+
+/// Load the atoms of an enveloped atoms file and its `indexer`, from one read.
+fn load_atoms_with_indexer(
+    path: &Path,
+) -> Result<(BTreeMap<String, AtomWithLines>, Option<IndexerInfo>), String> {
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read atoms file {}: {}", path.display(), e))?;
+    let json: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse atoms JSON {}: {}", path.display(), e))?;
+    let indexer = envelope_indexer(&json);
+    let atoms = serde_json::from_value(unwrap_envelope(json)).map_err(|e| {
+        format!(
+            "Failed to deserialize atoms data from {}: {}",
+            path.display(),
+            e
+        )
+    })?;
+    Ok((atoms, indexer))
 }
 
 /// Load an enveloped JSON file, deserializing the data section as a single `T`.
@@ -1042,8 +1074,8 @@ fn run_unified_merge(
         index_json,
         source_root: project_path,
     });
-    match merge_into_unified(atoms_path, specs_opt, proofs_opt, scip) {
-        Ok(mut unified) => {
+    match merge_into_unified_with_indexer(atoms_path, specs_opt, proofs_opt, scip) {
+        Ok((mut unified, indexer)) => {
             // KB P26: reclassify atoms not compiled in the verification build as
             // out of scope, using the project's resolved default features + the
             // verifier's `verus_keep_ghost` cfg.
@@ -1065,9 +1097,9 @@ fn run_unified_merge(
             }
 
             // The atoms may come from an earlier run: take the indexer from
-            // the atoms file, not from the current SCIP cache.
+            // the atoms envelope, not from the current SCIP cache.
             let envelope = wrap_in_envelope("probe-verus/extract", "extract", &unified, metadata)
-                .with_indexer(read_envelope_indexer(atoms_path));
+                .with_indexer(indexer);
             match serde_json::to_string_pretty(&envelope) {
                 Ok(json) => {
                     if let Err(e) = std::fs::write(&unified_path, &json) {

@@ -20,16 +20,17 @@ The clones under --work-dir belong to the script: it resets them to the
 pinned commit and deletes untracked files on every run. Do not run two
 instances with the same --work-dir at the same time.
 
-To run a specific verus-analyzer release without touching
-~/.probe-verus/tools, pass --analyzer-version. The script then installs that
-release into its own HOME under the work directory and runs probe-verus
-with that HOME. RUSTUP_HOME and CARGO_HOME keep pointing to the real ones.
+--analyzer-version selects the verus-analyzer release through
+PROBE_VERUS_ANALYZER_VERSION, so it overrides any pin in the projects. The
+default is the default of the probe-verus source tree that holds this script.
+If the release is not in ~/.probe-verus/tools/verus-analyzer-<version>/, the
+script installs it there.
 
 --verify also runs Verus verification, for the projects that have a `verus`
-version in the manifest. That version must be installed in the real
+version in the manifest. That version must be installed in
 ~/.probe-verus/tools (`PROBE_VERUS_VERSION=<version> probe-verus setup`).
-The script sets PROBE_VERUS_VERSION and links the version into the
-isolated HOME, and fails if extract used another cargo-verus.
+The script sets PROBE_VERUS_VERSION and fails if extract used another
+cargo-verus.
 """
 
 import argparse
@@ -55,6 +56,7 @@ STEP_TIMEOUT = 3600
 GIT_TIMEOUT = 600
 DOWNLOAD_TIMEOUT = 300
 ANALYZER_ASSET = "verus-analyzer-x86_64-unknown-linux-gnu.gz"
+TOOLS_DIR = Path.home() / ".probe-verus" / "tools"
 
 # `list-functions -f detailed --show-kind` line:
 #   name [kind] @ file:start:end in context
@@ -116,10 +118,10 @@ def checkout(project, work_dir):
 
 
 def verus_dir(version):
-    """Return the managed Verus directory for `version` in the real HOME."""
+    """Return the managed Verus directory for `version` in ~/.probe-verus/tools."""
     if not re.fullmatch(r"[0-9A-Za-z._-]+", version):
         raise ValueError(f"invalid verus version: {version}")
-    path = Path.home() / ".probe-verus" / "tools" / f"verus-{version}"
+    path = TOOLS_DIR / f"verus-{version}"
     if not (path / "cargo-verus").exists():
         raise RuntimeError(f"Verus {version} is not installed in {path.parent}; "
                            f"run `PROBE_VERUS_VERSION={version} probe-verus setup`")
@@ -128,40 +130,35 @@ def verus_dir(version):
 
 def use_verus(version, env):
     """Make probe-verus run Verus `version`. Return the cargo-verus path it must use."""
-    real = verus_dir(version)
-    tools = Path(env["HOME"]) / ".probe-verus" / "tools"
-    target = tools / real.name
-    if target.resolve() != real.resolve():
-        if target.is_symlink():
-            target.unlink()
-        elif target.exists():
-            raise RuntimeError(f"{target} exists and is not a link to {real}")
-        target.symlink_to(real)
+    path = verus_dir(version)
     env["PROBE_VERUS_VERSION"] = version
-    return target / "cargo-verus"
+    return path / "cargo-verus"
 
 
-def analyzer_home(version, work_dir, scip):
-    """Return a HOME whose ~/.probe-verus/tools holds the given analyzer."""
-    if not re.fullmatch(r"[0-9A-Za-z._-]+", version):
+def default_analyzer_version():
+    """Return the default verus-analyzer of this probe-verus source tree."""
+    source = (REPO_ROOT / "src" / "analyzer_selection.rs").read_text()
+    match = re.search(r'DEFAULT_VERUS_ANALYZER_VERSION: &str = "([^"]+)"', source)
+    if not match:
+        sys.exit("cannot find DEFAULT_VERUS_ANALYZER_VERSION in src/analyzer_selection.rs")
+    return match.group(1)
+
+
+def install_analyzer(version):
+    """Return the managed verus-analyzer `version`, downloading it if needed."""
+    if not re.fullmatch(r"[0-9A-Za-z._-]+", version) or version.startswith("."):
         sys.exit(f"invalid analyzer version: {version}")
-    home = work_dir / f"home-{version}"
-    tools = home / ".probe-verus" / "tools"
-    tools.mkdir(parents=True, exist_ok=True)
-    binary = tools / "verus-analyzer"
+    target = TOOLS_DIR / f"verus-analyzer-{version}"
+    binary = target / "verus-analyzer"
     if not binary.exists():
+        target.mkdir(parents=True, exist_ok=True)
         url = f"https://github.com/verus-lang/verus-analyzer/releases/download/{version}/{ANALYZER_ASSET}"
-        tmp = tools / f"verus-analyzer.{os.getpid()}.tmp"
+        tmp = target / f".verus-analyzer.tmp-{os.getpid()}"
         with urllib.request.urlopen(url, timeout=DOWNLOAD_TIMEOUT) as resp, open(tmp, "wb") as out:
             out.write(gzip.decompress(resp.read()))
         tmp.chmod(0o755)
         tmp.rename(binary)
-    # Point the link at the requested scip on every run.
-    link = tools / "scip"
-    if link.is_symlink() or link.exists():
-        link.unlink()
-    link.symlink_to(scip)
-    return home
+    return binary
 
 
 def tool_version(cmd, env=None):
@@ -173,16 +170,6 @@ def tool_version(cmd, env=None):
         return f"error: {e}"
     text = (out.stdout or out.stderr).strip()
     return text.splitlines()[0] if out.returncode == 0 and text else f"error: rc {out.returncode}"
-
-
-def find_scip(explicit):
-    candidates = [explicit] if explicit else [
-        str(Path.home() / ".probe-verus" / "tools" / "scip"), shutil.which("scip"),
-    ]
-    for c in candidates:
-        if c and Path(c).exists():
-            return Path(c).resolve()
-    sys.exit("scip not found; pass --scip")
 
 
 def parse_inventory(text):
@@ -470,8 +457,8 @@ def main():
     ap.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     ap.add_argument("--known", type=Path, default=DEFAULT_KNOWN, help="known-limitations file")
     ap.add_argument("--work-dir", type=Path, default=Path.home() / ".cache" / "probe-verus-corpus")
-    ap.add_argument("--analyzer-version", help="run with this verus-analyzer release in an isolated HOME")
-    ap.add_argument("--scip", help="scip binary for the isolated HOME (default: managed or PATH)")
+    ap.add_argument("--analyzer-version",
+                    help="verus-analyzer release to run (default: the probe-verus default)")
     ap.add_argument("--project", action="append", help="only run this project (repeatable)")
     ap.add_argument("--verify", action="store_true", help="also run Verus verification")
     ap.add_argument("--gate", action="store_true",
@@ -501,16 +488,13 @@ def main():
         known |= load_baseline(args.baseline)
 
     env = dict(os.environ)
-    if args.analyzer_version:
-        env["RUSTUP_HOME"] = env.get("RUSTUP_HOME", str(Path.home() / ".rustup"))
-        env["CARGO_HOME"] = env.get("CARGO_HOME", str(Path.home() / ".cargo"))
-        env["HOME"] = str(analyzer_home(args.analyzer_version, args.work_dir, find_scip(args.scip)))
-    tools_dir = Path(env["HOME"]) / ".probe-verus" / "tools"
-    analyzer = tools_dir / "verus-analyzer"
-    scip = tools_dir / "scip"
+    analyzer_version = args.analyzer_version or default_analyzer_version()
+    env["PROBE_VERUS_ANALYZER_VERSION"] = analyzer_version
+    analyzer = install_analyzer(analyzer_version)
+    scip = TOOLS_DIR / "scip"
     tools = {
         "probe-verus": tool_version([args.probe_verus]),
-        "verus-analyzer": tool_version([str(analyzer)]) if analyzer.exists() else "from PATH",
+        "verus-analyzer": f"{analyzer_version}: {tool_version([str(analyzer)])}",
         "scip": tool_version([str(scip)]) if scip.exists() else "from PATH",
     }
 

@@ -26,7 +26,7 @@ probe-verus extract <PROJECT_PATH> [OPTIONS]
 | `--verbose` | `-v` | Verbose output |
 | `--rust-analyzer` | | Use rust-analyzer instead of verus-analyzer for SCIP |
 | `--allow-duplicates` | | Go on when two functions get the same code-name (normally fatal) |
-| `--auto-install` | | **Deprecated.** Use `probe-verus setup --from-project` instead |
+| `--auto-install` | | Download missing tools: the selected verus-analyzer release, and scip |
 | `--with-atoms <PATH>` | `-a` | Path to atoms.json (for use with `--skip-atomize`) |
 | `--with-spec-text` | | Include raw specification text in specify output |
 | `--taxonomy-config <PATH>` | | Path to TOML file for spec classification |
@@ -81,7 +81,7 @@ probe-verus atomize <PROJECT_PATH> [OPTIONS]
 | `--with-locations` | | Include detailed per-call location info (precondition/postcondition/inner) |
 | `--rust-analyzer` | | Use rust-analyzer instead of verus-analyzer for SCIP |
 | `--allow-duplicates` | | Go on when two functions get the same code-name (normally fatal) |
-| `--auto-install` | | **Deprecated.** Use `probe-verus setup --from-project` instead |
+| `--auto-install` | | Download missing tools: the selected verus-analyzer release, and scip |
 | `--with-public-api` | | Use `cargo public-api` to override `is-public-api` (requires `cargo-public-api`; [install instructions](#installing-cargo-public-api-for---with-public-api)) |
 
 `atomize` needs verus-analyzer 2026-08-22 or later. It rejects an index from
@@ -291,15 +291,34 @@ probe-verus setup [OPTIONS]
 
 | Flag | Description |
 |------|-------------|
-| `--status` | Show installation status instead of installing |
-| `--from-project <PATH>` | Read target project's Cargo.toml to determine correct Verus version |
+| `--status` | Show installation status instead of installing. With `--from-project`, show the verus-analyzer that the project selects |
+| `--from-project <PATH>` | Read target project's Cargo.toml to determine the Verus version and the verus-analyzer pin |
 | `--detect-version` | Print detected Verus version without installing (requires `--from-project`) |
 | `--detect-toolchain` | Print the Rust toolchain channel required by the resolved Verus version |
 | `--skip-toolchain` | Skip automatic Rust toolchain installation via rustup |
 | `--force` | Force download to managed directory even if the tool is already found on PATH |
 
-Version resolution uses, in order:
-1. Environment variable overrides (`PROBE_VERUS_ANALYZER_VERSION`, `PROBE_SCIP_VERSION`, `PROBE_VERUS_VERSION`)
+verus-analyzer selection uses, in order:
+1. `PROBE_VERUS_ANALYZER_VERSION`
+2. A `verus-analyzer` pin in `[package.metadata.probe-verus]` of the package `Cargo.toml`
+3. A `verus-analyzer` pin in `[workspace.metadata.probe-verus]` of the workspace `Cargo.toml`
+4. The default compiled into probe-verus (2026-09-25)
+
+```toml
+[package.metadata.probe-verus]
+verus-analyzer = "2026-09-25"   # a release tag, or "path"
+```
+
+A value is a release tag or `path`, which uses the `verus-analyzer` on `PATH`.
+Any other value, including `latest`, causes an error. `setup`, `atomize` and
+`extract` use the same selection. If the selected release is not installed,
+`atomize` and `extract` stop, unless you pass `--auto-install`. They never use
+another installed release or `PATH` instead. The workspace manifest is the
+package manifest if it has `[workspace]`, the manifest that `package.workspace`
+names, or else the nearest parent `Cargo.toml` with `[workspace]`.
+
+Version resolution for scip and Verus uses, in order:
+1. Environment variable overrides (`PROBE_SCIP_VERSION`, `PROBE_VERUS_VERSION`)
 2. For Verus: project Cargo.toml detection (with `--from-project`)
 3. Latest stable release from GitHub
 4. Compiled-in fallback version
@@ -309,9 +328,9 @@ Verus version auto-detection looks for:
 2. Workspace member fallback: searches member crate `Cargo.toml` files
 3. Dependency fallback: `vstd` or `verus_builtin` dependency `rev` matched against GitHub releases
 
-Tools are installed to `~/.probe-verus/tools/`. Verus is installed to versioned
-directories (`~/.probe-verus/tools/verus-{version}/`), supporting multiple
-versions side-by-side.
+Tools are installed to `~/.probe-verus/tools/`. verus-analyzer and Verus are
+installed to versioned directories (`verus-analyzer-{version}/`,
+`verus-{version}/`), supporting multiple versions side-by-side.
 
 **Rust toolchain**: After installing Verus, setup automatically fetches the
 `rust-toolchain.toml` from the Verus release tag and installs the matching Rust
@@ -328,7 +347,7 @@ probe-verus setup --from-project ./my-verus-project
 # Just detect the version (useful for CI cache keys)
 probe-verus setup --from-project ./my-verus-project --detect-version
 
-# Install all tools (latest versions)
+# Install all tools (default verus-analyzer, latest scip and Verus)
 probe-verus setup
 
 # Check what's installed

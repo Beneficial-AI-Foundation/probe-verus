@@ -3,6 +3,11 @@
 > **Quick alternative:** `probe-verus setup` auto-downloads verus-analyzer, scip, and verus
 > to `~/.probe-verus/tools/`. Use `--from-project ./my-project` to detect the correct Verus
 > version from the project's Cargo.toml. See the main [README](../README.md) for details.
+>
+> probe-verus uses a verus-analyzer installed by these scripts only if the
+> project selects `path` (`PROBE_VERUS_ANALYZER_VERSION=path` or
+> `verus-analyzer = "path"` in `[package.metadata.probe-verus]`) and the
+> binary is on `PATH`. See [docs/USAGE.md](../docs/USAGE.md#setup).
 
 Scripts for downloading and installing Verus development tools from GitHub releases. Available in both Python (`.py`) and shell script (`.sh`) versions.
 

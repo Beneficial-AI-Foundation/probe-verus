@@ -142,14 +142,16 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-integ-
 
-      # Pinned to the default analyzer of probe-verus 9.x. probe-verus rejects
-      # indexes from releases before 2026-08-22.
+      # The default analyzer of probe-verus 9.x, in the versioned directory where
+      # probe-verus looks for it. The link on PATH is for the dalek-lite step.
       - name: Install verus-analyzer
         run: |
+          dir="$HOME/.probe-verus/tools/verus-analyzer-2026-09-25"
+          mkdir -p "$dir"
           wget -q "https://github.com/verus-lang/verus-analyzer/releases/download/2026-09-25/verus-analyzer-x86_64-unknown-linux-gnu.gz" -O verus-analyzer.gz
-          gunzip verus-analyzer.gz
-          chmod +x verus-analyzer
-          sudo mv verus-analyzer /usr/local/bin/
+          gunzip -c verus-analyzer.gz > "$dir/verus-analyzer"
+          chmod +x "$dir/verus-analyzer"
+          sudo ln -s "$dir/verus-analyzer" /usr/local/bin/verus-analyzer
           verus-analyzer --version
 
       - name: Install scip

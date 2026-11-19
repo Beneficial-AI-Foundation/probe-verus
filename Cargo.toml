@@ -35,6 +35,7 @@ dirs = "5.0"
 zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 chrono = { version = "0.4.44", default-features = false, features = ["clock"] }
 probe = { git = "https://github.com/Beneficial-AI-Foundation/probe", tag = "v0.4.0" }
+sha2 = "0.10"
 
 [dev-dependencies]
 probe-extract-check = { git = "https://github.com/Beneficial-AI-Foundation/probe", tag = "v0.4.0" }

@@ -54,7 +54,7 @@ enum Commands {
         #[arg(long)]
         allow_duplicates: bool,
 
-        /// Automatically download missing external tools (verus-analyzer, scip) without prompting
+        /// Download missing external tools: the selected verus-analyzer release, and scip
         #[arg(long)]
         auto_install: bool,
 
@@ -354,7 +354,7 @@ enum Commands {
         #[arg(long)]
         allow_duplicates: bool,
 
-        /// Automatically download missing external tools without prompting
+        /// Download missing external tools: the selected verus-analyzer release, and scip
         #[arg(long)]
         auto_install: bool,
 

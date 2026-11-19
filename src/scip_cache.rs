@@ -4,12 +4,16 @@
 //! indexes from verus-analyzer or rust-analyzer. SCIP generation can be slow for large
 //! projects, so caching is important for developer experience.
 //!
-//! Tool resolution uses the tool manager: managed directory (~/.probe-verus/tools/)
-//! is checked first, then PATH. If `auto_install` is enabled, missing tools are
-//! downloaded automatically.
+//! verus-analyzer is the release that [`analyzer_selection::select`] picks for
+//! the project; scip and rust-analyzer come from the managed directory
+//! (~/.probe-verus/tools/), then PATH. If `auto_install` is enabled, missing
+//! tools are downloaded automatically. The cache is reused only if its
+//! [`CacheKey`] matches the current run and no source file is newer.
 
-use crate::constants::{DATA_DIR, SCIP_INDEX_FILE, SCIP_INDEX_JSON_FILE};
+use crate::analyzer_selection;
+use crate::constants::{DATA_DIR, SCIP_INDEX_FILE, SCIP_INDEX_JSON_FILE, SCIP_INDEX_KEY_FILE};
 use crate::tool_manager::{self, Tool};
+use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -85,6 +89,8 @@ fn analyzer_warnings(analyzer_version: &str, rustc_version: &str) -> Vec<String>
 pub enum ScipError {
     /// Analyzer command not found (not in managed dir or PATH)
     AnalyzerNotFound(Analyzer, String),
+    /// The verus-analyzer selection (environment or Cargo.toml pin) is invalid
+    BadSelection(String),
     /// scip CLI command not found (not in managed dir or PATH)
     ScipCliNotFound(String),
     /// Analyzer scip command failed
@@ -106,6 +112,9 @@ impl std::fmt::Display for ScipError {
         match self {
             ScipError::AnalyzerNotFound(a, detail) => {
                 write!(f, "{a} not found. {detail}")
+            }
+            ScipError::BadSelection(detail) => {
+                write!(f, "invalid verus-analyzer selection: {detail}")
             }
             ScipError::ScipCliNotFound(detail) => {
                 write!(f, "scip not found. {detail}")
@@ -138,31 +147,101 @@ impl std::fmt::Display for ScipError {
 
 impl std::error::Error for ScipError {}
 
+/// The inputs that produced a cached index. If any of them differs from the
+/// current run, the index is regenerated. Caches without a key (from
+/// probe-verus 8.x) are regenerated too.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct CacheKey {
+    /// The analyzer and its selector, e.g. `verus-analyzer 2026-09-25`.
+    pub analyzer: String,
+    pub analyzer_path: String,
+    pub analyzer_sha256: String,
+    /// `rustc -vV` in the project directory.
+    pub rustc: String,
+    /// SHA-256 of the package and workspace `Cargo.toml` and of `Cargo.lock`,
+    /// by path. A missing file has no entry.
+    pub manifests: BTreeMap<String, String>,
+}
+
+impl CacheKey {
+    /// Names of the fields that differ between `self` and `other`.
+    fn changes(&self, other: &CacheKey) -> Vec<&'static str> {
+        let mut changed = Vec::new();
+        if self.analyzer != other.analyzer {
+            changed.push("analyzer selection");
+        }
+        if self.analyzer_path != other.analyzer_path
+            || self.analyzer_sha256 != other.analyzer_sha256
+        {
+            changed.push("analyzer binary");
+        }
+        if self.rustc != other.rustc {
+            changed.push("rustc");
+        }
+        if self.manifests != other.manifests {
+            changed.push("Cargo.toml or Cargo.lock");
+        }
+        changed
+    }
+}
+
+/// Whether the cached index can be reused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CacheState {
+    Current,
+    Missing,
+    /// The cache must be regenerated, for the given reason.
+    Outdated(String),
+}
+
+impl CacheState {
+    /// Why the index is generated, for progress output.
+    pub fn reason(&self) -> String {
+        match self {
+            CacheState::Current => "(cached index is current)".into(),
+            CacheState::Missing => "(no existing SCIP data found)".into(),
+            CacheState::Outdated(why) => format!("({why})"),
+        }
+    }
+}
+
+/// SHA-256 of a file in hex, or `None` if it cannot be read.
+fn sha256_file(path: &Path) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut file, &mut hasher).ok()?;
+    Some(format!("{:x}", hasher.finalize()))
+}
+
+/// Write `contents` to a temporary file next to `path`.
+fn write_temp(path: &Path, contents: &[u8]) -> std::io::Result<PathBuf> {
+    let tmp = path.with_extension(format!("tmp-{}", std::process::id()));
+    std::fs::write(&tmp, contents)?;
+    Ok(tmp)
+}
+
 /// Manager for SCIP index caching.
 ///
 /// SCIP indexes are stored in `<project>/data/` directory:
 /// - `index.scip`: Binary SCIP index from verus-analyzer or rust-analyzer
 /// - `index.scip.json`: JSON representation for parsing
+/// - `index.scip.key.json`: the [`CacheKey`] of the index
 pub struct ScipCache {
     project_path: PathBuf,
     analyzer: Analyzer,
     auto_install: bool,
-    /// Resolved path to the analyzer binary (set during check_prerequisites)
+    /// Resolved path to the analyzer binary (set by `resolve_analyzer`)
     analyzer_path: Option<PathBuf>,
-    /// Resolved path to the scip binary (set during check_prerequisites)
-    scip_path_resolved: Option<PathBuf>,
+    /// The key of the current run (set by `current_key`)
+    key: Option<CacheKey>,
 }
 
 impl ScipCache {
     /// Create a new ScipCache for the given project using the default verus-analyzer.
     pub fn new(project_path: impl Into<PathBuf>) -> Self {
-        Self {
-            project_path: project_path.into(),
-            analyzer: Analyzer::VerusAnalyzer,
-            auto_install: false,
-            analyzer_path: None,
-            scip_path_resolved: None,
-        }
+        Self::with_analyzer(project_path, Analyzer::VerusAnalyzer)
     }
 
     /// Create a new ScipCache with a specific analyzer choice.
@@ -172,7 +251,7 @@ impl ScipCache {
             analyzer,
             auto_install: false,
             analyzer_path: None,
-            scip_path_resolved: None,
+            key: None,
         }
     }
 
@@ -197,7 +276,11 @@ impl ScipCache {
         self.data_dir().join(SCIP_INDEX_JSON_FILE)
     }
 
-    /// Check if cached SCIP JSON exists.
+    /// Get the path of the cache key.
+    pub fn key_path(&self) -> PathBuf {
+        self.data_dir().join(SCIP_INDEX_KEY_FILE)
+    }
+
     /// Path of the analyzer's stderr from the last index generation.
     pub fn stderr_path(&self) -> PathBuf {
         self.data_dir().join("index.scip.stderr")
@@ -217,21 +300,41 @@ impl ScipCache {
 
     /// Delete the cached index, so that the next run regenerates it.
     pub fn discard(&self) {
+        let _ = std::fs::remove_file(self.key_path());
         let _ = std::fs::remove_file(self.scip_path());
         let _ = std::fs::remove_file(self.json_path());
     }
 
-    pub fn has_cached_json(&self) -> bool {
-        self.json_path().exists()
-    }
-
-    /// Whether a cached SCIP JSON exists **and** is still current — i.e. no `.rs`
-    /// source file under the project is newer than it. Callers that decide whether
-    /// to reuse the cache should use this rather than [`Self::has_cached_json`], so
-    /// an edited project does not silently reuse a stale index.
-    pub fn has_current_cached_json(&self) -> bool {
-        let json = self.json_path();
-        json.exists() && !self.cache_is_stale(&json)
+    /// Whether the cached index can be reused. This resolves the analyzer
+    /// (and installs it with auto-install), because the key holds the hash of
+    /// its binary.
+    pub fn state(&mut self) -> Result<CacheState, ScipError> {
+        let json_path = self.json_path();
+        if !json_path.exists() {
+            return Ok(CacheState::Missing);
+        }
+        let key = self.current_key()?.clone();
+        let stored: Option<CacheKey> = std::fs::read_to_string(self.key_path())
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok());
+        let Some(stored) = stored else {
+            return Ok(CacheState::Outdated(
+                "cached index has no key, e.g. from probe-verus 8.x".into(),
+            ));
+        };
+        let changes = stored.changes(&key);
+        if !changes.is_empty() {
+            return Ok(CacheState::Outdated(format!(
+                "cached index is outdated: {} changed",
+                changes.join(", ")
+            )));
+        }
+        if self.cache_is_stale(&json_path) {
+            return Ok(CacheState::Outdated(
+                "cached index is stale: source changed".into(),
+            ));
+        }
+        Ok(CacheState::Current)
     }
 
     /// Get the path to the SCIP JSON, generating it if necessary.
@@ -247,27 +350,49 @@ impl ScipCache {
         regenerate: bool,
         verbose: bool,
     ) -> Result<PathBuf, ScipError> {
-        let json_path = self.json_path();
-
-        if json_path.exists() && !regenerate && !self.cache_is_stale(&json_path) {
-            return Ok(json_path);
+        let state = self.state()?;
+        if state == CacheState::Current && !regenerate {
+            return Ok(self.json_path());
         }
-        if json_path.exists() && !regenerate && verbose {
-            println!("  SCIP cache is stale (source newer than index); regenerating...");
+        if verbose && !regenerate && state != CacheState::Missing {
+            println!("  Regenerating SCIP index {}", state.reason());
         }
+        self.generate(verbose)
+    }
 
-        self.check_prerequisites()?;
-        self.generate_scip_index(verbose)?;
-        self.convert_to_json(verbose)?;
+    /// Generate the index, its JSON and its key, and return the JSON path.
+    pub fn generate(&mut self, verbose: bool) -> Result<PathBuf, ScipError> {
+        let key = self.current_key()?.clone();
+        let scip_bin = tool_manager::resolve_or_install(Tool::Scip, self.auto_install)
+            .map_err(|e| ScipError::ScipCliNotFound(e.to_string()))?;
 
-        Ok(json_path)
+        let data_dir = self.data_dir();
+        std::fs::create_dir_all(&data_dir).map_err(ScipError::CreateDirFailed)?;
+        // Remove the old key first: an interrupted run then leaves no key, and
+        // the next run regenerates.
+        let _ = std::fs::remove_file(self.key_path());
+
+        let generated = self.generate_scip_index(&key, verbose)?;
+        let json = self.convert_to_json(&scip_bin, &generated, verbose)?;
+
+        let key_json = serde_json::to_vec_pretty(&key).expect("cache key serializes");
+        let json_tmp = write_temp(&self.json_path(), &json).map_err(ScipError::WriteJsonFailed)?;
+        let key_tmp =
+            write_temp(&self.key_path(), &key_json).map_err(ScipError::WriteJsonFailed)?;
+        std::fs::rename(&generated, self.scip_path()).map_err(ScipError::MoveFileFailed)?;
+        std::fs::rename(&json_tmp, self.json_path()).map_err(ScipError::WriteJsonFailed)?;
+        std::fs::rename(&key_tmp, self.key_path()).map_err(ScipError::WriteJsonFailed)?;
+        if verbose {
+            println!("  Saved SCIP JSON to {}", self.json_path().display());
+        }
+        Ok(self.json_path())
     }
 
     /// Whether the cached SCIP JSON is older than any `.rs` source file under the
-    /// project, in which case it must be regenerated. The cache is keyed only on
-    /// file existence, so without this check an edited project silently reuses a
-    /// stale index — atom line numbers then diverge from the current source,
-    /// causing span-matching and backfill failures downstream.
+    /// project, in which case it must be regenerated. Without this check an
+    /// edited project silently reuses a stale index — atom line numbers then
+    /// diverge from the current source, causing span-matching and backfill
+    /// failures downstream.
     ///
     /// Conservative: if mtimes can't be read, returns `false` (keep the cache)
     /// rather than forcing an expensive regeneration on a metadata hiccup. The
@@ -300,47 +425,92 @@ impl ScipCache {
         false
     }
 
-    /// Resolve external tools via the tool manager (managed dir -> PATH -> auto-download).
-    fn check_prerequisites(&mut self) -> Result<(), ScipError> {
-        let analyzer_tool = Tool::from_analyzer(self.analyzer);
-        let analyzer_path = tool_manager::resolve_or_install(analyzer_tool, self.auto_install)
-            .map_err(|e| ScipError::AnalyzerNotFound(self.analyzer, e.to_string()))?;
-        self.analyzer_path = Some(analyzer_path);
-
-        let scip_path = tool_manager::resolve_or_install(Tool::Scip, self.auto_install)
-            .map_err(|e| ScipError::ScipCliNotFound(e.to_string()))?;
-        self.scip_path_resolved = Some(scip_path);
-
-        Ok(())
+    /// Resolve the analyzer once: for verus-analyzer, the release selected for
+    /// this project ([`analyzer_selection::select`]); for rust-analyzer, the
+    /// managed directory, then `PATH`. Returns the binary and the selector.
+    fn resolve_analyzer(&mut self) -> Result<(PathBuf, String), ScipError> {
+        let not_found = |e: String| ScipError::AnalyzerNotFound(self.analyzer, e);
+        let (path, selector) = match self.analyzer {
+            Analyzer::VerusAnalyzer => {
+                let selection = analyzer_selection::select(&self.project_path)
+                    .map_err(ScipError::BadSelection)?;
+                let path = match &self.analyzer_path {
+                    Some(p) => p.clone(),
+                    None => tool_manager::resolve_analyzer(&selection, self.auto_install)
+                        .map_err(|e| not_found(e.to_string()))?,
+                };
+                (path, format!("{} {}", self.analyzer, selection.selector))
+            }
+            Analyzer::RustAnalyzer => {
+                let path = match &self.analyzer_path {
+                    Some(p) => p.clone(),
+                    None => tool_manager::resolve_or_install(Tool::RustAnalyzer, self.auto_install)
+                        .map_err(|e| not_found(e.to_string()))?,
+                };
+                (path, self.analyzer.to_string())
+            }
+        };
+        self.analyzer_path = Some(path.clone());
+        Ok((path, selector))
     }
 
-    /// Generate the SCIP index using the configured analyzer.
-    fn generate_scip_index(&self, verbose: bool) -> Result<(), ScipError> {
-        let analyzer_bin = self
-            .analyzer_path
-            .as_ref()
-            .expect("check_prerequisites must be called first");
+    /// The key of the current run, computed once.
+    fn current_key(&mut self) -> Result<&CacheKey, ScipError> {
+        if self.key.is_none() {
+            let (path, analyzer) = self.resolve_analyzer()?;
+            let rustc = Command::new("rustc")
+                .arg("-vV")
+                .current_dir(&self.project_path)
+                .stderr(Stdio::null())
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+                .unwrap_or_default();
+            let package_manifest = self.project_path.join("Cargo.toml");
+            let workspace_manifest = analyzer_selection::workspace_manifest(&self.project_path);
+            let lockfile = workspace_manifest
+                .as_deref()
+                .and_then(Path::parent)
+                .unwrap_or(&self.project_path)
+                .join("Cargo.lock");
+            let manifests = [Some(package_manifest), workspace_manifest, Some(lockfile)]
+                .into_iter()
+                .flatten()
+                .filter_map(|p| Some((p.display().to_string(), sha256_file(&p)?)))
+                .collect();
+            self.key = Some(CacheKey {
+                analyzer,
+                analyzer_sha256: sha256_file(&path).unwrap_or_default(),
+                analyzer_path: path.display().to_string(),
+                rustc,
+                manifests,
+            });
+        }
+        Ok(self.key.as_ref().expect("key is set"))
+    }
+
+    /// Run the analyzer. Returns the path of the index it wrote, in the
+    /// project directory.
+    fn generate_scip_index(&self, key: &CacheKey, verbose: bool) -> Result<PathBuf, ScipError> {
+        let analyzer_bin = Path::new(&key.analyzer_path);
 
         if verbose {
             println!(
-                "Generating SCIP index for {} (using {})...",
+                "Generating SCIP index for {} (using {} at {})...",
                 self.project_path.display(),
-                self.analyzer
+                key.analyzer,
+                key.analyzer_path
             );
         }
 
         if self.analyzer == Analyzer::VerusAnalyzer {
             for warning in analyzer_warnings(
                 &command_first_line(analyzer_bin, &["--version"], &self.project_path),
-                &command_first_line(Path::new("rustc"), &["--version"], &self.project_path),
+                key.rustc.lines().next().unwrap_or_default(),
             ) {
                 eprintln!("  Warning: {warning}");
             }
-        }
-
-        let data_dir = self.data_dir();
-        if !data_dir.exists() {
-            std::fs::create_dir_all(&data_dir).map_err(ScipError::CreateDirFailed)?;
         }
 
         // verus-analyzer (2026-08-22 and later) enables `verus_keep_ghost` itself,
@@ -386,61 +556,28 @@ impl ScipCache {
         if !generated_path.exists() {
             return Err(ScipError::IndexNotGenerated(self.analyzer));
         }
-
-        let cached_path = self.scip_path();
-        std::fs::rename(&generated_path, &cached_path).map_err(ScipError::MoveFileFailed)?;
-
-        if verbose {
-            println!("  Saved index.scip to {}", cached_path.display());
-        }
-
-        Ok(())
+        Ok(generated_path)
     }
 
-    /// Convert the SCIP index to JSON format.
-    fn convert_to_json(&self, verbose: bool) -> Result<(), ScipError> {
-        let scip_bin = self
-            .scip_path_resolved
-            .as_ref()
-            .expect("check_prerequisites must be called first");
-
+    /// Convert the SCIP index at `index` to JSON.
+    fn convert_to_json(
+        &self,
+        scip_bin: &Path,
+        index: &Path,
+        verbose: bool,
+    ) -> Result<Vec<u8>, ScipError> {
         if verbose {
             println!("Converting index.scip to JSON...");
         }
 
-        let scip_index_path = self.scip_path();
         let output = Command::new(scip_bin)
-            .args([
-                "print",
-                "--json",
-                scip_index_path.to_string_lossy().as_ref(),
-            ])
+            .args(["print", "--json", index.to_string_lossy().as_ref()])
             .output();
 
         match output {
-            Ok(o) if o.status.success() => {
-                let json_path = self.json_path();
-                std::fs::write(&json_path, o.stdout).map_err(ScipError::WriteJsonFailed)?;
-
-                if verbose {
-                    println!("  Saved SCIP JSON to {}", json_path.display());
-                }
-
-                Ok(())
-            }
+            Ok(o) if o.status.success() => Ok(o.stdout),
             Ok(o) => Err(ScipError::ScipPrintFailed(o.status.to_string())),
             Err(e) => Err(ScipError::ScipPrintFailed(e.to_string())),
-        }
-    }
-
-    /// Get the reason string for why generation is happening.
-    pub fn generation_reason(&self, regenerate: bool) -> &'static str {
-        if regenerate {
-            "(regeneration requested)"
-        } else if self.has_cached_json() {
-            "(cached index is stale — source changed)"
-        } else {
-            "(no existing SCIP data found)"
         }
     }
 }
@@ -571,6 +708,83 @@ mod tests {
 
         let cache = ScipCache::new("/path/to/project").with_auto_install(false);
         assert!(!cache.auto_install);
+    }
+
+    fn key() -> CacheKey {
+        CacheKey {
+            analyzer: "verus-analyzer 2026-09-25".into(),
+            analyzer_path: "/a".into(),
+            analyzer_sha256: "00".into(),
+            rustc: "rustc 1.93.0".into(),
+            manifests: BTreeMap::from([("Cargo.toml".into(), "11".into())]),
+        }
+    }
+
+    #[test]
+    fn test_cache_key_changes() {
+        let base = key();
+        assert!(base.changes(&key()).is_empty());
+        let mut other = key();
+        other.analyzer = "verus-analyzer path".into();
+        other.analyzer_sha256 = "01".into();
+        assert_eq!(
+            base.changes(&other),
+            vec!["analyzer selection", "analyzer binary"]
+        );
+        let mut other = key();
+        other.rustc = "rustc 1.92.0".into();
+        other.manifests.insert("Cargo.lock".into(), "22".into());
+        assert_eq!(
+            base.changes(&other),
+            vec!["rustc", "Cargo.toml or Cargo.lock"]
+        );
+    }
+
+    /// A cache whose analyzer is already resolved to `analyzer`, so that
+    /// `state` needs no installed verus-analyzer.
+    fn cache_with_binary(root: &Path, analyzer: &Path) -> ScipCache {
+        let mut cache = ScipCache::with_analyzer(root, Analyzer::RustAnalyzer);
+        cache.analyzer_path = Some(analyzer.to_path_buf());
+        cache
+    }
+
+    #[test]
+    fn test_cache_state_follows_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join("Cargo.toml"), "[package]\nname = \"p\"\n").unwrap();
+        let bin = root.join("analyzer-bin");
+        std::fs::write(&bin, "v1").unwrap();
+
+        let mut cache = cache_with_binary(root, &bin);
+        assert_eq!(cache.state().unwrap(), CacheState::Missing);
+
+        // An index without a key (8.x) is outdated.
+        std::fs::create_dir_all(root.join("data")).unwrap();
+        std::fs::write(cache.json_path(), "{}").unwrap();
+        assert!(matches!(cache.state().unwrap(), CacheState::Outdated(r) if r.contains("no key")));
+
+        // With the current key, it is current.
+        let current = cache.current_key().unwrap().clone();
+        std::fs::write(cache.key_path(), serde_json::to_vec(&current).unwrap()).unwrap();
+        assert_eq!(cache.state().unwrap(), CacheState::Current);
+
+        // A new analyzer binary or manifest outdates it.
+        std::fs::write(&bin, "v2").unwrap();
+        let mut cache = cache_with_binary(root, &bin);
+        assert!(
+            matches!(cache.state().unwrap(), CacheState::Outdated(r) if r.contains("analyzer binary"))
+        );
+        std::fs::write(&bin, "v1").unwrap();
+        std::fs::write(root.join("Cargo.lock"), "lock").unwrap();
+        let mut cache = cache_with_binary(root, &bin);
+        assert!(
+            matches!(cache.state().unwrap(), CacheState::Outdated(r) if r.contains("Cargo.lock"))
+        );
+
+        // discard removes the key too.
+        cache.discard();
+        assert!(!cache.key_path().exists());
     }
 
     #[test]

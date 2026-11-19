@@ -116,11 +116,18 @@ jobs:
 
       - name: Generate atoms
         working-directory: project/${{ inputs.project_path }}
+        env:
+          USE_RUST_ANALYZER: ${{ inputs.use_rust_analyzer }}
         run: |
           mkdir -p ${{ github.workspace }}/output
           # --auto-install downloads the verus-analyzer release that probe-verus
-          # selects for the project (its pin, or the default).
-          probe-verus atomize . --auto-install -o ${{ github.workspace }}/output/atoms.json
+          # selects for the project (its pin, or the default). With
+          # use_rust_analyzer, atomize uses the rust-analyzer installed above.
+          ANALYZER=()
+          if [ "$USE_RUST_ANALYZER" = "true" ]; then
+            ANALYZER=(--rust-analyzer)
+          fi
+          probe-verus atomize . --auto-install "${ANALYZER[@]}" -o ${{ github.workspace }}/output/atoms.json
           echo "Generated atoms.json:"
           ls -la ${{ github.workspace }}/output/atoms.json
           echo "Preview (first 50 lines):"

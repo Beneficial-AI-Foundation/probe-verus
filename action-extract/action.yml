@@ -84,8 +84,10 @@ runs:
       shell: bash
       env:
         GITHUB_TOKEN: ${{ inputs.token }}
+        PROJECT_PATH: ${{ inputs.project-path }}
+        INPUT_VERUS_VERSION: ${{ inputs.verus-version }}
+        INPUT_RUST_VERSION: ${{ inputs.rust-version }}
       run: |
-        PROJECT_PATH="${{ inputs.project-path }}"
         CARGO_TOML="$PROJECT_PATH/Cargo.toml"
 
         if [ ! -f "$CARGO_TOML" ]; then
@@ -94,7 +96,7 @@ runs:
         fi
 
         # Detect Verus version: explicit input or probe-verus auto-detection
-        VERUS_VERSION="${{ inputs.verus-version }}"
+        VERUS_VERSION="$INPUT_VERUS_VERSION"
         if [ -z "$VERUS_VERSION" ]; then
           VERUS_VERSION=$(PROBE_VERUS_VERSION="" probe-verus setup --from-project "$PROJECT_PATH" --detect-version 2>/dev/null) || true
           if [ -n "$VERUS_VERSION" ]; then
@@ -106,7 +108,7 @@ runs:
         fi
 
         # Detect Rust toolchain: explicit input or from Verus release's rust-toolchain.toml
-        RUST_VERSION="${{ inputs.rust-version }}"
+        RUST_VERSION="$INPUT_RUST_VERSION"
         if [ -z "$RUST_VERSION" ]; then
           RUST_VERSION=$(PROBE_VERUS_VERSION="$VERUS_VERSION" probe-verus setup --detect-toolchain 2>/dev/null) || true
           if [ -n "$RUST_VERSION" ]; then
@@ -147,29 +149,32 @@ runs:
       env:
         GITHUB_TOKEN: ${{ inputs.token }}
         PROBE_VERUS_VERSION: ${{ steps.versions.outputs.verus_version }}
+        PROJECT_PATH: ${{ inputs.project-path }}
+        PACKAGE: ${{ inputs.package }}
+        RUST_VERSION: ${{ steps.versions.outputs.rust_version }}
       run: |
-        # If toolchain was already installed by dtolnay/rust-toolchain, skip rustup step
-        SKIP_TC=""
-        if [ -n "${{ steps.versions.outputs.rust_version }}" ]; then
-          SKIP_TC="--skip-toolchain"
-        fi
+        ARGS=(--from-project "$PROJECT_PATH")
         # Select the analyzer of the same package that extract uses (-p)
-        PKG_ARG=""
-        if [ -n "${{ inputs.package }}" ]; then
-          PKG_ARG="-p ${{ inputs.package }}"
+        if [ -n "$PACKAGE" ]; then
+          ARGS+=(-p "$PACKAGE")
         fi
-        probe-verus setup --from-project "${{ inputs.project-path }}" $PKG_ARG $SKIP_TC
+        # If toolchain was already installed by dtolnay/rust-toolchain, skip rustup step
+        if [ -n "$RUST_VERSION" ]; then
+          ARGS+=(--skip-toolchain)
+        fi
+        probe-verus setup "${ARGS[@]}"
 
     # Step 6: Run probe-verus extract (unified pipeline)
     - name: Run probe-verus extract
       id: extract
       shell: bash
+      # Inputs go through the environment, so that Bash never parses them as code.
+      env:
+        PROJECT_PATH: ${{ inputs.project-path }}
+        PACKAGE: ${{ inputs.package }}
+        VERUS_ARGS: ${{ inputs.verus-args }}
+        TAXONOMY_CONFIG: ${{ inputs.taxonomy-config }}
       run: |
-        PROJECT_PATH="${{ inputs.project-path }}"
-        PACKAGE="${{ inputs.package }}"
-        VERUS_ARGS="${{ inputs.verus-args }}"
-        TAXONOMY_CONFIG="${{ inputs.taxonomy-config }}"
-
         echo "=== Running probe-verus extract ==="
         echo "Project: $PROJECT_PATH"
 

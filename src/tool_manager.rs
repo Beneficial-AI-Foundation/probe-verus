@@ -692,7 +692,10 @@ fn find_in_path(name: &str) -> Option<PathBuf> {
             if line.is_empty() {
                 None
             } else {
-                Some(PathBuf::from(line))
+                // Absolute, so that a relative PATH entry (`./bin`) names the
+                // same binary from the project directory. Symlinks are kept,
+                // because rustup proxies dispatch on their name.
+                std::path::absolute(&line).ok()
             }
         })
 }

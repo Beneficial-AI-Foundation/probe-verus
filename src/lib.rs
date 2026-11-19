@@ -654,27 +654,21 @@ pub fn uses_legacy_symbol_format(scip_data: &ScipIndex) -> bool {
 /// project: the Verus standard library and builtins.
 const VERUS_DEPENDENCY_CRATES: [&str; 3] = ["vstd", "verus_builtin", "builtin"];
 
-/// The direct, non-dev dependencies of a package manifest that are Verus crates
-/// ([`VERUS_DEPENDENCY_CRATES`]), by package name (a `package = "vstd"` rename
-/// counts as `vstd`). Returns an empty list if the manifest cannot be parsed.
+/// The Verus crates ([`VERUS_DEPENDENCY_CRATES`]) in the `[dependencies]` table
+/// of a package manifest, by package name (a `package = "vstd"` rename counts
+/// as `vstd`). Optional and target-specific dependencies are left out: they
+/// can be inactive for the analyzer. Returns an empty list if the manifest
+/// cannot be parsed.
 pub fn verus_dependencies(manifest: &str) -> Vec<String> {
     let Ok(doc) = manifest.parse::<toml::Table>() else {
         return Vec::new();
     };
-    let mut tables: Vec<&toml::Table> = Vec::new();
-    if let Some(deps) = doc.get("dependencies").and_then(|d| d.as_table()) {
-        tables.push(deps);
-    }
-    if let Some(targets) = doc.get("target").and_then(|t| t.as_table()) {
-        for target in targets.values() {
-            if let Some(deps) = target.get("dependencies").and_then(|d| d.as_table()) {
-                tables.push(deps);
-            }
-        }
-    }
-    let mut names: Vec<String> = tables
+    let Some(deps) = doc.get("dependencies").and_then(|d| d.as_table()) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = deps
         .iter()
-        .flat_map(|t| t.iter())
+        .filter(|(_, value)| value.get("optional").and_then(|o| o.as_bool()) != Some(true))
         .map(|(key, value)| {
             value
                 .get("package")
@@ -2591,17 +2585,15 @@ mod tests {
 vstd = { workspace = true }
 serde = "1"
 vb = { package = "verus_builtin", version = "0.1" }
+builtin = { path = "../builtin", optional = true }
 
-[target.'cfg(unix)'.dependencies]
+[target.'cfg(windows)'.dependencies]
 builtin = { path = "../builtin" }
 
 [dev-dependencies]
 verus_builtin_macros = "0.1"
 "#;
-        assert_eq!(
-            verus_dependencies(manifest),
-            vec!["builtin", "verus_builtin", "vstd"]
-        );
+        assert_eq!(verus_dependencies(manifest), vec!["verus_builtin", "vstd"]);
         assert!(verus_dependencies("not toml [").is_empty());
     }
 

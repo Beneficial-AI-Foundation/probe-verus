@@ -3,8 +3,10 @@
 //! A target such as `Choice::from` depends on imports, so its name alone does
 //! not identify the function. The SCIP index resolves the type and trait
 //! segments of the target path (`Choice` -> `subtle 2.6.1 Choice#`), but not
-//! the method. The crates of those segments limit which external stubs the
-//! specification can attach to.
+//! the method. Rust's orphan rule puts the impl in the crate of the trait or of
+//! a type that the target names, so the crates of the types and traits inside
+//! the target brackets limit which external stubs the specification can attach
+//! to.
 
 use crate::constants::SCIP_SYMBOL_PREFIX;
 use crate::path_utils::paths_match_by_suffix;
@@ -20,8 +22,9 @@ const PRIMITIVES: [&str; 17] = [
 ];
 
 /// For each `assume_specification` (same order), the code-name prefixes
-/// (`probe:<crate>/<version>/`) of the crates that define its named Self type
-/// and trait, or the reason why they cannot be established.
+/// (`probe:<crate>/<version>/`) of the crates that define the types and traits
+/// named in its target, or the reason why they cannot be established. The Self
+/// type and the trait ([`owner_names`]) must resolve.
 pub fn resolve_target_crates(
     specs: &[AssumeSpecInfo],
     index: &ScipIndex,
@@ -42,7 +45,7 @@ fn resolve_one(
     let source = std::fs::read_to_string(source_root.join(file))
         .map_err(|e| format!("cannot read {file}: {e}"))?;
     let (start, end) = target_range(&source, spec.line)
-        .ok_or_else(|| format!("cannot find the target brackets at {file}:{}", spec.line))?;
+        .ok_or_else(|| format!("cannot locate the target brackets at {file}:{}", spec.line))?;
     let document = find_document(index, source_root, file)?;
 
     // Type and trait symbols referenced inside the brackets, by name.
@@ -54,13 +57,13 @@ fn resolve_one(
         .map(|o| (type_name(&o.symbol), o.symbol.as_str()))
         .collect();
 
-    let mut crates = BTreeSet::new();
     for name in owner_names(spec) {
-        let symbol = referenced
-            .iter()
-            .find(|(n, _)| *n == name)
-            .map(|(_, s)| *s)
-            .ok_or_else(|| format!("the index does not resolve `{name}`"))?;
+        if !referenced.iter().any(|(n, _)| *n == name) {
+            return Err(format!("the index does not resolve `{name}`"));
+        }
+    }
+    let mut crates = BTreeSet::new();
+    for (_, symbol) in &referenced {
         crates.insert(crate_prefix(symbol).ok_or_else(|| format!("bad symbol `{symbol}`"))?);
     }
     if crates.is_empty() {
@@ -76,10 +79,15 @@ fn find_document<'a>(
     source_root: &Path,
     file: &str,
 ) -> Result<&'a Document, String> {
+    let canonical = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
     let index_root = index.metadata.project_root.strip_prefix("file://");
     let exact = index_root.and_then(|root| {
-        let path = source_root.join(file);
-        let relative = path.strip_prefix(root).ok()?.to_str()?.to_owned();
+        let path = canonical(&source_root.join(file));
+        let relative = path
+            .strip_prefix(canonical(Path::new(root)))
+            .ok()?
+            .to_str()?
+            .to_owned();
         index
             .documents
             .iter()
@@ -99,7 +107,7 @@ fn find_document<'a>(
     }
 }
 
-/// Names of the Self type and trait of the target that need a SCIP symbol:
+/// Names of the Self type and trait of the target that must have a SCIP symbol:
 /// identifiers that are not primitive types. `From<u8>` gives `From`,
 /// `core::hash::Hash` gives `Hash`, `&'a mut Foo` gives `Foo`, `[T; N]` gives
 /// nothing.
@@ -159,7 +167,8 @@ fn strip_indirection(mut ty: &str) -> &str {
 
 /// 0-based (line, column) of the `[` and `]` around the target of the
 /// `assume_specification` declared at 1-based `line`. Brackets inside the
-/// generics (`<T: AsRef<[u8]>>`) are skipped.
+/// generics (`<T: AsRef<[u8]>>`) are skipped. `None` if the line has no
+/// `assume_specification` or has several.
 fn target_range(source: &str, line: usize) -> Option<((i32, i32), (i32, i32))> {
     let mut start = None;
     let mut depth = 0usize;
@@ -171,6 +180,9 @@ fn target_range(source: &str, line: usize) -> Option<((i32, i32), (i32, i32))> {
         let mut chars = text.char_indices().peekable();
         if !seen_keyword {
             let pos = text.find("assume_specification")?;
+            if text.matches("assume_specification").count() > 1 {
+                return None;
+            }
             seen_keyword = true;
             while chars.peek().is_some_and(|(i, _)| *i < pos) {
                 chars.next();
@@ -322,6 +334,43 @@ mod tests {
         let source =
             "pub assume_specification<T: AsRef<[u8]>, F: Fn() -> u8>[ Hasher::update::<T> ](\n";
         assert_eq!(target_range(source, 1), Some(((0, 55), (0, 77))));
+        let source = "assume_specification[ A::f ]; assume_specification[ B::f ];\n";
+        assert_eq!(target_range(source, 1), None);
+    }
+
+    /// Every type and trait in the brackets adds its crate: the trait argument
+    /// `Choice` of `<u8 as From<Choice>>::from`.
+    #[test]
+    fn test_trait_argument_adds_its_crate() {
+        let from =
+            "rust-analyzer cargo core https://github.com/rust-lang/rust/library/core convert/From#";
+        let dir = source_dir("\npub assume_specification[ <u8 as From<Choice>>::from ](\n");
+        let idx = index(&[(from, [1, 33, 37]), (CHOICE, [1, 38, 44])]);
+        let s = spec(&["From", "from"], Some("u8"), Some("From<Choice>"));
+        let result = resolve_target_crates(&[s], &idx, dir.path());
+        assert_eq!(
+            result[0].as_ref().unwrap(),
+            &BTreeSet::from([
+                "probe:core/https://github.com/rust-lang/rust/library/core/".to_string(),
+                "probe:subtle/2.6.1/".to_string(),
+            ])
+        );
+    }
+
+    /// A Self type and a trait with the same name both add their crates.
+    #[test]
+    fn test_same_name_owners_add_both_crates() {
+        let dir = source_dir("\npub assume_specification[ <Choice as other::Choice>::m ](\n");
+        let idx = index(&[(CHOICE, [1, 27, 33]), (OTHER_CHOICE, [1, 44, 50])]);
+        let s = spec(&["Choice", "m"], Some("Choice"), Some("other::Choice"));
+        let result = resolve_target_crates(&[s], &idx, dir.path());
+        assert_eq!(
+            result[0].as_ref().unwrap(),
+            &BTreeSet::from([
+                "probe:other/1.0.0/".to_string(),
+                "probe:subtle/2.6.1/".to_string(),
+            ])
+        );
     }
 
     /// Two workspace members with the same file: the index root picks one, and

@@ -7,13 +7,14 @@ For each project in corpus/support-target.toml:
 2. Build an inventory of function declarations with `list-functions`. It
    uses only verus_syn, so it does not depend on the analyzer.
 3. Run `extract`, always regenerating the SCIP index.
-4. Match every declaration to a local atom: same file, same name, and
-   overlapping line spans.
+4. Match every declaration to a local atom: same file, same name, same
+   owner kind (impl, trait or free function), and the atom's start line in
+   the declaration's span, or else overlapping spans.
 
 The script writes report.json and report.md to --out after each project. It
 exits nonzero if a step fails, if the inventory is empty or incomplete, or,
 with --gate, if a declaration has no atom and is not listed in the
-known-limitations file.
+known-limitations file or in the --baseline report.
 
 The clones under --work-dir belong to the script: it resets them to the
 pinned commit and deletes untracked files on every run. Do not run two
@@ -23,9 +24,16 @@ To run a specific verus-analyzer release without touching
 ~/.probe-verus/tools, pass --analyzer-version. The script then installs that
 release into its own HOME under the work directory and runs probe-verus
 with that HOME. RUSTUP_HOME and CARGO_HOME keep pointing to the real ones.
+
+--verify also runs Verus verification, for the projects that have a `verus`
+version in the manifest. That version must be installed in the real
+~/.probe-verus/tools (`PROBE_VERUS_VERSION=<version> probe-verus setup`).
+The script sets PROBE_VERUS_VERSION and links the version into the
+isolated HOME, and fails if extract used another cargo-verus.
 """
 
 import argparse
+import collections
 import gzip
 import json
 import os
@@ -107,6 +115,32 @@ def checkout(project, work_dir):
     return repo_dir
 
 
+def verus_dir(version):
+    """Return the managed Verus directory for `version` in the real HOME."""
+    if not re.fullmatch(r"[0-9A-Za-z._-]+", version):
+        raise ValueError(f"invalid verus version: {version}")
+    path = Path.home() / ".probe-verus" / "tools" / f"verus-{version}"
+    if not (path / "cargo-verus").exists():
+        raise RuntimeError(f"Verus {version} is not installed in {path.parent}; "
+                           f"run `PROBE_VERUS_VERSION={version} probe-verus setup`")
+    return path
+
+
+def use_verus(version, env):
+    """Make probe-verus run Verus `version`. Return the cargo-verus path it must use."""
+    real = verus_dir(version)
+    tools = Path(env["HOME"]) / ".probe-verus" / "tools"
+    target = tools / real.name
+    if target.resolve() != real.resolve():
+        if target.is_symlink():
+            target.unlink()
+        elif target.exists():
+            raise RuntimeError(f"{target} exists and is not a link to {real}")
+        target.symlink_to(real)
+    env["PROBE_VERUS_VERSION"] = version
+    return target / "cargo-verus"
+
+
 def analyzer_home(version, work_dir, scip):
     """Return a HOME whose ~/.probe-verus/tools holds the given analyzer."""
     if not re.fullmatch(r"[0-9A-Za-z._-]+", version):
@@ -186,8 +220,35 @@ def atom_name(code_name, atom):
     return m.group(1) if m else code_name
 
 
-def check(decls, atoms):
-    """Match declarations to local atoms. Return (unmatched decls, extra atoms)."""
+def owner_kind(code_name):
+    """Return "impl", "trait" or "standalone" for the owner in a code-name.
+
+    The owner is the last path segment before `name()`, outside backticks:
+    `impl#[S][T]f()` is an impl method, `T#f()` a trait method, `f()` free.
+    """
+    name = re.sub(r"@[^`]*$", "", code_name)
+    quoted, start = False, 0
+    for i, c in enumerate(name):
+        if c == "`":
+            quoted = not quoted
+        elif c == "/" and not quoted:
+            start = i + 1
+    segment = name[start:]
+    if segment.startswith("impl#"):
+        return "impl"
+    return "trait" if "#" in segment else "standalone"
+
+
+def check(decls, atoms, owner_kinds=True):
+    """Match declarations to local atoms. Return (unmatched decls, extra atoms).
+
+    An atom matches a declaration with the same file and name, and the same
+    owner kind (impl, trait or free function; list-functions does not print the
+    owner itself). With owner_kinds false (code-names of probe-verus 8.x, where
+    `Type#f()` can be an impl method), the owner kind is not compared. The first pass matches atoms whose start line is inside the
+    declaration's span; the second pass matches the rest by span overlap. So
+    the order of atoms does not decide which declaration an atom matches.
+    """
     by_key = {}
     for code_name, atom in atoms.items():
         path = atom.get("code-path")
@@ -196,18 +257,29 @@ def check(decls, atoms):
         lines = atom.get("code-text") or {}
         entry = (code_name, lines.get("lines-start", 0), lines.get("lines-end", 0))
         by_key.setdefault((path, atom_name(code_name, atom)), []).append(entry)
-    used = set()
-    unmatched = []
-    for d in decls:
-        cands = by_key.get((d["file"], d["name"]), [])
-        hit = next(
-            (c for c in cands if c[0] not in used and c[1] <= d["end"] and d["start"] <= c[2]),
-            None,
-        )
-        if hit:
-            used.add(hit[0])
-        else:
-            unmatched.append(d)
+    for entries in by_key.values():
+        entries.sort()
+
+    def candidates(d):
+        kind = d.get("context")
+        return [c for c in by_key.get((d["file"], d["name"]), [])
+                if not owner_kinds or kind not in ("impl", "trait", "standalone")
+                or owner_kind(c[0]) == kind]
+
+    used, matched = set(), set()
+    passes = (
+        lambda c, d: d["start"] <= c[1] <= d["end"],
+        lambda c, d: c[1] <= d["end"] and d["start"] <= c[2],
+    )
+    for fits in passes:
+        for i, d in enumerate(decls):
+            if i in matched:
+                continue
+            hit = next((c for c in candidates(d) if c[0] not in used and fits(c, d)), None)
+            if hit:
+                used.add(hit[0])
+                matched.add(i)
+    unmatched = [d for i, d in enumerate(decls) if i not in matched]
     extra = sorted(
         k for k, a in atoms.items() if a.get("code-path") and k not in used
     )
@@ -226,7 +298,7 @@ def no_duplicate_keys(pairs):
 def load_fresh(probes_dir, pattern, since, schema):
     """Load the one file matching `pattern` that was written at or after `since`.
 
-    Check its envelope schema and return (file name, data).
+    Check its envelope schema and return (file name, data, tool version).
     """
     files = [f for f in probes_dir.glob(pattern) if f.stat().st_mtime >= since]
     if len(files) != 1:
@@ -234,16 +306,19 @@ def load_fresh(probes_dir, pattern, since, schema):
     env = json.loads(files[0].read_text(), object_pairs_hook=no_duplicate_keys)
     if env.get("schema") != schema or not isinstance(env.get("data"), dict):
         raise ValueError(f"{files[0].name}: expected schema {schema} with a data object")
-    return files[0].name, env["data"]
+    return files[0].name, env["data"], (env.get("tool") or {}).get("version", "")
 
 
 def check_extract(probes_dir, since, verify):
-    """Check the extract summary and the unified output. Return the atoms data.
+    """Check the extract summary and the unified output.
+
+    Return the atoms file name, the atoms data, the extract status and the
+    probe-verus version that wrote the atoms.
 
     extract can exit 0 when it skips verification (no cargo-verus) or cannot
     write the unified output, so the exit code alone is not enough.
     """
-    summary_file, summary = load_fresh(probes_dir, "*_extract_summary.json", since,
+    summary_file, summary, _ = load_fresh(probes_dir, "*_extract_summary.json", since,
                                        "probe-verus/extract-summary")
     status = summary.get("status")
     if status not in ("success", "verification_failed"):
@@ -253,8 +328,9 @@ def check_extract(probes_dir, since, verify):
             raise ValueError(f"extract step {step} did not run or failed; see extract.log")
     unified = summary_file.removesuffix("_extract_summary.json") + ".json"
     load_fresh(probes_dir, unified, since, "probe-verus/extract")
-    atoms_file, atoms = load_fresh(probes_dir, "*_atoms.json", since, "probe-verus/atoms")
-    return atoms_file, atoms, status
+    atoms_file, atoms, version = load_fresh(probes_dir, "*_atoms.json", since,
+                                            "probe-verus/atoms")
+    return atoms_file, atoms, status, version
 
 
 def load_known(path, project_names):
@@ -270,6 +346,14 @@ def load_known(path, project_names):
             sys.exit(f"{path}: limitation for unknown project {k['project']}")
         known.add((k["project"], k["file"], k["name"], k["start"]))
     return known
+
+
+def load_baseline(path):
+    """Unmatched declarations of an earlier report, as (project, file, name, start)."""
+    report = json.loads(path.read_text())
+    projects = report if isinstance(report, list) else report.get("projects", [])
+    return {(p["name"], u["file"], u["name"], u["start"])
+            for p in projects for u in p.get("unmatched", [])}
 
 
 def run_project(project, args, env_base, out_dir, result):
@@ -303,8 +387,12 @@ def run_project(project, args, env_base, out_dir, result):
     decls = parse_inventory((pdir / "list-functions.log").read_text())
 
     cmd = [args.probe_verus, "extract", str(crate), "--regenerate-scip"]
-    verify = args.verify and project["name"] not in args.no_verify
-    if not verify:
+    verify = args.verify and bool(project.get("verus"))
+    if verify:
+        cargo_verus = use_verus(project["verus"], env)
+        result["verus"] = project["verus"]
+    else:
+        env.pop("PROBE_VERUS_VERSION", None)
         cmd.append("--skip-verify")
     started = time.time()
     rc, secs = run(cmd, crate, env, pdir / "extract.log")
@@ -315,10 +403,25 @@ def run_project(project, args, env_base, out_dir, result):
         shutil.copytree(probes, pdir / "probes")
     if rc != 0:
         raise RuntimeError("extract failed; see extract.log")
-    result["atoms_file"], atoms, result["extract_status"] = check_extract(probes, started, verify)
+    if verify:
+        # probe-verus falls back to another installed Verus when the requested
+        # one is missing, so check the binary that extract reports.
+        used = f"Using cargo-verus: {cargo_verus}"
+        if used not in (pdir / "extract.log").read_text():
+            raise RuntimeError(f"extract did not use {cargo_verus}; see extract.log")
+    result["atoms_file"], atoms, result["extract_status"], version = check_extract(
+        probes, started, verify)
+    if verify:
+        _, unified, _ = load_fresh(probes, result["atoms_file"].removesuffix("_atoms.json") + ".json",
+                                started, "probe-verus/extract")
+        statuses = collections.Counter(
+            a.get("verification-status") or ("untracked" if a.get("untracked") else "none")
+            for a in unified.values() if a.get("code-path"))
+        result["verification"] = dict(sorted(statuses.items()))
 
     local = {k: a for k, a in atoms.items() if a.get("code-path")}
-    unmatched, extra = check(decls, atoms)
+    major = re.match(r"\d+", version)
+    unmatched, extra = check(decls, atoms, owner_kinds=not major or int(major[0]) >= 9)
     result.update({
         "declarations": len(decls),
         "local_atoms": len(local),
@@ -351,6 +454,10 @@ def write_report(results, tools, out_dir, known):
         if r.get("error"):
             lines.append(f"- {r['name']}: ERROR {r['error'].splitlines()[0]}")
     for r in results:
+        if r.get("verification"):
+            counts = ", ".join(f"{k} {v}" for k, v in r["verification"].items())
+            lines.append(f"- {r['name']}: Verus {r['verus']}: {counts}")
+    for r in results:
         for u in r.get("unmatched", []):
             lines.append(f"- {r['name']}: `{u['name']}` [{u['kind']}] {u['file']}:{u['start']}-{u['end']} ({u.get('context')})")
     (out_dir / "report.md").write_text("\n".join(lines) + "\n")
@@ -367,12 +474,14 @@ def main():
     ap.add_argument("--scip", help="scip binary for the isolated HOME (default: managed or PATH)")
     ap.add_argument("--project", action="append", help="only run this project (repeatable)")
     ap.add_argument("--verify", action="store_true", help="also run Verus verification")
-    ap.add_argument("--gate", action="store_true", help="fail on unmatched declarations not in --known")
+    ap.add_argument("--gate", action="store_true",
+                    help="fail on unmatched declarations not in --known or --baseline")
+    ap.add_argument("--baseline", type=Path,
+                    help="report.json of an earlier run: its unmatched declarations are not new")
     args = ap.parse_args()
     args.probe_verus = str(Path(args.probe_verus).resolve())
     if not os.access(args.probe_verus, os.X_OK):
         sys.exit(f"--probe-verus: {args.probe_verus} is not an executable file")
-    args.no_verify = {"verismo"}
     args.work_dir = args.work_dir.resolve()
     args.out = args.out.resolve()
     args.work_dir.mkdir(parents=True, exist_ok=True)
@@ -388,6 +497,8 @@ def main():
             sys.exit(f"unknown project(s): {', '.join(unknown)}; known: {', '.join(names)}")
         projects = [p for p in projects if p["name"] in args.project]
     known = load_known(args.known, set(names))
+    if args.baseline:
+        known |= load_baseline(args.baseline)
 
     env = dict(os.environ)
     if args.analyzer_version:
@@ -420,6 +531,7 @@ def main():
         if args.gate and new:
             failed = True
         print(f"   steps {result['steps']}  unmatched {len(unmatched)} (new {len(new)})"
+              + (f"  verification {result['verification']}" if "verification" in result else "")
               + (f"  ERROR {result['error'].splitlines()[0]}" if "error" in result else ""),
               flush=True)
         write_report(results, tools, args.out, known)

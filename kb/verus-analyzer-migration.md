@@ -98,12 +98,14 @@ Before it converts an index, probe-verus checks it:
    (finding 4).
 5. If atomize fails, `extract` stops with a nonzero exit code. Later
    steps do not run.
-6. `assume_specification` matching fails closed. A spec attaches only when
-   its target is fully qualified, with the crate of the Self type and of
-   the trait, and matches exactly one stub with the same crates. A target
-   that depends on an import or alias, such as `Record::read`, stays
-   unattached with a warning. This attaches fewer specs than 8.x. Resolving
-   targets through SCIP is #53.
+6. `assume_specification` matching checks the crate through SCIP (decided
+   2026-11-18, replacing the syntax-only rule, which would have dropped 4
+   of the 5 dalek-verus specs). The index resolves the Self type and the
+   trait inside the target brackets, but not the method. A spec attaches
+   only when exactly one stub in one of those crates matches by name. If
+   the index does not resolve a named type or trait, or no index exists,
+   the spec stays unattached with a warning. Resolving the method itself
+   is #53.
 
 ### 4. Analyzer selection
 
@@ -166,25 +168,29 @@ probe-verus version under test. It checks:
   number of declarations equals the summary count.
 - Every declaration in the inventory is a local atom, or is a listed known
   limitation (with `--gate`).
-- Run time, and counts of local atoms and edges, compared with the
-  previous run.
 
 Each project uses its own output directory. The script records the commit,
 `rustc -vV` and the probe-verus, verus-analyzer and scip versions it used.
+It also records the run time and the counts of local atoms and edges, but
+it does not compare them with an earlier run.
 It runs in CI weekly as a diagnostic, without `--gate`. PR 1 merges only
 after a manual run with `--gate` passes, and that run is a required step of
 every release.
 
-Known gaps, to close in PR 1 before the gate is used:
+Gaps closed in PR 1:
 
-- Matching ignores the owner (`Type::name`), and it is greedy, so the order
-  of atoms can change the result.
-- The gate counts unmatched declarations. It does not compare them by
-  identity with the baseline, so a fix can hide a new miss.
-- Call edges are counted, not checked. PR 1 adds small test projects for
-  trait impl owners, bodyless trait methods, and specific required and
-  forbidden edges. It needs network access and takes several minutes
-(dalek-verus indexing alone takes about 4 minutes on Rust 1.92).
+- Matching checks the owner kind (impl, trait or free function) and runs in
+  two passes, so the order of atoms does not change the result.
+  `list-functions` does not print the owner itself, so two impls of the same
+  method name in one file are told apart only by their spans.
+- `--baseline` compares unmatched declarations by identity with an earlier
+  report.
+- Call edges are checked by `tests/atomize_fixture.rs` on a small project
+  with trait impl owners, bodyless trait methods, and required and forbidden
+  edges. The corpus counts edges only.
+
+The corpus needs network access and takes several minutes (dalek-verus
+indexing alone takes about 4 minutes on Rust 1.92).
 
 ### 8. Versioning
 
@@ -233,7 +239,15 @@ Options:
   ones. Use this until probe-verus supports analyzer pins (PR 2).
 - `--project NAME` runs one project. `--gate` fails on unmatched
   declarations that `corpus/known-limitations.toml` does not list.
-  `--verify` also runs Verus verification (not for verismo).
+  `--baseline report.json` compares unmatched declarations by identity
+  (file, name, start line) with an earlier report: only declarations that
+  are not in it count as new, and `--gate` fails on those.
+  `--verify` also runs Verus verification, for projects with a `verus`
+  version in the manifest (now only dalek-verus). That version must be
+  installed in `~/.probe-verus/tools`. Install it with
+  `PROBE_VERUS_VERSION=<version> probe-verus setup`. The script fails if
+  `extract` uses another `cargo-verus`, and it reports the counts of each
+  verification status.
 
 The clones in the work directory belong to the script. Each run resets
 them to the pinned commit and deletes untracked files. Do not run two
@@ -336,6 +350,7 @@ atom (same file, same name, overlapping span). Reports are in
 | 8.0.1, analyzer 2026-06-17 | 29 | 0 | 2 | 48 | extract fails |
 | 8.0.1, analyzer 2026-09-25 | 29 | 0 | 2 | 48 | 14 |
 | PR #50, analyzer 2026-09-25 | 6 | 5 | 29 | 63 | 49 |
+| PR 1 (5d685dc), analyzer 2026-09-25 | 0 | 0 | 0 | 0 | 0 |
 
 - The 8.0.1 misses on dalek-verus are mostly feature-gated impl methods
   (serde `serialize`, `deserialize`, `visit_seq`, group `random`,
@@ -345,3 +360,10 @@ atom (same file, same name, overlapping span). Reports are in
 - Gate for PR 1: no project has more unmatched declarations than with
   8.0.1 and analyzer 2026-09-25, and every remaining one is listed in
   `corpus/known-limitations.toml` with a reason.
+- PR 1 passes the gate with nothing to list: the run with `--gate`,
+  `--baseline` (8.0.1, analyzer 2026-09-25) and `--verify` has no unmatched
+  declarations. With Verus `0.2026.01.14.88f7396`, dalek-verus has 1,094
+  verified or transitively verified atoms, 0 failed, as with 8.0.1. The
+  differences against 8.0.1 are the 29 declarations that 8.0.1 missed, 2
+  atoms that operator edges change from transitively verified to verified,
+  and 3 cfg-inactive trusted atoms (#60).

@@ -472,6 +472,7 @@ mod tests {
     fn make_func(kind: DeclKind, ensures_calls: Vec<&str>) -> FunctionInfo {
         FunctionInfo {
             name: "test_fn".to_string(),
+            scip_owner: None,
             file: Some("src/test.rs".to_string()),
             spec_text: SpecText {
                 lines_start: 1,

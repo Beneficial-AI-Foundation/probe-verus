@@ -21,7 +21,9 @@ use crate::scip_cache::Analyzer;
 // Known-good fallback versions (used when API is unreachable)
 // ---------------------------------------------------------------------------
 
-const VERUS_ANALYZER_FALLBACK_VERSION: &str = "2026-02-03";
+/// Oldest verus-analyzer whose SCIP symbols match rust-analyzer's
+/// (`impl#[SelfType][Trait]method()`); probe-verus code_names rely on this format.
+const VERUS_ANALYZER_FALLBACK_VERSION: &str = "2026-09-25";
 const SCIP_FALLBACK_VERSION: &str = "v0.6.1";
 const VERUS_FALLBACK_VERSION: &str = "0.2026.03.22.5e66329";
 

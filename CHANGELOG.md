@@ -10,6 +10,36 @@ what constitutes a breaking change.
 
 ## [Unreleased]
 
+### Breaking
+- **Requires verus-analyzer 2026-08-22 or later; code-names follow its SCIP symbols.** That release switched to rust-analyzer's symbol format (`impl#[SelfType][Trait]method()`), which names the Self type and trait and fixes the reversed module paths of older releases (`field/u64/serial/backend/...` is now `backend/serial/u64/field/...`). Code-names are now the symbol with the prefix and trailing `.` removed, lifetimes dropped and spaces replaced by `/`, e.g. ``probe:curve25519-dalek/4.1.3/montgomery/impl#[`&MontgomeryPoint`][`Mul<&Scalar>`]mul()`` (was `.../montgomery/&MontgomeryPoint#Mul<Scalar>#mul()`). Nearly every code-name changes; outputs from earlier versions must be regenerated. `atomize`/`extract` fail on a SCIP index from an older verus-analyzer (rerun with `--regenerate-scip` after upgrading).
+- **Library API:** `build_call_graph` returns only the call graph, keyed by symbol, document and definition range, and `convert_to_atoms_with_lines` / `convert_to_atoms_with_parsed_spans` no longer take the symbol-to-display-name map. `FunctionNode` lost `self_type` and `definition_type_context`; `CalleeInfo` lost `type_hints`. `code_name_has_owner_and_method` is replaced by `code_name_is_method` with a `MethodOwner`. `FunctionInfo` has a new `scip_owner` field. `backfill_atoms_from_parser` returns a `Backfill` with the number of added atoms and the collisions.
+- **Backfilled methods are named after their impl or trait.** probe-verus backfills functions that the analyzer did not index, from the source parser. These functions now get `impl#[SelfType][Trait]method()` or `Trait#method()` code-names and `Type::method` display names, not `module/method()`. `mod.rs` and crate-root files no longer add `mod` or an empty segment to the module path. If an atom of the same name lies inside the span of a parsed function, backfill skips the function. Before, a same-named atom within 5 lines was enough, so backfill dropped methods of another impl on the same Self type, and cfg alternatives. Backfill never replaces an analyzer-indexed atom. It replaces an external stub with the same code-name. Each cfg alternative gets its own atom. The spec-bearing alternative gets the plain code-name, unless an analyzer atom holds it. The others get an `@<line>` suffix.
+
+### Changed
+- An `assume_specification` with a qualified target (`<u64 as Trait>::m`) is attached only to the external stub with that Self type and trait, even when it is the only candidate; a lone stub with another Self type or the trait declaration no longer becomes `trusted`. `specify` records the target's `self-type` and `trait-type`; a qualified target in a specs file without them is left unattached with a warning (rerun specify). `<Type>::method` targets are matched (they were rejected as having one path segment).
+- `extract` checks the crate of an `assume_specification` target through the SCIP index. The index resolves the Self type and the trait in the target path, for example `Choice` in `Choice::from` to the `subtle` crate. The specification attaches only to a stub in one of those crates. If the index does not resolve them, or if no index exists, the specification stays unattached and probe-verus prints a warning.
+- `extract` stops when atomize fails, instead of running specify and merge on an atoms file left by an earlier run.
+- `atomize` and `extract` stop when a backfilled function has no free code-name. That happens when the plain code-name and its `@<line>` and `@<path>:<line>` forms are all taken. With `--allow-duplicates`, they print the function and go on. Before, such a function could be lost without an error.
+- The legacy-index check uses the producer version (`0.3.N`, N < 266) and rejects any index with `Type#Trait#method()` symbols or methods owned by a non-trait type. Trait-only indexes are accepted. `/` and `#` inside backtick-quoted descriptors are not treated as structure. If an index has neither a `0.3.N` version nor `impl#[` method symbols, probe-verus prints a warning and goes on.
+- `atomize` and `extract` reject an index without references to `vstd`, `verus_builtin` or `builtin` when the package depends on that crate directly. In that case, verus-analyzer did not load the project. The error shows the error lines of the analyzer, which probe-verus keeps in `data/index.scip.stderr`. probe-verus deletes a rejected index from the cache.
+- The SCIP metadata may lack the producer name or version.
+- Before indexing, a warning is printed when the verus-analyzer predates 2026-08-22, or when the project uses Rust 1.92 (newer analyzers index about 10x slower with it).
+- Dependencies now include operator calls (`a * b` → the `Mul` impl), which the new analyzer resolves. On dalek-lite this adds the missing edges into `FieldElement51`/`Scalar` arithmetic impls, plus edges to `core`/`vstd` operator impls on primitive types.
+- Display names and `rust-qualified-name` of spec-trait impls on reference types now include the Self type (`Scalar::add_req` instead of `add_req`).
+
+### Fixed
+- Files that use `final(x)` in a postcondition (Verus 2026-09 and later) no longer fail to parse. Before, their functions lost their kind, specs and verification results without an error. `verus_syn` is now 0.0.0-2026-09-06-0133.
+- Definitions sharing a SCIP symbol on the same line (different files or columns) are no longer merged into one atom; their code-names get an `@<path>:<line>:<column>` suffix.
+- A call between two definitions that share a symbol is kept as a dependency instead of being dropped as recursion.
+- Lifetime stripping keeps character literals in const generic arguments (`Tag<'a'>`).
+- Methods declared in a trait (SCIP kind `TraitMethod`) are atoms. Before, a declaration without a body became an external stub without a location. Calls inside default method bodies were also lost.
+- `specify` and `run-verus` prefer the atom inside the span of a function to a nearer atom outside it. Each cfg alternative now gets its own spec and cfg predicate.
+- If a `verus!` or `cfg_if!` body cannot be parsed, probe-verus prints a warning with the file and the position. Before, it skipped the functions of that body without a message.
+
+### Removed
+- The verus-analyzer symbol repair: self-type pre-pass, signature-based trait-argument insertion, definition type-context disambiguation and call-site type hints.
+- The `verus_keep_ghost` config file passed to verus-analyzer; the analyzer now enables that cfg itself.
+
 ### Security
 - Upgraded `zip` from 8.1 to 9.x (9.6.1 in `Cargo.lock`). zip 8.x has a critical
   advisory (fixed in 9.0.5) and three high advisories that are fixed only in 9.x.

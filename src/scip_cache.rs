@@ -10,6 +10,7 @@
 
 use crate::constants::{DATA_DIR, SCIP_INDEX_FILE, SCIP_INDEX_JSON_FILE};
 use crate::tool_manager::{self, Tool};
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -33,6 +34,50 @@ impl std::fmt::Display for Analyzer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.command_name())
     }
+}
+
+/// First line of a command's stdout, or empty if it cannot be run.
+fn command_first_line(program: &Path, args: &[&str], dir: &Path) -> String {
+    Command::new(program)
+        .args(args)
+        .current_dir(dir)
+        .stderr(Stdio::null())
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .next()
+                .map(str::to_string)
+        })
+        .unwrap_or_default()
+}
+
+/// Problems to report before a (slow) `verus-analyzer scip` run, from the
+/// analyzer's `--version` line (`verus-analyzer 0.3.269-standalone`) and the
+/// project's `rustc --version` line (`rustc 1.92.0 (...)`).
+fn analyzer_warnings(analyzer_version: &str, rustc_version: &str) -> Vec<String> {
+    let mut warnings = Vec::new();
+    let Some(patch) = analyzer_version
+        .split_whitespace()
+        .nth(1)
+        .and_then(crate::analyzer_patch_version)
+    else {
+        return warnings;
+    };
+    if patch < crate::FIRST_CURRENT_FORMAT_ANALYZER_PATCH {
+        warnings.push(format!(
+            "`{analyzer_version}` predates verus-analyzer 2026-08-22; its index will be \
+             rejected. Install a newer release (`probe-verus setup`)."
+        ));
+    } else if rustc_version.starts_with("rustc 1.92.") {
+        warnings.push(format!(
+            "verus-analyzer 2026-08-22 and later index about 10x slower with `{rustc_version}`; \
+             Rust 1.93 or later is not affected."
+        ));
+    }
+    warnings
 }
 
 /// Error types for SCIP operations
@@ -153,6 +198,29 @@ impl ScipCache {
     }
 
     /// Check if cached SCIP JSON exists.
+    /// Path of the analyzer's stderr from the last index generation.
+    pub fn stderr_path(&self) -> PathBuf {
+        self.data_dir().join("index.scip.stderr")
+    }
+
+    /// Error lines (containing "error", any case) of the analyzer's stderr from
+    /// the last index generation, at most `limit` of them.
+    pub fn analyzer_errors(&self, limit: usize) -> Vec<String> {
+        std::fs::read_to_string(self.stderr_path())
+            .unwrap_or_default()
+            .lines()
+            .filter(|l| l.to_lowercase().contains("error"))
+            .take(limit)
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// Delete the cached index, so that the next run regenerates it.
+    pub fn discard(&self) {
+        let _ = std::fs::remove_file(self.scip_path());
+        let _ = std::fs::remove_file(self.json_path());
+    }
+
     pub fn has_cached_json(&self) -> bool {
         self.json_path().exists()
     }
@@ -246,24 +314,6 @@ impl ScipCache {
         Ok(())
     }
 
-    /// Write a temporary verus-analyzer config that enables `verus_keep_ghost`.
-    ///
-    /// Verus projects gate specification-bearing variants of functions behind
-    /// `#[cfg(verus_keep_ghost)]`.  Without this cfg, SCIP indexes the plain
-    /// (non-spec) variants, whose line numbers diverge from what the Verus
-    /// parser sees — causing atom-to-proof matching failures later.
-    fn write_verus_cfg_config(&self) -> Option<PathBuf> {
-        if self.analyzer != Analyzer::VerusAnalyzer {
-            return None;
-        }
-        let path = self.data_dir().join(".va_scip_config.json");
-        std::fs::create_dir_all(self.data_dir()).ok()?;
-        std::fs::write(&path, r#"{"cargo":{"cfgs":{"verus_keep_ghost":null}}}"#).ok()?;
-        // Canonicalize to an absolute path so it remains valid when the child
-        // process runs with a different CWD (current_dir set to project_path).
-        std::fs::canonicalize(&path).ok().or(Some(path))
-    }
-
     /// Generate the SCIP index using the configured analyzer.
     fn generate_scip_index(&self, verbose: bool) -> Result<(), ScipError> {
         let analyzer_bin = self
@@ -279,34 +329,53 @@ impl ScipCache {
             );
         }
 
-        let config_file = self.write_verus_cfg_config();
-
-        let mut cmd = Command::new(analyzer_bin);
-        cmd.args(["scip", "."]);
-        if let Some(ref cfg_path) = config_file {
-            cmd.arg("--config-path").arg(cfg_path);
+        if self.analyzer == Analyzer::VerusAnalyzer {
+            for warning in analyzer_warnings(
+                &command_first_line(analyzer_bin, &["--version"], &self.project_path),
+                &command_first_line(Path::new("rustc"), &["--version"], &self.project_path),
+            ) {
+                eprintln!("  Warning: {warning}");
+            }
         }
-        let status = cmd
+
+        let data_dir = self.data_dir();
+        if !data_dir.exists() {
+            std::fs::create_dir_all(&data_dir).map_err(ScipError::CreateDirFailed)?;
+        }
+
+        // verus-analyzer (2026-08-22 and later) enables `verus_keep_ghost` itself,
+        // so `#[cfg(verus_keep_ghost)]` items are indexed without extra config.
+        // stderr is kept in a file, so that a failed index check can show it.
+        let status = Command::new(analyzer_bin)
+            .args(["scip", "."])
             .current_dir(&self.project_path)
             .stdout(if verbose {
                 Stdio::inherit()
             } else {
                 Stdio::null()
             })
-            .stderr(if verbose {
-                Stdio::inherit()
-            } else {
-                Stdio::null()
-            })
-            .status();
+            .stderr(Stdio::piped())
+            .spawn()
+            .and_then(|mut child| {
+                let stderr = child.stderr.take().expect("stderr is piped");
+                let mut log = String::new();
+                for line in BufReader::new(stderr).lines() {
+                    let line = line?;
+                    if verbose {
+                        eprintln!("{line}");
+                    }
+                    log.push_str(&line);
+                    log.push('\n');
+                }
+                // A missing log only loses diagnostics, so a write error is ignored.
+                let _ = std::fs::write(self.stderr_path(), &log);
+                child.wait()
+            });
 
         match status {
             Ok(s) if s.success() => {}
             Ok(s) => {
-                return Err(ScipError::AnalyzerFailed(
-                    self.analyzer,
-                    format!("exit status: {}", s),
-                ));
+                return Err(ScipError::AnalyzerFailed(self.analyzer, s.to_string()));
             }
             Err(e) => {
                 return Err(ScipError::AnalyzerFailed(self.analyzer, e.to_string()));
@@ -316,11 +385,6 @@ impl ScipCache {
         let generated_path = self.project_path.join("index.scip");
         if !generated_path.exists() {
             return Err(ScipError::IndexNotGenerated(self.analyzer));
-        }
-
-        let data_dir = self.data_dir();
-        if !data_dir.exists() {
-            std::fs::create_dir_all(&data_dir).map_err(ScipError::CreateDirFailed)?;
         }
 
         let cached_path = self.scip_path();
@@ -364,10 +428,7 @@ impl ScipCache {
 
                 Ok(())
             }
-            Ok(o) => Err(ScipError::ScipPrintFailed(format!(
-                "exit status: {}",
-                o.status
-            ))),
+            Ok(o) => Err(ScipError::ScipPrintFailed(o.status.to_string())),
             Err(e) => Err(ScipError::ScipPrintFailed(e.to_string())),
         }
     }
@@ -510,5 +571,17 @@ mod tests {
 
         let cache = ScipCache::new("/path/to/project").with_auto_install(false);
         assert!(!cache.auto_install);
+    }
+
+    #[test]
+    fn test_analyzer_warnings() {
+        let old = analyzer_warnings("rust-analyzer 0.3.264-standalone", "rustc 1.93.0 (x)");
+        assert!(old[0].contains("will be rejected"), "{old:?}");
+        let slow = analyzer_warnings("verus-analyzer 0.3.269-standalone", "rustc 1.92.0 (x)");
+        assert!(slow[0].contains("10x slower"), "{slow:?}");
+        assert!(
+            analyzer_warnings("verus-analyzer 0.3.269-standalone", "rustc 1.93.0 (x)").is_empty()
+        );
+        assert!(analyzer_warnings("", "").is_empty());
     }
 }

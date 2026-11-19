@@ -113,8 +113,7 @@ fn parse_csv_line(line: &str) -> Vec<String> {
 /// Load atoms from curve_top.json and convert to the standard format.
 fn load_atoms() -> Vec<AtomWithLines> {
     let scip_data = parse_scip_json("data/curve_top.json").expect("Failed to parse SCIP JSON");
-    let (call_graph, symbol_to_display_name) = build_call_graph(&scip_data);
-    convert_to_atoms_with_lines(&call_graph, &symbol_to_display_name)
+    convert_to_atoms_with_lines(&build_call_graph(&scip_data))
 }
 
 /// Build a lookup structure for efficient matching.

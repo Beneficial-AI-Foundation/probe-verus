@@ -1,6 +1,7 @@
 //! Backward compatibility test for the extract command.
 //!
-//! Runs `cmd_extract` on the `verus_micro` fixture and compares the output
+//! Runs `cmd_extract` on the `verus_micro` fixture (a copy of the probe repo's
+//! `probe-extract-check` fixture) and compares the output
 //! against a committed golden JSON file. The test enforces that:
 //! - All fields present in the golden file still exist (Missing = FAIL)
 //! - All values match (ValueMismatch / TypeMismatch = FAIL)
@@ -20,7 +21,7 @@ use probe_extract_check::golden::{compare, DiffKind};
 use probe_extract_check::{check_all, load_extract_json};
 use std::path::{Path, PathBuf};
 
-const VERUS_MICRO: &str = "../probe/probe-extract-check/tests/fixtures/verus_micro";
+const VERUS_MICRO: &str = "tests/fixtures/verus_micro";
 const GOLDEN_FILE: &str = "tests/fixtures/extract_golden/golden.json";
 
 fn copy_dir_recursive(src: &Path, dst: &Path) {
@@ -68,15 +69,6 @@ fn tools_available() -> bool {
 #[test]
 fn extract_backward_compat() {
     let fixture = Path::new(VERUS_MICRO);
-    if !fixture.exists() {
-        eprintln!(
-            "SKIP: verus_micro fixture not found at {}. \
-             Clone the probe repo as a sibling to run this test.",
-            fixture.display()
-        );
-        return;
-    }
-
     if !tools_available() {
         eprintln!(
             "SKIP: verus-analyzer or scip not found. \

@@ -11,27 +11,29 @@ use std::collections::HashSet;
 // These correspond to the `kind` field in SCIP Symbol entries.
 // See: https://sourcegraph.com/docs/code-search/code-navigation/writing_an_indexer#symbolinformation
 
-/// SCIP kind for method definitions (instance methods)
-pub const SCIP_KIND_METHOD: i32 = 6;
-
-/// SCIP kind for function definitions
+/// SCIP kind for free functions
 pub const SCIP_KIND_FUNCTION: i32 = 17;
 
-/// SCIP kind for constructor definitions
-pub const SCIP_KIND_CONSTRUCTOR: i32 = 26;
+/// SCIP kind for methods in an impl block
+pub const SCIP_KIND_METHOD: i32 = 26;
 
-/// SCIP kind for macro definitions (used by verus-analyzer for some functions)
-pub const SCIP_KIND_MACRO: i32 = 80;
+/// SCIP kind for methods declared in a trait, with or without a default body
+pub const SCIP_KIND_TRAIT_METHOD: i32 = 70;
+
+/// SCIP kind for associated functions without a `self` parameter
+pub const SCIP_KIND_STATIC_METHOD: i32 = 80;
+
+/// SCIP kind for trait definitions
+pub const SCIP_KIND_TRAIT: i32 = 53;
 
 /// Check if a SCIP symbol kind represents a function-like entity.
 ///
-/// This includes regular functions, methods, constructors, and some macros
-/// that verus-analyzer uses to represent certain function types.
+/// Values follow the `Kind` enum in `scip.proto`.
 #[inline]
 pub fn is_function_like_kind(kind: i32) -> bool {
     matches!(
         kind,
-        SCIP_KIND_METHOD | SCIP_KIND_FUNCTION | SCIP_KIND_CONSTRUCTOR | SCIP_KIND_MACRO
+        SCIP_KIND_FUNCTION | SCIP_KIND_METHOD | SCIP_KIND_TRAIT_METHOD | SCIP_KIND_STATIC_METHOD
     )
 }
 
@@ -59,12 +61,6 @@ pub fn is_definition(symbol_roles: Option<i32>) -> bool {
 /// due to differences in how they handle attributes and doc comments.
 /// This tolerance allows fuzzy matching within a reasonable range.
 pub const LINE_TOLERANCE: usize = 5;
-
-/// Number of lines to look back from a definition for type context.
-///
-/// Used when collecting nearby type references to help disambiguate
-/// trait implementations (e.g., `impl From<T> for Container<X>` vs `Container<Y>`).
-pub const TYPE_CONTEXT_LOOKBACK_LINES: i32 = 5;
 
 // =============================================================================
 // Cache Configuration

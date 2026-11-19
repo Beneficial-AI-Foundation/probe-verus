@@ -57,8 +57,12 @@ fn resolve_one(
         .map(|o| (type_name(&o.symbol), o.symbol.as_str()))
         .collect();
 
-    for name in owner_names(spec) {
-        if !referenced.iter().any(|(n, _)| *n == name) {
+    // A name that two owners share (`<Choice as other::Choice>`) needs two
+    // resolved occurrences.
+    let owners = owner_names(spec);
+    for name in &owners {
+        let needed = owners.iter().filter(|n| *n == name).count();
+        if referenced.iter().filter(|(n, _)| n == name).count() < needed {
             return Err(format!("the index does not resolve `{name}`"));
         }
     }
@@ -371,6 +375,16 @@ mod tests {
                 "probe:subtle/2.6.1/".to_string(),
             ])
         );
+    }
+
+    /// A Self type and a trait with the same name need an occurrence each.
+    #[test]
+    fn test_same_name_owners_need_two_occurrences() {
+        let dir = source_dir("\npub assume_specification[ <Choice as other::Choice>::m ](\n");
+        let idx = index(&[(CHOICE, [1, 27, 33])]);
+        let s = spec(&["Choice", "m"], Some("Choice"), Some("other::Choice"));
+        let result = resolve_target_crates(&[s], &idx, dir.path());
+        assert!(result[0].as_ref().unwrap_err().contains("`Choice`"));
     }
 
     /// Two workspace members with the same file: the index root picks one, and

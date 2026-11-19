@@ -239,12 +239,13 @@ def owner_kind(code_name):
     return "trait" if "#" in segment else "standalone"
 
 
-def check(decls, atoms):
+def check(decls, atoms, owner_kinds=True):
     """Match declarations to local atoms. Return (unmatched decls, extra atoms).
 
     An atom matches a declaration with the same file and name, and the same
     owner kind (impl, trait or free function; list-functions does not print the
-    owner itself). The first pass matches atoms whose start line is inside the
+    owner itself). With owner_kinds false (code-names of probe-verus 8.x, where
+    `Type#f()` can be an impl method), the owner kind is not compared. The first pass matches atoms whose start line is inside the
     declaration's span; the second pass matches the rest by span overlap. So
     the order of atoms does not decide which declaration an atom matches.
     """
@@ -262,7 +263,8 @@ def check(decls, atoms):
     def candidates(d):
         kind = d.get("context")
         return [c for c in by_key.get((d["file"], d["name"]), [])
-                if kind not in ("impl", "trait", "standalone") or owner_kind(c[0]) == kind]
+                if not owner_kinds or kind not in ("impl", "trait", "standalone")
+                or owner_kind(c[0]) == kind]
 
     used, matched = set(), set()
     passes = (
@@ -296,7 +298,7 @@ def no_duplicate_keys(pairs):
 def load_fresh(probes_dir, pattern, since, schema):
     """Load the one file matching `pattern` that was written at or after `since`.
 
-    Check its envelope schema and return (file name, data).
+    Check its envelope schema and return (file name, data, tool version).
     """
     files = [f for f in probes_dir.glob(pattern) if f.stat().st_mtime >= since]
     if len(files) != 1:
@@ -304,16 +306,19 @@ def load_fresh(probes_dir, pattern, since, schema):
     env = json.loads(files[0].read_text(), object_pairs_hook=no_duplicate_keys)
     if env.get("schema") != schema or not isinstance(env.get("data"), dict):
         raise ValueError(f"{files[0].name}: expected schema {schema} with a data object")
-    return files[0].name, env["data"]
+    return files[0].name, env["data"], (env.get("tool") or {}).get("version", "")
 
 
 def check_extract(probes_dir, since, verify):
-    """Check the extract summary and the unified output. Return the atoms data.
+    """Check the extract summary and the unified output.
+
+    Return the atoms file name, the atoms data, the extract status and the
+    probe-verus version that wrote the atoms.
 
     extract can exit 0 when it skips verification (no cargo-verus) or cannot
     write the unified output, so the exit code alone is not enough.
     """
-    summary_file, summary = load_fresh(probes_dir, "*_extract_summary.json", since,
+    summary_file, summary, _ = load_fresh(probes_dir, "*_extract_summary.json", since,
                                        "probe-verus/extract-summary")
     status = summary.get("status")
     if status not in ("success", "verification_failed"):
@@ -323,8 +328,9 @@ def check_extract(probes_dir, since, verify):
             raise ValueError(f"extract step {step} did not run or failed; see extract.log")
     unified = summary_file.removesuffix("_extract_summary.json") + ".json"
     load_fresh(probes_dir, unified, since, "probe-verus/extract")
-    atoms_file, atoms = load_fresh(probes_dir, "*_atoms.json", since, "probe-verus/atoms")
-    return atoms_file, atoms, status
+    atoms_file, atoms, version = load_fresh(probes_dir, "*_atoms.json", since,
+                                            "probe-verus/atoms")
+    return atoms_file, atoms, status, version
 
 
 def load_known(path, project_names):
@@ -403,9 +409,10 @@ def run_project(project, args, env_base, out_dir, result):
         used = f"Using cargo-verus: {cargo_verus}"
         if used not in (pdir / "extract.log").read_text():
             raise RuntimeError(f"extract did not use {cargo_verus}; see extract.log")
-    result["atoms_file"], atoms, result["extract_status"] = check_extract(probes, started, verify)
+    result["atoms_file"], atoms, result["extract_status"], version = check_extract(
+        probes, started, verify)
     if verify:
-        _, unified = load_fresh(probes, result["atoms_file"].removesuffix("_atoms.json") + ".json",
+        _, unified, _ = load_fresh(probes, result["atoms_file"].removesuffix("_atoms.json") + ".json",
                                 started, "probe-verus/extract")
         statuses = collections.Counter(
             a.get("verification-status") or ("untracked" if a.get("untracked") else "none")
@@ -413,7 +420,8 @@ def run_project(project, args, env_base, out_dir, result):
         result["verification"] = dict(sorted(statuses.items()))
 
     local = {k: a for k, a in atoms.items() if a.get("code-path")}
-    unmatched, extra = check(decls, atoms)
+    major = re.match(r"\d+", version)
+    unmatched, extra = check(decls, atoms, owner_kinds=not major or int(major[0]) >= 9)
     result.update({
         "declarations": len(decls),
         "local_atoms": len(local),

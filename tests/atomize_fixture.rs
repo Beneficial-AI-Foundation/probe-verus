@@ -31,9 +31,13 @@ fn tools_available() -> bool {
     resolve_tool(Tool::VerusAnalyzer).is_ok() && resolve_tool(Tool::Scip).is_ok()
 }
 
+/// Atoms by code-name: (start line, dependencies).
+type Atoms = BTreeMap<String, (u64, Vec<String>)>;
+
 /// Local atoms by code-name without the package prefix: (start line,
-/// dependencies), and the envelope `indexer` field.
-fn atomize_fixture() -> (BTreeMap<String, (u64, Vec<String>)>, serde_json::Value) {
+/// dependencies), the envelope `indexer` field, and the indexer that the SCIP
+/// cache records (`metadata.tool_info` of the index, `analyzer` of the key).
+fn atomize_fixture() -> (Atoms, serde_json::Value, serde_json::Value) {
     let dir = tempfile::tempdir().unwrap();
     copy_dir(Path::new(FIXTURE), dir.path());
     let output = dir.path().join("atoms.json");
@@ -70,7 +74,18 @@ fn atomize_fixture() -> (BTreeMap<String, (u64, Vec<String>)>, serde_json::Value
             )
         })
         .collect();
-    (atoms, json["indexer"].clone())
+    let data = dir.path().join("data");
+    let scip = probe_verus::parse_scip_json(data.join("index.scip.json").to_str().unwrap())
+        .expect("failed to parse the SCIP index");
+    let key: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(data.join("index.scip.key.json")).unwrap())
+            .unwrap();
+    let cached = serde_json::json!({
+        "name": scip.metadata.tool_info.name,
+        "version": scip.metadata.tool_info.version,
+        "selection": key["analyzer"],
+    });
+    (atoms, json["indexer"].clone(), cached)
 }
 
 #[test]
@@ -79,9 +94,11 @@ fn atomize_fixture_owners_and_edges() {
         eprintln!("SKIP: verus-analyzer or scip not found. Run `probe-verus setup`.");
         return;
     }
-    let (atoms, indexer) = atomize_fixture();
+    let (atoms, indexer, cached) = atomize_fixture();
 
-    // The envelope records the producer of the index and the selected analyzer.
+    // The envelope records the producer of the index and the selected analyzer,
+    // exactly as the SCIP index and the cache key record them.
+    assert_eq!(indexer, cached);
     assert_eq!(indexer["name"], "rust-analyzer", "indexer: {indexer}");
     assert!(
         indexer["version"]

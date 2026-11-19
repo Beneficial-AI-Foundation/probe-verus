@@ -14,9 +14,10 @@
 use std::path::{Path, PathBuf};
 
 /// The release used when neither the environment nor the project selects one.
-/// It is the oldest verus-analyzer whose SCIP symbols match rust-analyzer's
-/// (`impl#[SelfType][Trait]method()`). A newer release becomes the default
-/// only in a probe-verus release, after the corpus check passes with it.
+/// It must be 2026-08-22 or later, the first release whose SCIP symbols match
+/// rust-analyzer's (`impl#[SelfType][Trait]method()`). A newer release becomes
+/// the default only in a probe-verus release, after the corpus check passes
+/// with it.
 pub const DEFAULT_VERUS_ANALYZER_VERSION: &str = "2026-09-25";
 
 /// Environment variable that overrides every other selection.
@@ -190,8 +191,10 @@ fn read_pin(manifest: &Path, section: &str) -> Result<Option<String>, String> {
 
 /// The workspace manifest of the package in `package_dir`: its own manifest
 /// if that has a `[workspace]` table, the manifest that `package.workspace`
-/// names, or else the nearest ancestor manifest with a `[workspace]` table.
-/// Unlike Cargo, this does not check the ancestor's member list.
+/// names, or else the nearest ancestor manifest with a `[workspace]` table
+/// that does not exclude the package. As in Cargo, an ancestor excludes the
+/// package if a `workspace.exclude` entry contains it and no
+/// `workspace.members` entry does.
 pub fn workspace_manifest(package_dir: &Path) -> Option<PathBuf> {
     let own = package_dir.join("Cargo.toml");
     let table = read_manifest(&own).ok().flatten();
@@ -210,12 +213,26 @@ pub fn workspace_manifest(package_dir: &Path) -> Option<PathBuf> {
     let package_dir = std::fs::canonicalize(package_dir).unwrap_or(package_dir.to_path_buf());
     package_dir.ancestors().skip(1).find_map(|dir| {
         let manifest = dir.join("Cargo.toml");
-        read_manifest(&manifest)
-            .ok()
-            .flatten()
-            .filter(|t| t.contains_key("workspace"))
-            .map(|_| manifest)
+        let table = read_manifest(&manifest).ok().flatten()?;
+        let workspace = table.get("workspace")?;
+        (!excludes(workspace, dir, &package_dir)).then_some(manifest)
     })
+}
+
+/// Whether the `[workspace]` table of the manifest in `root` excludes the
+/// package in `package_dir`, by Cargo's rule: an `exclude` entry contains it
+/// and no `members` entry does (entries are compared as path prefixes).
+fn excludes(workspace: &toml::Value, root: &Path, package_dir: &Path) -> bool {
+    let contains = |key: &str| {
+        workspace
+            .get(key)
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|v| v.as_str())
+            .any(|entry| package_dir.starts_with(root.join(entry)))
+    };
+    contains("exclude") && !contains("members")
 }
 
 /// Guards tests that read or change `PROBE_VERUS_ANALYZER_VERSION`.
@@ -337,6 +354,30 @@ mod tests {
             "[package]\nname = \"p\"\n[package.metadata.probe-verus]\nverus-analyzer = 3\n",
         );
         assert!(select_no_env(tmp.path()).is_err());
+    }
+
+    #[test]
+    fn excluded_package_skips_the_ancestor_workspace() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(tmp.path()).unwrap();
+        write(
+            &root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"a\"]\nexclude = [\"fuzz\"]\n\
+             [workspace.metadata.probe-verus]\nverus-analyzer = \"2026-10-01\"\n",
+        );
+        write(&root.join("a/Cargo.toml"), "[package]\nname = \"a\"\n");
+        write(
+            &root.join("fuzz/Cargo.toml"),
+            "[package]\nname = \"fuzz\"\n",
+        );
+
+        assert_eq!(
+            workspace_manifest(&root.join("a")),
+            Some(root.join("Cargo.toml"))
+        );
+        assert_eq!(workspace_manifest(&root.join("fuzz")), None);
+        let s = select_no_env(&root.join("fuzz")).unwrap();
+        assert_eq!(s.source, SelectionSource::Default);
     }
 
     #[test]

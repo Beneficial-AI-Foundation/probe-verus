@@ -153,7 +153,12 @@ runs:
         if [ -n "${{ steps.versions.outputs.rust_version }}" ]; then
           SKIP_TC="--skip-toolchain"
         fi
-        probe-verus setup --from-project "${{ inputs.project-path }}" $SKIP_TC
+        # Select the analyzer of the same package that extract uses (-p)
+        PKG_ARG=""
+        if [ -n "${{ inputs.package }}" ]; then
+          PKG_ARG="-p ${{ inputs.package }}"
+        fi
+        probe-verus setup --from-project "${{ inputs.project-path }}" $PKG_ARG $SKIP_TC
 
     # Step 6: Run probe-verus extract (unified pipeline)
     - name: Run probe-verus extract

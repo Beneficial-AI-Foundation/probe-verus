@@ -9,9 +9,16 @@
 //! (~/.probe-verus/tools/), then PATH. If `auto_install` is enabled, missing
 //! tools are downloaded automatically. The cache is reused only if its
 //! [`CacheKey`] matches the current run and no source file is newer.
+//!
+//! A [`ScipCache`] takes an exclusive lock on `data/index.scip.lock` at its
+//! first use and holds it until it is dropped. Two runs on one project then
+//! cannot mix one run's index with the other run's key, and a run does not
+//! read an index that another run replaces.
 
 use crate::analyzer_selection;
-use crate::constants::{DATA_DIR, SCIP_INDEX_FILE, SCIP_INDEX_JSON_FILE, SCIP_INDEX_KEY_FILE};
+use crate::constants::{
+    DATA_DIR, SCIP_INDEX_FILE, SCIP_INDEX_JSON_FILE, SCIP_INDEX_KEY_FILE, SCIP_INDEX_LOCK_FILE,
+};
 use crate::tool_manager::{self, Tool};
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader};
@@ -105,6 +112,8 @@ pub enum ScipError {
     MoveFileFailed(std::io::Error),
     /// Failed to write JSON file
     WriteJsonFailed(std::io::Error),
+    /// Failed to lock the cache
+    LockFailed(std::io::Error),
 }
 
 impl std::fmt::Display for ScipError {
@@ -141,6 +150,9 @@ impl std::fmt::Display for ScipError {
             ScipError::WriteJsonFailed(e) => {
                 write!(f, "failed to write SCIP JSON: {}", e)
             }
+            ScipError::LockFailed(e) => {
+                write!(f, "failed to lock the SCIP cache: {}", e)
+            }
         }
     }
 }
@@ -160,7 +172,7 @@ pub struct CacheKey {
     /// `rustc -vV` in the project directory.
     pub rustc: String,
     /// SHA-256 of the package and workspace `Cargo.toml` and of `Cargo.lock`,
-    /// by path. A missing file has no entry.
+    /// by canonical path. A missing file has no entry.
     pub manifests: BTreeMap<String, String>,
 }
 
@@ -228,6 +240,7 @@ fn write_temp(path: &Path, contents: &[u8]) -> std::io::Result<PathBuf> {
 /// - `index.scip`: Binary SCIP index from verus-analyzer or rust-analyzer
 /// - `index.scip.json`: JSON representation for parsing
 /// - `index.scip.key.json`: the [`CacheKey`] of the index
+/// - `index.scip.lock`: the lock that a `ScipCache` holds while it exists
 pub struct ScipCache {
     project_path: PathBuf,
     analyzer: Analyzer,
@@ -236,6 +249,8 @@ pub struct ScipCache {
     analyzer_path: Option<PathBuf>,
     /// The key of the current run (set by `current_key`)
     key: Option<CacheKey>,
+    /// The locked lock file (set by `lock`), released on drop
+    lock: Option<std::fs::File>,
 }
 
 impl ScipCache {
@@ -252,6 +267,7 @@ impl ScipCache {
             auto_install: false,
             analyzer_path: None,
             key: None,
+            lock: None,
         }
     }
 
@@ -281,6 +297,40 @@ impl ScipCache {
         self.data_dir().join(SCIP_INDEX_KEY_FILE)
     }
 
+    /// Path of the lock file.
+    pub fn lock_path(&self) -> PathBuf {
+        self.data_dir().join(SCIP_INDEX_LOCK_FILE)
+    }
+
+    /// Take the exclusive cache lock, once. It is held until `self` is
+    /// dropped, so it also covers reads of the index after `state` or
+    /// `generate` returns. If another run holds it, wait.
+    fn lock(&mut self) -> Result<(), ScipError> {
+        if self.lock.is_some() {
+            return Ok(());
+        }
+        std::fs::create_dir_all(self.data_dir()).map_err(ScipError::CreateDirFailed)?;
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(self.lock_path())
+            .map_err(ScipError::LockFailed)?;
+        match file.try_lock() {
+            Ok(()) => {}
+            Err(std::fs::TryLockError::WouldBlock) => {
+                eprintln!(
+                    "  Waiting for another probe-verus run to release {}",
+                    self.lock_path().display()
+                );
+                file.lock().map_err(ScipError::LockFailed)?;
+            }
+            Err(std::fs::TryLockError::Error(e)) => return Err(ScipError::LockFailed(e)),
+        }
+        self.lock = Some(file);
+        Ok(())
+    }
+
     /// Path of the analyzer's stderr from the last index generation.
     pub fn stderr_path(&self) -> PathBuf {
         self.data_dir().join("index.scip.stderr")
@@ -305,10 +355,12 @@ impl ScipCache {
         let _ = std::fs::remove_file(self.json_path());
     }
 
-    /// Whether the cached index can be reused. This resolves the analyzer
+    /// Whether the cached index can be reused. This takes the cache lock
+    /// and resolves the analyzer
     /// (and installs it with auto-install), because the key holds the hash of
     /// its binary.
     pub fn state(&mut self) -> Result<CacheState, ScipError> {
+        self.lock()?;
         let json_path = self.json_path();
         if !json_path.exists() {
             return Ok(CacheState::Missing);
@@ -362,6 +414,7 @@ impl ScipCache {
 
     /// Generate the index, its JSON and its key, and return the JSON path.
     pub fn generate(&mut self, verbose: bool) -> Result<PathBuf, ScipError> {
+        self.lock()?;
         let key = self.current_key()?.clone();
         let scip_bin = tool_manager::resolve_or_install(Tool::Scip, self.auto_install)
             .map_err(|e| ScipError::ScipCliNotFound(e.to_string()))?;
@@ -477,7 +530,13 @@ impl ScipCache {
             let manifests = [Some(package_manifest), workspace_manifest, Some(lockfile)]
                 .into_iter()
                 .flatten()
-                .filter_map(|p| Some((p.display().to_string(), sha256_file(&p)?)))
+                .filter_map(|p| {
+                    let hash = sha256_file(&p)?;
+                    // Canonical, so that `.` and an absolute project path give
+                    // the same key.
+                    let p = std::fs::canonicalize(&p).unwrap_or(p);
+                    Some((p.display().to_string(), hash))
+                })
                 .collect();
             self.key = Some(CacheKey {
                 analyzer,
@@ -771,12 +830,15 @@ mod tests {
 
         // A new analyzer binary or manifest outdates it.
         std::fs::write(&bin, "v2").unwrap();
+        // Each cache holds the lock until it is dropped.
+        drop(cache);
         let mut cache = cache_with_binary(root, &bin);
         assert!(
             matches!(cache.state().unwrap(), CacheState::Outdated(r) if r.contains("analyzer binary"))
         );
         std::fs::write(&bin, "v1").unwrap();
         std::fs::write(root.join("Cargo.lock"), "lock").unwrap();
+        drop(cache);
         let mut cache = cache_with_binary(root, &bin);
         assert!(
             matches!(cache.state().unwrap(), CacheState::Outdated(r) if r.contains("Cargo.lock"))
@@ -785,6 +847,44 @@ mod tests {
         // discard removes the key too.
         cache.discard();
         assert!(!cache.key_path().exists());
+    }
+
+    #[test]
+    fn test_cache_lock_is_exclusive_until_drop() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join("Cargo.toml"), "[package]\nname = \"p\"\n").unwrap();
+        let bin = root.join("analyzer-bin");
+        std::fs::write(&bin, "v1").unwrap();
+
+        let mut cache = cache_with_binary(root, &bin);
+        cache.state().unwrap();
+        let other = std::fs::File::open(cache.lock_path()).unwrap();
+        assert!(matches!(
+            other.try_lock(),
+            Err(std::fs::TryLockError::WouldBlock)
+        ));
+        drop(cache);
+        other.try_lock().unwrap();
+    }
+
+    #[test]
+    fn test_cache_key_ignores_path_spelling() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join("Cargo.toml"), "[package]\nname = \"p\"\n").unwrap();
+        std::fs::write(root.join("Cargo.lock"), "lock").unwrap();
+        std::fs::create_dir(root.join("sub")).unwrap();
+        let bin = root.join("analyzer-bin");
+        std::fs::write(&bin, "v1").unwrap();
+
+        let plain = cache_with_binary(root, &bin).current_key().unwrap().clone();
+        let other = cache_with_binary(&root.join("sub/.."), &bin)
+            .current_key()
+            .unwrap()
+            .clone();
+        assert_eq!(plain.manifests.len(), 2);
+        assert_eq!(plain.manifests, other.manifests);
     }
 
     #[test]

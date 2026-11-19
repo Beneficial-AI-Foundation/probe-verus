@@ -293,6 +293,7 @@ probe-verus setup [OPTIONS]
 |------|-------------|
 | `--status` | Show installation status instead of installing. With `--from-project`, show the verus-analyzer that the project selects |
 | `--from-project <PATH>` | Read target project's Cargo.toml to determine the Verus version and the verus-analyzer pin |
+| `-p, --package <NAME>` | Workspace member whose verus-analyzer pin applies, as in `extract -p` (requires `--from-project`) |
 | `--detect-version` | Print detected Verus version without installing (requires `--from-project`) |
 | `--detect-toolchain` | Print the Rust toolchain channel required by the resolved Verus version |
 | `--skip-toolchain` | Skip automatic Rust toolchain installation via rustup |
@@ -313,9 +314,13 @@ A value is a release tag or `path`, which uses the `verus-analyzer` on `PATH`.
 Any other value, including `latest`, causes an error. `setup`, `atomize` and
 `extract` use the same selection. If the selected release is not installed,
 `atomize` and `extract` stop, unless you pass `--auto-install`. They never use
-another installed release or `PATH` instead. The workspace manifest is the
-package manifest if it has `[workspace]`, the manifest that `package.workspace`
-names, or else the nearest parent `Cargo.toml` with `[workspace]`.
+another installed release or `PATH` instead.
+
+The workspace manifest is found in this order:
+1. A package manifest with `[workspace]`.
+2. The manifest that `package.workspace` names.
+3. The nearest parent `Cargo.toml` with `[workspace]`. A parent whose
+   `exclude` list contains the package is skipped, as in Cargo.
 
 Version resolution for scip and Verus uses, in order:
 1. Environment variable overrides (`PROBE_SCIP_VERSION`, `PROBE_VERUS_VERSION`)

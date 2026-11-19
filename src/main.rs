@@ -54,7 +54,7 @@ enum Commands {
         #[arg(long)]
         allow_duplicates: bool,
 
-        /// Automatically download missing external tools (verus-analyzer, scip) without prompting
+        /// Download missing external tools: the selected verus-analyzer release, and scip
         #[arg(long)]
         auto_install: bool,
 
@@ -295,6 +295,11 @@ enum Commands {
         #[arg(long)]
         from_project: Option<PathBuf>,
 
+        /// Package name for workspace projects, as in `extract -p`. Selects
+        /// the verus-analyzer pinned for that member (requires --from-project)
+        #[arg(short = 'p', long)]
+        package: Option<String>,
+
         /// Print detected Verus version without installing (requires --from-project)
         #[arg(long)]
         detect_version: bool,
@@ -354,7 +359,7 @@ enum Commands {
         #[arg(long)]
         allow_duplicates: bool,
 
-        /// Automatically download missing external tools without prompting
+        /// Download missing external tools: the selected verus-analyzer release, and scip
         #[arg(long)]
         auto_install: bool,
 
@@ -548,6 +553,7 @@ fn main() {
         Commands::Setup {
             status,
             from_project,
+            package,
             detect_version,
             detect_toolchain,
             skip_toolchain,
@@ -556,6 +562,7 @@ fn main() {
             cmd_setup(
                 status,
                 from_project,
+                package,
                 detect_version,
                 detect_toolchain,
                 skip_toolchain,

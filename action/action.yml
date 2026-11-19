@@ -84,8 +84,10 @@ runs:
       shell: bash
       env:
         GITHUB_TOKEN: ${{ inputs.token }}
+        PROJECT_PATH: ${{ inputs.project-path }}
+        INPUT_VERUS_VERSION: ${{ inputs.verus-version }}
+        INPUT_RUST_VERSION: ${{ inputs.rust-version }}
       run: |
-        PROJECT_PATH="${{ inputs.project-path }}"
         CARGO_TOML="$PROJECT_PATH/Cargo.toml"
 
         if [ ! -f "$CARGO_TOML" ]; then
@@ -94,7 +96,7 @@ runs:
         fi
 
         # Detect Verus version: explicit input or probe-verus auto-detection
-        VERUS_VERSION="${{ inputs.verus-version }}"
+        VERUS_VERSION="$INPUT_VERUS_VERSION"
         if [ -z "$VERUS_VERSION" ]; then
           VERUS_VERSION=$(PROBE_VERUS_VERSION="" probe-verus setup --from-project "$PROJECT_PATH" --detect-version 2>/dev/null) || true
           if [ -n "$VERUS_VERSION" ]; then
@@ -106,7 +108,7 @@ runs:
         fi
 
         # Detect Rust toolchain: explicit input or from Verus release's rust-toolchain.toml
-        RUST_VERSION="${{ inputs.rust-version }}"
+        RUST_VERSION="$INPUT_RUST_VERSION"
         if [ -z "$RUST_VERSION" ]; then
           RUST_VERSION=$(PROBE_VERUS_VERSION="$VERUS_VERSION" probe-verus setup --detect-toolchain 2>/dev/null) || true
           if [ -n "$RUST_VERSION" ]; then
@@ -147,21 +149,24 @@ runs:
       env:
         GITHUB_TOKEN: ${{ inputs.token }}
         PROBE_VERUS_VERSION: ${{ steps.versions.outputs.verus_version }}
+        PROJECT_PATH: ${{ inputs.project-path }}
+        RUST_VERSION: ${{ steps.versions.outputs.rust_version }}
       run: |
+        ARGS=(--from-project "$PROJECT_PATH")
         # If toolchain was already installed by dtolnay/rust-toolchain, skip rustup step
-        SKIP_TC=""
-        if [ -n "${{ steps.versions.outputs.rust_version }}" ]; then
-          SKIP_TC="--skip-toolchain"
+        if [ -n "$RUST_VERSION" ]; then
+          ARGS+=(--skip-toolchain)
         fi
-        probe-verus setup --from-project "${{ inputs.project-path }}" $SKIP_TC
+        probe-verus setup "${ARGS[@]}"
 
     # Step 6: Run probe-verus atomize
     - name: Run probe-verus atomize
       id: atomize
       shell: bash
+      env:
+        PROJECT_PATH: ${{ inputs.project-path }}
+        OUTPUT_DIR: ${{ inputs.output-dir }}
       run: |
-        PROJECT_PATH="${{ inputs.project-path }}"
-        OUTPUT_DIR="${{ inputs.output-dir }}"
         ATOMS_FILE="$OUTPUT_DIR/atoms.json"
 
         mkdir -p "$OUTPUT_DIR"
@@ -183,17 +188,18 @@ runs:
     - name: Run probe-verus run-verus
       id: verify
       shell: bash
+      # Inputs go through the environment, so that Bash never parses them as code.
+      env:
+        PROJECT_PATH: ${{ inputs.project-path }}
+        OUTPUT_DIR: ${{ inputs.output-dir }}
+        PACKAGE: ${{ inputs.package }}
+        VERUS_ARGS: ${{ inputs.verus-args }}
       run: |
-        PROJECT_PATH="${{ inputs.project-path }}"
-        OUTPUT_DIR="${{ inputs.output-dir }}"
         RESULTS_FILE="$OUTPUT_DIR/results.json"
         ATOMS_FILE="$OUTPUT_DIR/atoms.json"
-        PACKAGE="${{ inputs.package }}"
 
         echo "=== Running probe-verus run-verus ==="
         echo "Project: $PROJECT_PATH"
-
-        VERUS_ARGS="${{ inputs.verus-args }}"
 
         CMD="probe-verus run-verus $PROJECT_PATH -o $RESULTS_FILE -a $ATOMS_FILE"
         if [ -n "$PACKAGE" ]; then

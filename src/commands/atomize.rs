@@ -5,7 +5,7 @@ use crate::{
     convert_to_atoms_with_parsed_spans, find_duplicate_code_names, is_library_crate,
     metadata::{gather_metadata, get_default_output_path, wrap_in_envelope, AtomizeInternalConfig},
     parse_scip_json, public_api, resolve_package_root, resolve_workspace_root,
-    scip_cache::{Analyzer, ScipCache},
+    scip_cache::{Analyzer, CacheState, ScipCache},
     validate_index, verus_dependencies, AtomWithLines, IndexError, ScipIndex,
 };
 use std::collections::BTreeMap;
@@ -25,14 +25,6 @@ pub fn cmd_atomize(
     auto_install: bool,
     with_public_api: bool,
 ) -> Result<(), String> {
-    if auto_install {
-        eprintln!(
-            "Warning: --auto-install is deprecated and will be removed in a future major version."
-        );
-        eprintln!("  Use instead: probe-verus setup --from-project <project-path>");
-        eprintln!();
-    }
-
     println!("═══════════════════════════════════════════════════════════");
     println!("  Probe Verus - Atomize: Generate Call Graph Data");
     println!("═══════════════════════════════════════════════════════════");
@@ -240,7 +232,8 @@ fn check_index(cache: &ScipCache, scip_index: &ScipIndex, pkg_root: &Path) -> Re
 }
 
 fn get_scip_json(cache: &mut ScipCache, regenerate: bool) -> Result<PathBuf, String> {
-    if cache.has_current_cached_json() && !regenerate {
+    let state = cache.state().map_err(|e| e.to_string())?;
+    if state == CacheState::Current && !regenerate {
         println!(
             "  ✓ Found existing SCIP JSON at {}",
             cache.json_path().display()
@@ -251,13 +244,15 @@ fn get_scip_json(cache: &mut ScipCache, regenerate: bool) -> Result<PathBuf, Str
     }
 
     // Need to generate
-    let reason = cache.generation_reason(regenerate);
+    let reason = if regenerate {
+        "(regeneration requested)".to_string()
+    } else {
+        state.reason()
+    };
     println!("Generating SCIP index {}...", reason);
     println!("  (This may take a while for large projects)");
 
-    let path = cache
-        .get_or_generate(regenerate, true)
-        .map_err(|e| e.to_string())?;
+    let path = cache.generate(true).map_err(|e| e.to_string())?;
     println!();
     Ok(path)
 }

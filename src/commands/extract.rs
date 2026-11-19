@@ -104,14 +104,6 @@ pub fn cmd_extract(
     with_public_api: bool,
     skip_enrich: bool,
 ) -> Result<(), String> {
-    if auto_install {
-        eprintln!(
-            "Warning: --auto-install is deprecated and will be removed in a future major version."
-        );
-        eprintln!("  Use instead: probe-verus setup --from-project <project-path>");
-        eprintln!();
-    }
-
     if !project_path.exists() {
         return Err(format!(
             "Project path does not exist: {}",
@@ -2222,35 +2214,25 @@ mod tests {
         files
     }
 
-    /// When atomize rejects a legacy SCIP index, extract stops: specs and unified
-    /// output from an earlier run are not regenerated from the stale atoms file.
+    /// When atomize fails, extract stops: specs and unified output from an
+    /// earlier run are not regenerated from the stale atoms file. An invalid
+    /// analyzer pin makes atomize fail without running any tool.
     #[test]
     fn test_extract_stops_when_atomize_fails() {
         let dir = TempDir::new().unwrap();
         let project = dir.path();
         std::fs::write(
             project.join("Cargo.toml"),
-            "[package]\nname = \"legacy\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+            "[package]\nname = \"legacy\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
+             [package.metadata.probe-verus]\nverus-analyzer = \"latest\"\n",
         )
         .unwrap();
         std::fs::create_dir_all(project.join("src")).unwrap();
         std::fs::write(project.join("src/lib.rs"), "pub fn f() {}\n").unwrap();
-
-        // A cached index from a pre-2026-08-22 analyzer, newer than the sources.
-        std::fs::create_dir_all(project.join("data")).unwrap();
-        let legacy_index = serde_json::json!({
-            "metadata": {
-                "tool_info": {"name": "rust-analyzer", "version": "0.3.264-standalone"},
-                "project_root": "",
-                "text_document_encoding": 0
-            },
-            "documents": []
-        });
-        std::fs::write(
-            project.join("data/index.scip.json"),
-            legacy_index.to_string(),
-        )
-        .unwrap();
+        let _guard = crate::analyzer_selection::ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        unsafe { std::env::remove_var(crate::analyzer_selection::VERUS_ANALYZER_VERSION_ENV) };
 
         // Outputs of an earlier run.
         let metadata = gather_metadata(project);

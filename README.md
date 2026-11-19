@@ -27,7 +27,7 @@ probe-verus can analyze any Rust project that uses [Verus](https://github.com/ve
 |-------------|--------|
 | **Cargo project** | A `Cargo.toml` must exist at the project root. Workspace projects are supported via the `--package` flag |
 | **Verus source conventions** | For spec extraction and verification, the project should use Verus idioms: `verus!{}` blocks, `spec fn`, `proof fn`, `requires`/`ensures` clauses |
-| **Buildable by verus-analyzer** | The `atomize` and `extract` steps run `verus-analyzer scip .` to produce a SCIP index. They need verus-analyzer 2026-08-22 or later. If verus-analyzer cannot analyze the project (e.g., unresolved dependencies), SCIP generation fails, or probe-verus rejects the index because it has no references to the project's Verus crates |
+| **Buildable by verus-analyzer** | The `atomize` and `extract` steps run `verus-analyzer scip .` to produce a SCIP index. They need verus-analyzer 2026-08-22 or later. probe-verus uses the release 2026-09-25 unless the project pins another one in `[package.metadata.probe-verus]` or `[workspace.metadata.probe-verus]` (`verus-analyzer = "<tag>"`, see [docs/USAGE.md](docs/USAGE.md#setup)). If verus-analyzer cannot analyze the project (e.g., unresolved dependencies), SCIP generation fails, or probe-verus rejects the index because it has no references to the project's Verus crates |
 | **Buildable by cargo verus** | Verification (`run-verus` / `extract`) invokes `cargo verus`. If `cargo verus` cannot build the project, verification results will be incomplete — but `extract` gracefully skips verification and still produces atoms and specs |
 
 ### Plain Rust projects

@@ -13,8 +13,8 @@ on:
   workflow_dispatch:
     inputs:
       analyzer-version:
-        description: "verus-analyzer release to run"
-        default: "2026-09-25"
+        description: "verus-analyzer release to run (empty: the probe-verus default)"
+        default: ""
       gate:
         description: "Fail on unmatched declarations not in corpus/known-limitations.toml"
         type: boolean
@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
-      ANALYZER_VERSION: ${{ inputs.analyzer-version || '2026-09-25' }}
+      ANALYZER_VERSION: ${{ inputs.analyzer-version }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -59,8 +59,7 @@ jobs:
         run: |
           python3 scripts/corpus/run.py \
             --probe-verus target/release/probe-verus \
-            --analyzer-version "$ANALYZER_VERSION" \
-            --scip /usr/local/bin/scip \
+            ${ANALYZER_VERSION:+--analyzer-version "$ANALYZER_VERSION"} \
             --out corpus-out \
             ${{ inputs.gate && '--gate' || '' }}
 
@@ -77,7 +76,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: corpus-${{ env.ANALYZER_VERSION }}
+          name: corpus-${{ env.ANALYZER_VERSION || 'default' }}
           path: |
             corpus-out/report.*
             corpus-out/*/*.log

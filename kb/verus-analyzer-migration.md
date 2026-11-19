@@ -209,7 +209,8 @@ analyzer.
    `scripts/corpus/run.py`, `corpus/`).
 1. PR #50 reworked: one symbol path, index validation, the fixes of
    section 3. The corpus check must pass.
-2. Analyzer selection and SCIP cache identity.
+2. Analyzer selection and SCIP cache identity (done: `src/analyzer_selection.rs`,
+   `ScipCache` key in `data/index.scip.key.json`).
 3. Provenance field, after the KB change.
 
 Not in this work:
@@ -233,10 +234,11 @@ python3 scripts/corpus/run.py --probe-verus target/release/probe-verus \
 
 Options:
 
-- `--analyzer-version 2026-09-25` runs that verus-analyzer release in a
-  separate `HOME` under the work directory, without touching
-  `~/.probe-verus/tools`. `RUSTUP_HOME` and `CARGO_HOME` stay the real
-  ones. Use this until probe-verus supports analyzer pins (PR 2).
+- `--analyzer-version 2026-09-25` runs that verus-analyzer release. The
+  script sets `PROBE_VERUS_ANALYZER_VERSION`, which overrides project pins,
+  and installs the release in `~/.probe-verus/tools/verus-analyzer-<version>/`
+  if it is missing. Without the option, the script uses the default in
+  `src/analyzer_selection.rs`.
 - `--project NAME` runs one project. `--gate` fails on unmatched
   declarations that `corpus/known-limitations.toml` does not list.
   `--baseline report.json` compares unmatched declarations by identity

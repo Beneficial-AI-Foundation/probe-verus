@@ -81,6 +81,12 @@ pub const SCIP_INDEX_FILE: &str = "index.scip";
 /// Filename for the SCIP index JSON
 pub const SCIP_INDEX_JSON_FILE: &str = "index.scip.json";
 
+/// Filename for the key of the cached SCIP index (the inputs that produced it)
+pub const SCIP_INDEX_KEY_FILE: &str = "index.scip.key.json";
+
+/// Lock file that serializes probe-verus runs on one SCIP cache.
+pub const SCIP_INDEX_LOCK_FILE: &str = "index.scip.lock";
+
 // =============================================================================
 // SCIP Symbol Prefixes
 // =============================================================================

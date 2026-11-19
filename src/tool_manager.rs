@@ -3,9 +3,12 @@
 //! Manages verus-analyzer, scip, and verus binaries: resolves their location
 //! (managed directory, then PATH), and downloads them on demand.
 //!
-//! Version resolution order:
-//! 1. Environment variable override (`PROBE_VERUS_ANALYZER_VERSION`, `PROBE_SCIP_VERSION`,
-//!    `PROBE_VERUS_VERSION`)
+//! verus-analyzer follows [`crate::analyzer_selection`]: one selected release,
+//! installed in `verus-analyzer-{version}/`, with no fallback to another
+//! version or to `PATH`.
+//!
+//! Version resolution order for scip and Verus:
+//! 1. Environment variable override (`PROBE_SCIP_VERSION`, `PROBE_VERUS_VERSION`)
 //! 2. For Verus: project Cargo.toml detection (via `detect_verus_version`)
 //! 3. Latest stable release from GitHub API
 //! 4. Known-good fallback version (compiled into the binary)
@@ -15,15 +18,16 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use crate::analyzer_selection::{
+    self, is_safe_version, Selection, SelectionSource, Selector, DEFAULT_VERUS_ANALYZER_VERSION,
+    VERUS_ANALYZER_VERSION_ENV,
+};
 use crate::scip_cache::Analyzer;
 
 // ---------------------------------------------------------------------------
 // Known-good fallback versions (used when API is unreachable)
 // ---------------------------------------------------------------------------
 
-/// Oldest verus-analyzer whose SCIP symbols match rust-analyzer's
-/// (`impl#[SelfType][Trait]method()`); probe-verus code_names rely on this format.
-const VERUS_ANALYZER_FALLBACK_VERSION: &str = "2026-09-25";
 const SCIP_FALLBACK_VERSION: &str = "v0.6.1";
 const VERUS_FALLBACK_VERSION: &str = "0.2026.03.22.5e66329";
 
@@ -31,7 +35,6 @@ const VERUS_FALLBACK_VERSION: &str = "0.2026.03.22.5e66329";
 // Environment variable names for version overrides
 // ---------------------------------------------------------------------------
 
-const VERUS_ANALYZER_VERSION_ENV: &str = "PROBE_VERUS_ANALYZER_VERSION";
 const SCIP_VERSION_ENV: &str = "PROBE_SCIP_VERSION";
 pub const VERUS_VERSION_ENV: &str = "PROBE_VERUS_VERSION";
 
@@ -79,7 +82,7 @@ impl Tool {
 
     fn fallback_version(&self) -> &'static str {
         match self {
-            Tool::VerusAnalyzer | Tool::RustAnalyzer => VERUS_ANALYZER_FALLBACK_VERSION,
+            Tool::VerusAnalyzer | Tool::RustAnalyzer => DEFAULT_VERUS_ANALYZER_VERSION,
             Tool::Scip => SCIP_FALLBACK_VERSION,
             Tool::Verus => VERUS_FALLBACK_VERSION,
         }
@@ -129,6 +132,12 @@ pub enum ToolError {
     DecompressFailed(Tool, String),
     IoError(Tool, io::Error),
     NotInstalled(Tool),
+    /// The selected release is not installed: (version, what selected it).
+    VersionNotInstalled(Tool, String, String),
+    /// The pin `path` is set, but the tool is not on `PATH`.
+    NotOnPath(Tool),
+    /// The version cannot be used as a directory name.
+    UnsafeVersion(Tool, String),
 }
 
 impl std::fmt::Display for ToolError {
@@ -149,6 +158,19 @@ impl std::fmt::Display for ToolError {
             }
             ToolError::IoError(tool, e) => {
                 write!(f, "{tool}: I/O error: {e}")
+            }
+            ToolError::VersionNotInstalled(tool, version, source) => write!(
+                f,
+                "{tool} {version} (selected by {source}) is not installed. Install it with:\n  \
+                 {VERUS_ANALYZER_VERSION_ENV}={version} probe-verus setup\n\
+                 Or pass --auto-install."
+            ),
+            ToolError::NotOnPath(tool) => write!(
+                f,
+                "{tool} is selected from PATH (`path`), but no {tool} is on PATH"
+            ),
+            ToolError::UnsafeVersion(tool, version) => {
+                write!(f, "{tool}: `{version}` is not a valid version")
             }
             ToolError::NotInstalled(tool) => match tool {
                 Tool::RustAnalyzer => write!(
@@ -180,7 +202,53 @@ pub fn tools_dir() -> Option<PathBuf> {
 fn managed_path(tool: &Tool) -> Option<PathBuf> {
     match tool {
         Tool::Verus => managed_verus_binary(),
+        Tool::VerusAnalyzer => None,
         _ => tools_dir().map(|d| d.join(tool.managed_filename())),
+    }
+}
+
+/// `~/.probe-verus/tools/verus-analyzer-{version}/verus-analyzer`, or `None` if
+/// `version` is not a safe directory name.
+pub fn analyzer_binary_for_version(version: &str) -> Option<PathBuf> {
+    if !is_safe_version(version) {
+        return None;
+    }
+    tools_dir().map(|d| {
+        d.join(format!("verus-analyzer-{version}"))
+            .join(Tool::VerusAnalyzer.managed_filename())
+    })
+}
+
+/// Resolve the selected verus-analyzer to an absolute path. A release must be
+/// installed in its versioned directory; `auto_install` downloads it. The
+/// selector `path` uses the `verus-analyzer` on `PATH`. There is no fallback to
+/// another installed version or to `PATH`.
+pub fn resolve_analyzer(selection: &Selection, auto_install: bool) -> Result<PathBuf, ToolError> {
+    let tool = Tool::VerusAnalyzer;
+    match &selection.selector {
+        Selector::Path => find_in_path(tool.binary_name()).ok_or(ToolError::NotOnPath(tool)),
+        Selector::Release(tag) => {
+            let binary = analyzer_binary_for_version(tag)
+                .ok_or_else(|| ToolError::UnsafeVersion(tool, tag.clone()))?;
+            if binary.exists() {
+                return Ok(binary);
+            }
+            if !auto_install {
+                return Err(ToolError::VersionNotInstalled(
+                    tool,
+                    tag.clone(),
+                    selection.source.to_string(),
+                ));
+            }
+            eprintln!("{tool} {tag} not installed, downloading...");
+            download_tool_version(
+                tool,
+                &ResolvedVersion {
+                    tag: tag.clone(),
+                    source: VersionSource::from(&selection.source),
+                },
+            )
+        }
     }
 }
 
@@ -223,8 +291,12 @@ fn managed_verus_binary_any() -> Option<PathBuf> {
     candidates.pop()
 }
 
-/// Return the versioned Verus directory for a specific version.
+/// Return the versioned Verus directory for a specific version, or `None` if
+/// `version` is not a safe directory name.
 fn verus_version_dir(version: &str) -> Option<PathBuf> {
+    if !is_safe_version(version) {
+        return None;
+    }
     tools_dir().map(|d| d.join(format!("verus-{version}")))
 }
 
@@ -313,6 +385,19 @@ pub enum VersionSource {
     CargoToml,
     GitHubLatest,
     Fallback,
+    Default,
+}
+
+impl From<&SelectionSource> for VersionSource {
+    fn from(source: &SelectionSource) -> Self {
+        match source {
+            SelectionSource::Env => VersionSource::EnvVar,
+            SelectionSource::PackagePin(_) | SelectionSource::WorkspacePin(_) => {
+                VersionSource::CargoToml
+            }
+            SelectionSource::Default => VersionSource::Default,
+        }
+    }
 }
 
 impl std::fmt::Display for VersionSource {
@@ -322,6 +407,7 @@ impl std::fmt::Display for VersionSource {
             VersionSource::CargoToml => write!(f, "Cargo.toml"),
             VersionSource::GitHubLatest => write!(f, "latest"),
             VersionSource::Fallback => write!(f, "fallback"),
+            VersionSource::Default => write!(f, "default"),
         }
     }
 }
@@ -335,8 +421,9 @@ pub struct ResolvedVersion {
 
 /// Resolve the version to install for a tool.
 ///
-/// 1. If the env var is set (e.g. `PROBE_VERUS_ANALYZER_VERSION=2026-01-01`), use that.
+/// 1. If the env var is set (e.g. `PROBE_SCIP_VERSION=v0.6.1`), use that.
 /// 2. Otherwise, query GitHub `/releases/latest` for the newest stable tag.
+///    verus-analyzer skips this step: it uses its default release.
 /// 3. If the API call fails (offline, rate-limited), fall back to the compiled-in version.
 pub fn resolve_version(tool: &Tool) -> ResolvedVersion {
     // 1. Env var override
@@ -347,6 +434,13 @@ pub fn resolve_version(tool: &Tool) -> ResolvedVersion {
                 source: VersionSource::EnvVar,
             };
         }
+    }
+
+    if matches!(tool, Tool::VerusAnalyzer | Tool::RustAnalyzer) {
+        return ResolvedVersion {
+            tag: tool.fallback_version().to_string(),
+            source: VersionSource::Default,
+        };
     }
 
     // 2. GitHub API latest
@@ -540,7 +634,15 @@ pub fn download_url(tool: &Tool) -> Result<String, ToolError> {
 
 /// Resolve a tool to an absolute path. Checks managed dir first, then PATH.
 /// Returns `Err(ToolError::NotInstalled)` if not found anywhere.
+/// verus-analyzer uses [`resolve_analyzer`] with the selection without a
+/// project (environment, then default); project pins need [`resolve_analyzer`].
 pub fn resolve_tool(tool: Tool) -> Result<PathBuf, ToolError> {
+    if tool == Tool::VerusAnalyzer {
+        let selection = analyzer_selection::select_without_project()
+            .map_err(|e| ToolError::UnsafeVersion(tool, e))?;
+        return resolve_analyzer(&selection, false);
+    }
+
     // 1. Check managed directory
     if let Some(p) = managed_path(&tool) {
         if p.exists() {
@@ -558,6 +660,11 @@ pub fn resolve_tool(tool: Tool) -> Result<PathBuf, ToolError> {
 
 /// Resolve, or auto-download if `auto_install` is true.
 pub fn resolve_or_install(tool: Tool, auto_install: bool) -> Result<PathBuf, ToolError> {
+    if tool == Tool::VerusAnalyzer {
+        let selection = analyzer_selection::select_without_project()
+            .map_err(|e| ToolError::UnsafeVersion(tool, e))?;
+        return resolve_analyzer(&selection, auto_install);
+    }
     match resolve_tool(tool) {
         Ok(p) => Ok(p),
         Err(ToolError::NotInstalled(_)) if auto_install => {
@@ -585,7 +692,10 @@ fn find_in_path(name: &str) -> Option<PathBuf> {
             if line.is_empty() {
                 None
             } else {
-                Some(PathBuf::from(line))
+                // Absolute, so that a relative PATH entry (`./bin`) names the
+                // same binary from the project directory. Symlinks are kept,
+                // because rustup proxies dispatch on their name.
+                std::path::absolute(&line).ok()
             }
         })
 }
@@ -605,6 +715,9 @@ pub fn download_tool(tool: Tool) -> Result<PathBuf, ToolError> {
 
 /// Download and install a specific version of a tool.
 pub fn download_tool_version(tool: Tool, resolved: &ResolvedVersion) -> Result<PathBuf, ToolError> {
+    if !is_safe_version(&resolved.tag) {
+        return Err(ToolError::UnsafeVersion(tool, resolved.tag.clone()));
+    }
     let platform = current_platform();
     let url = download_url_with_version(&tool, &resolved.tag, &platform)?;
 
@@ -658,21 +771,14 @@ pub fn download_tool_version(tool: Tool, resolved: &ResolvedVersion) -> Result<P
             );
             return Ok(cargo_verus);
         }
-        Tool::VerusAnalyzer if platform.os == "windows" => {
-            let dest_path = dest_dir.join(tool.managed_filename());
-            extract_zip(&compressed_bytes, &dest_path, tool)?;
-            dest_path
-        }
         Tool::VerusAnalyzer => {
-            let dest_path = dest_dir.join(tool.managed_filename());
-            decompress_gzip(&compressed_bytes, &dest_path, tool)?;
+            let dest_path = analyzer_binary_for_version(&resolved.tag)
+                .ok_or_else(|| ToolError::UnsafeVersion(tool, resolved.tag.clone()))?;
+            let dir = dest_path.parent().expect("versioned directory");
+            fs::create_dir_all(dir).map_err(|e| ToolError::IoError(tool, e))?;
             dest_path
         }
-        Tool::Scip => {
-            let dest_path = dest_dir.join(tool.managed_filename());
-            extract_tar_gz(&compressed_bytes, &dest_path, tool)?;
-            dest_path
-        }
+        Tool::Scip => dest_dir.join(tool.managed_filename()),
         Tool::RustAnalyzer => {
             return Err(ToolError::PlatformNotSupported(
                 tool,
@@ -681,15 +787,40 @@ pub fn download_tool_version(tool: Tool, resolved: &ResolvedVersion) -> Result<P
         }
     };
 
-    // Make executable on Unix
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let perms = fs::Permissions::from_mode(0o755);
-        fs::set_permissions(&dest_path, perms).map_err(|e| ToolError::IoError(tool, e))?;
+    // Write to a temporary file in the same directory, then rename it into
+    // place, so that an interrupted install leaves no partial binary.
+    let tmp_path = dest_path.with_file_name(format!(
+        ".{}.tmp-{}",
+        tool.managed_filename(),
+        std::process::id()
+    ));
+    let written = match tool {
+        Tool::VerusAnalyzer if platform.os == "windows" => {
+            extract_zip(&compressed_bytes, &tmp_path, tool)
+        }
+        Tool::VerusAnalyzer => decompress_gzip(&compressed_bytes, &tmp_path, tool),
+        _ => extract_tar_gz(&compressed_bytes, &tmp_path, tool),
+    };
+    let installed = written.and_then(|()| {
+        // Make executable on Unix
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = fs::Permissions::from_mode(0o755);
+            fs::set_permissions(&tmp_path, perms).map_err(|e| ToolError::IoError(tool, e))?;
+        }
+        fs::rename(&tmp_path, &dest_path).map_err(|e| ToolError::IoError(tool, e))
+    });
+    if let Err(e) = installed {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(e);
     }
 
-    eprintln!("Installed {tool} to {}", dest_path.display());
+    eprintln!(
+        "Installed {tool} {} to {}",
+        resolved.tag,
+        dest_path.display()
+    );
     Ok(dest_path)
 }
 
@@ -1017,9 +1148,10 @@ fn print_toolchain_install_status(channel: &str) {
     }
 }
 
-/// Print a human-readable status table for all managed tools.
-pub fn print_status() {
-    let tools = [Tool::VerusAnalyzer, Tool::Scip, Tool::Verus];
+/// Print a human-readable status table for all managed tools. The
+/// verus-analyzer row shows the `analyzer` selection.
+pub fn print_status(analyzer: &Selection) {
+    let tools = [Tool::Scip, Tool::Verus];
     let dir_display = tools_dir()
         .map(|d| d.display().to_string())
         .unwrap_or_else(|| "<unknown>".into());
@@ -1030,6 +1162,26 @@ pub fn print_status() {
         "Tool", "Install version", "Status"
     );
     println!("{}", "-".repeat(78));
+
+    let (status, location) = match resolve_analyzer(analyzer, false) {
+        Ok(p) => (
+            if analyzer.selector == Selector::Path {
+                "PATH"
+            } else {
+                "managed"
+            },
+            p.display().to_string(),
+        ),
+        Err(_) => ("missing", "-".to_string()),
+    };
+    println!(
+        "{:<20} {:<18} {:<10} {}",
+        Tool::VerusAnalyzer.to_string(),
+        analyzer.selector.to_string(),
+        status,
+        location
+    );
+    println!("  (selected by {})", analyzer.source);
 
     for tool in &tools {
         let st = tool_status(*tool);
@@ -1047,7 +1199,10 @@ pub fn print_status() {
         let version_display = format!("{} ({})", st.install_version.tag, st.install_version.source);
         println!(
             "{:<20} {:<18} {:<10} {}",
-            tool, version_display, status, location
+            tool.to_string(),
+            version_display,
+            status,
+            location
         );
     }
 
@@ -1063,7 +1218,9 @@ pub fn print_status() {
     }
 
     println!("Override versions with environment variables:");
-    println!("  {VERUS_ANALYZER_VERSION_ENV}=<tag>  (e.g. 2026-02-03)");
+    println!(
+        "  {VERUS_ANALYZER_VERSION_ENV}=<tag>  (e.g. {DEFAULT_VERUS_ANALYZER_VERSION}, or `path`)"
+    );
     println!("  {SCIP_VERSION_ENV}=<tag>             (e.g. v0.6.1)");
     println!("  {VERUS_VERSION_ENV}=<tag>            (e.g. {VERUS_FALLBACK_VERSION})");
 }
@@ -1077,12 +1234,48 @@ pub fn print_status() {
 ///
 /// For Verus, the check is version-aware: the *required* version (from env var,
 /// Cargo.toml, or fallback) must be installed, not just any version.
-pub fn install_all(force: bool) -> Vec<ToolError> {
+/// verus-analyzer installs the `analyzer` selection; with the selector `path`,
+/// it must be on `PATH`.
+pub fn install_all(force: bool, analyzer: &Selection) -> Vec<ToolError> {
     let tools = [Tool::VerusAnalyzer, Tool::Scip, Tool::Verus];
     let platform = current_platform();
     let mut errors = Vec::new();
 
     for tool in &tools {
+        if *tool == Tool::VerusAnalyzer {
+            let tag = match &analyzer.selector {
+                Selector::Path => {
+                    match resolve_analyzer(analyzer, false) {
+                        Ok(p) => eprintln!("{tool}: using {} (`path`).", p.display()),
+                        Err(e) => errors.push(e),
+                    }
+                    continue;
+                }
+                Selector::Release(tag) => tag,
+            };
+            let installed = analyzer_binary_for_version(tag).is_some_and(|p| p.exists());
+            if installed && !force {
+                eprintln!("{tool}: version {tag} already installed, skipping download.");
+                continue;
+            }
+            if verus_analyzer_target(&platform).is_err() {
+                eprintln!(
+                    "{tool}: not available for {}-{}, skipping. See https://github.com/{}/releases",
+                    platform.os,
+                    platform.arch,
+                    tool.github_repo()
+                );
+                continue;
+            }
+            let resolved = ResolvedVersion {
+                tag: tag.clone(),
+                source: VersionSource::from(&analyzer.source),
+            };
+            if let Err(e) = download_tool_version(*tool, &resolved) {
+                errors.push(e);
+            }
+            continue;
+        }
         if *tool == Tool::Verus {
             let required = resolve_verus_version(None);
             let version_installed =
@@ -1291,11 +1484,30 @@ mod tests {
     #[test]
     fn test_resolve_version_env_override() {
         let _guard = ENV_MUTEX.lock().unwrap();
-        unsafe { std::env::set_var(VERUS_ANALYZER_VERSION_ENV, "custom-version") };
-        let resolved = resolve_version(&Tool::VerusAnalyzer);
-        unsafe { std::env::remove_var(VERUS_ANALYZER_VERSION_ENV) };
+        unsafe { std::env::set_var(SCIP_VERSION_ENV, "custom-version") };
+        let resolved = resolve_version(&Tool::Scip);
+        unsafe { std::env::remove_var(SCIP_VERSION_ENV) };
         assert_eq!(resolved.tag, "custom-version");
         assert_eq!(resolved.source, VersionSource::EnvVar);
+    }
+
+    #[test]
+    fn test_analyzer_binary_is_versioned() {
+        let p = analyzer_binary_for_version("2026-09-25").unwrap();
+        assert!(p.ends_with("tools/verus-analyzer-2026-09-25/verus-analyzer"));
+        assert!(analyzer_binary_for_version("../x").is_none());
+        assert!(verus_binary_for_version("../x").is_none());
+    }
+
+    #[test]
+    fn test_resolve_analyzer_never_falls_back() {
+        let selection = Selection {
+            selector: Selector::Release("0000-00-00-not-a-release".into()),
+            source: SelectionSource::Default,
+        };
+        let err = resolve_analyzer(&selection, false).unwrap_err();
+        assert!(matches!(err, ToolError::VersionNotInstalled(..)), "{err}");
+        assert!(err.to_string().contains("0000-00-00-not-a-release"));
     }
 
     #[test]
@@ -1309,7 +1521,7 @@ mod tests {
 
     #[test]
     fn test_fallback_versions_are_valid() {
-        assert!(!VERUS_ANALYZER_FALLBACK_VERSION.is_empty());
+        assert!(!DEFAULT_VERUS_ANALYZER_VERSION.is_empty());
         assert!(!SCIP_FALLBACK_VERSION.is_empty());
         assert!(SCIP_FALLBACK_VERSION.starts_with('v'));
         assert!(!VERUS_FALLBACK_VERSION.is_empty());

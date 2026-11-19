@@ -27,6 +27,32 @@ pub struct ToolInfo {
     pub command: String,
 }
 
+/// The SCIP indexer that produced the index the atoms come from (probe KB
+/// `kb/engineering/schema.md`, "Indexer"). For debugging only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct IndexerInfo {
+    /// `metadata.tool_info.name` of the index, as is.
+    pub name: String,
+    /// `metadata.tool_info.version` of the index, as is.
+    pub version: String,
+    /// How probe-verus selected the analyzer, e.g. `verus-analyzer 2026-09-25`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection: Option<String>,
+}
+
+impl IndexerInfo {
+    /// The indexer of `tool` (the index metadata), selected as `selection`.
+    #[must_use]
+    pub fn from_scip(tool: &crate::ScipToolInfo, selection: Option<&str>) -> Self {
+        Self {
+            name: tool.name.clone(),
+            version: tool.version.clone(),
+            selection: selection.map(str::to_string),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct SourceInfo {
@@ -43,6 +69,9 @@ pub struct Envelope<T> {
     pub schema: String,
     pub schema_version: String,
     pub tool: ToolInfo,
+    /// Only on atoms and extract outputs that come from a SCIP index.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indexer: Option<IndexerInfo>,
     pub source: SourceInfo,
     pub timestamp: String,
     pub data: T,
@@ -176,6 +205,7 @@ pub fn wrap_in_envelope<T: Serialize>(
             version: TOOL_VERSION.to_string(),
             command: command.to_string(),
         },
+        indexer: None,
         source: SourceInfo {
             repo: metadata.repo.clone(),
             commit: metadata.commit.clone(),
@@ -186,6 +216,28 @@ pub fn wrap_in_envelope<T: Serialize>(
         timestamp: metadata.timestamp.clone(),
         data,
     }
+}
+
+impl<T> Envelope<T> {
+    /// Set the `indexer` field.
+    #[must_use]
+    pub fn with_indexer(mut self, indexer: Option<IndexerInfo>) -> Self {
+        self.indexer = indexer;
+        self
+    }
+}
+
+/// Read the `indexer` field of the envelope in `path`. Returns `None` if the
+/// file cannot be read or parsed, or has no such field.
+#[must_use]
+pub fn read_envelope_indexer(path: &Path) -> Option<IndexerInfo> {
+    #[derive(Deserialize)]
+    struct IndexerOnly {
+        indexer: Option<IndexerInfo>,
+    }
+    let file = std::fs::File::open(path).ok()?;
+    let parsed: IndexerOnly = serde_json::from_reader(std::io::BufReader::new(file)).ok()?;
+    parsed.indexer
 }
 
 /// Wrap merged data in a Schema 3.0 merged-atoms envelope.
@@ -591,6 +643,87 @@ fn extract_verus_dep_rev(table: &toml::Table) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_metadata() -> ProjectMetadata {
+        ProjectMetadata {
+            commit: "abc123".into(),
+            repo: "https://github.com/org/proj".into(),
+            timestamp: "2026-11-19T12:00:00Z".into(),
+            pkg_name: "my-crate".into(),
+            pkg_version: "1.0.0".into(),
+        }
+    }
+
+    fn rust_analyzer_tool_info() -> crate::ScipToolInfo {
+        crate::ScipToolInfo {
+            name: "rust-analyzer".into(),
+            version: "0.3.269-standalone".into(),
+        }
+    }
+
+    #[test]
+    fn test_envelope_without_indexer_has_no_indexer_key() {
+        let envelope = wrap_in_envelope("probe-verus/specs", "specify", 1, &test_metadata());
+        let json = serde_json::to_value(&envelope).unwrap();
+        assert!(json.get("indexer").is_none());
+    }
+
+    #[test]
+    fn test_envelope_with_indexer_serializes_after_tool() {
+        let indexer = IndexerInfo::from_scip(
+            &rust_analyzer_tool_info(),
+            Some("verus-analyzer 2026-09-25"),
+        );
+        let envelope = wrap_in_envelope("probe-verus/atoms", "atomize", 1, &test_metadata())
+            .with_indexer(Some(indexer));
+        let text = serde_json::to_string(&envelope).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            json["indexer"],
+            serde_json::json!({
+                "name": "rust-analyzer",
+                "version": "0.3.269-standalone",
+                "selection": "verus-analyzer 2026-09-25"
+            })
+        );
+        let tool_at = text.find("\"tool\"").unwrap();
+        let indexer_at = text.find("\"indexer\"").unwrap();
+        let source_at = text.find("\"source\"").unwrap();
+        assert!(tool_at < indexer_at && indexer_at < source_at);
+    }
+
+    #[test]
+    fn test_indexer_without_selection_omits_it() {
+        let indexer = IndexerInfo::from_scip(&rust_analyzer_tool_info(), None);
+        let json = serde_json::to_value(&indexer).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({"name": "rust-analyzer", "version": "0.3.269-standalone"})
+        );
+    }
+
+    #[test]
+    fn test_read_envelope_indexer() {
+        let dir = tempfile::tempdir().unwrap();
+        let indexer = IndexerInfo::from_scip(&rust_analyzer_tool_info(), Some("rust-analyzer"));
+
+        let with = dir.path().join("with.json");
+        let envelope = wrap_in_envelope("probe-verus/atoms", "atomize", 1, &test_metadata())
+            .with_indexer(Some(indexer.clone()));
+        std::fs::write(&with, serde_json::to_string(&envelope).unwrap()).unwrap();
+        assert_eq!(read_envelope_indexer(&with), Some(indexer));
+
+        // An atoms file from probe-verus 8.x has no indexer.
+        let without = dir.path().join("without.json");
+        let envelope = wrap_in_envelope("probe-verus/atoms", "atomize", 1, &test_metadata());
+        std::fs::write(&without, serde_json::to_string(&envelope).unwrap()).unwrap();
+        assert_eq!(read_envelope_indexer(&without), None);
+
+        assert_eq!(
+            read_envelope_indexer(&dir.path().join("missing.json")),
+            None
+        );
+    }
 
     #[test]
     fn test_unwrap_envelope_with_envelope() {

@@ -4,9 +4,9 @@ use super::atomize::atomize_internal;
 use super::run_verus::{run_verus_internal, VerifySummary};
 use super::specify::specify_internal;
 use crate::metadata::{
-    find_default_atoms_path, gather_metadata, get_default_output_path, unwrap_envelope,
-    wrap_in_envelope, AtomizeInternalConfig, ExtractInternalConfig, ProjectMetadata,
-    SpecifyInternalConfig,
+    find_default_atoms_path, gather_metadata, get_default_output_path, read_envelope_indexer,
+    unwrap_envelope, wrap_in_envelope, AtomizeInternalConfig, ExtractInternalConfig,
+    ProjectMetadata, SpecifyInternalConfig,
 };
 use crate::verification::VerusRunner;
 use crate::verus_parser::AssumeSpecInfo;
@@ -1064,7 +1064,10 @@ fn run_unified_merge(
                 }
             }
 
-            let envelope = wrap_in_envelope("probe-verus/extract", "extract", &unified, metadata);
+            // The atoms may come from an earlier run: take the indexer from
+            // the atoms file, not from the current SCIP cache.
+            let envelope = wrap_in_envelope("probe-verus/extract", "extract", &unified, metadata)
+                .with_indexer(read_envelope_indexer(atoms_path));
             match serde_json::to_string_pretty(&envelope) {
                 Ok(json) => {
                     if let Err(e) = std::fs::write(&unified_path, &json) {

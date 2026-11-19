@@ -15,6 +15,32 @@ the `data` field for each `schema` value.
 
 These types appear across multiple schemas.
 
+### Envelope `indexer`
+
+The `probe-verus/atoms` and `probe-verus/extract` envelopes have an optional
+top-level `indexer` field, after `tool`. It records the SCIP indexer that
+produced the index the atoms come from. It is for debugging only. The probe KB
+(`kb/engineering/schema.md`, "Indexer") defines it.
+
+```json
+"indexer": {
+  "name": "rust-analyzer",
+  "version": "0.3.269-standalone",
+  "selection": "verus-analyzer 2026-09-25"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | yes | `metadata.tool_info.name` of the SCIP index, as is. verus-analyzer writes `rust-analyzer`. Empty if the index has no name. |
+| `version` | string | yes | `metadata.tool_info.version` of the SCIP index, as is (e.g. `0.3.269-standalone`). Empty if the index has no version. |
+| `selection` | string | no | The analyzer that probe-verus selected: `verus-analyzer <release>`, `verus-analyzer path`, or `rust-analyzer` (with `--rust-analyzer`). It is the `analyzer` value of the SCIP cache key. |
+
+`atomize` writes `indexer` from the index it reads. `extract` copies `indexer`
+from the atoms file that it merges, so the field is absent if that atoms file
+has none (for example, an atoms file from probe-verus 8.x). `merge-atoms` and
+the other outputs do not have the field.
+
 ### CodeTextInfo
 
 Line range of a function body (1-based, inclusive).
@@ -68,6 +94,7 @@ probe:core/https://github.com/rust-lang/rust/library/core/option/impl#map()
 
 **Produced by:** `atomize`
 **Envelope schema:** `"probe-verus/atoms"`
+**Envelope `indexer`:** yes (see [Envelope `indexer`](#envelope-indexer))
 
 ### Data Shape
 
@@ -440,6 +467,7 @@ function without a proof).  Omitted when there are no such declarations.
 **Produced by:** `extract` (unified pipeline)
 **Envelope schema:** `"probe-verus/extract"`
 **Envelope `tool.command`:** `"extract"`
+**Envelope `indexer`:** copied from the atoms file (see [Envelope `indexer`](#envelope-indexer))
 
 ### Overview
 

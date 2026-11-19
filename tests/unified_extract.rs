@@ -262,3 +262,85 @@ fn test_specs_text_content() {
     assert_eq!(bar.primary_spec.as_deref(), Some(""));
     assert_eq!(bar.untracked, Some(false));
 }
+
+fn copy_dir(src: &Path, dst: &Path) {
+    std::fs::create_dir_all(dst).unwrap();
+    for entry in std::fs::read_dir(src).unwrap() {
+        let entry = entry.unwrap();
+        let to = dst.join(entry.file_name());
+        if entry.path().is_dir() {
+            copy_dir(&entry.path(), &to);
+        } else {
+            std::fs::copy(entry.path(), to).unwrap();
+        }
+    }
+}
+
+/// Run `extract --skip-atomize --skip-specify --skip-verify` on the
+/// `verus_micro` fixture with the fixture atoms file, with `indexer` set to
+/// `indexer` (or absent), and return the `indexer` of the extract output.
+fn extract_indexer_from_atoms(indexer: Option<serde_json::Value>) -> serde_json::Value {
+    use probe_verus::metadata::{gather_metadata, get_default_output_path};
+
+    let dir = tempfile::tempdir().unwrap();
+    copy_dir(Path::new("tests/fixtures/verus_micro"), dir.path());
+    let project = dir.path().to_path_buf();
+    let metadata = gather_metadata(&project);
+
+    let mut atoms: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(Path::new(FIXTURES).join("atoms.json")).unwrap(),
+    )
+    .unwrap();
+    if let Some(indexer) = indexer {
+        atoms["indexer"] = indexer;
+    }
+    let atoms_path = get_default_output_path(&project, &metadata, "atoms");
+    std::fs::create_dir_all(atoms_path.parent().unwrap()).unwrap();
+    std::fs::write(&atoms_path, serde_json::to_string(&atoms).unwrap()).unwrap();
+
+    probe_verus::commands::cmd_extract(
+        project.clone(),
+        true,   // skip_atomize
+        true,   // skip_specify
+        true,   // skip_verify
+        None,   // package
+        false,  // regenerate_scip
+        false,  // verbose
+        false,  // use_rust_analyzer
+        false,  // allow_duplicates
+        false,  // auto_install
+        None,   // with_atoms
+        false,  // _with_spec_text
+        None,   // taxonomy_config
+        vec![], // verus_args
+        false,  // with_public_api
+        true,   // skip_enrich
+    )
+    .expect("cmd_extract failed");
+
+    let unified = get_default_output_path(&project, &metadata, "");
+    let json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(unified).unwrap()).unwrap();
+    json.get("indexer")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null)
+}
+
+/// The extract envelope copies `indexer` from the atoms file it was built from,
+/// also when atomize did not run in this extract.
+#[test]
+fn test_extract_copies_indexer_from_atoms() {
+    let indexer = serde_json::json!({
+        "name": "rust-analyzer",
+        "version": "0.3.269-standalone",
+        "selection": "verus-analyzer 2026-09-25"
+    });
+    assert_eq!(extract_indexer_from_atoms(Some(indexer.clone())), indexer);
+}
+
+/// An atoms file without `indexer` (e.g. from probe-verus 8.x) gives an extract
+/// envelope without it.
+#[test]
+fn test_extract_without_indexer_in_atoms_has_none() {
+    assert_eq!(extract_indexer_from_atoms(None), serde_json::Value::Null);
+}

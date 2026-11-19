@@ -355,6 +355,14 @@ impl ScipCache {
         let _ = std::fs::remove_file(self.json_path());
     }
 
+    /// The analyzer and its selector of the current run, e.g.
+    /// `verus-analyzer 2026-09-25`. Set after [`Self::state`] or
+    /// [`Self::generate`] succeeds.
+    #[must_use]
+    pub fn analyzer_selection(&self) -> Option<&str> {
+        self.key.as_ref().map(|k| k.analyzer.as_str())
+    }
+
     /// Whether the cached index can be reused. This takes the cache lock
     /// and resolves the analyzer
     /// (and installs it with auto-install), because the key holds the hash of

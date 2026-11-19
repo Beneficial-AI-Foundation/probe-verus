@@ -108,6 +108,16 @@ fn extract_backward_compat() {
         serde_json::from_str(&std::fs::read_to_string(&actual_path).unwrap())
             .expect("failed to parse extract output");
 
+    // The extract envelope carries the indexer of the atoms it was built from.
+    let indexer = &actual_json["indexer"];
+    assert_eq!(indexer["name"], "rust-analyzer", "indexer: {indexer}");
+    assert!(
+        indexer["selection"]
+            .as_str()
+            .is_some_and(|s| s.starts_with("verus-analyzer ")),
+        "indexer: {indexer}"
+    );
+
     if std::env::var("BLESS").is_ok() {
         let golden_path = Path::new(GOLDEN_FILE);
         if let Some(parent) = golden_path.parent() {

@@ -109,6 +109,7 @@ Running `probe-verus extract` produces a JSON envelope. Each entry in `data` des
   "schema": "probe-verus/extract",
   "schema-version": "3.0",
   "tool": { "name": "probe-verus", "version": "6.10.3", "command": "extract" },
+  "indexer": { "name": "rust-analyzer", "version": "0.3.269-standalone", "selection": "verus-analyzer 2026-09-25" },
   "source": {
     "repo": "https://github.com/org/project",
     "commit": "abc123...",

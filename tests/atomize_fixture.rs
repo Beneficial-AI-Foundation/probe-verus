@@ -31,8 +31,9 @@ fn tools_available() -> bool {
     resolve_tool(Tool::VerusAnalyzer).is_ok() && resolve_tool(Tool::Scip).is_ok()
 }
 
-/// Local atoms by code-name without the package prefix: (start line, dependencies).
-fn atomize_fixture() -> BTreeMap<String, (u64, Vec<String>)> {
+/// Local atoms by code-name without the package prefix: (start line,
+/// dependencies), and the envelope `indexer` field.
+fn atomize_fixture() -> (BTreeMap<String, (u64, Vec<String>)>, serde_json::Value) {
     let dir = tempfile::tempdir().unwrap();
     copy_dir(Path::new(FIXTURE), dir.path());
     let output = dir.path().join("atoms.json");
@@ -51,7 +52,7 @@ fn atomize_fixture() -> BTreeMap<String, (u64, Vec<String>)> {
     let json: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(output).unwrap()).unwrap();
     let short = |name: &str| name.strip_prefix(PREFIX).unwrap_or(name).to_string();
-    json["data"]
+    let atoms = json["data"]
         .as_object()
         .unwrap()
         .iter()
@@ -68,7 +69,8 @@ fn atomize_fixture() -> BTreeMap<String, (u64, Vec<String>)> {
                 (atom["code-text"]["lines-start"].as_u64().unwrap(), deps),
             )
         })
-        .collect()
+        .collect();
+    (atoms, json["indexer"].clone())
 }
 
 #[test]
@@ -77,7 +79,22 @@ fn atomize_fixture_owners_and_edges() {
         eprintln!("SKIP: verus-analyzer or scip not found. Run `probe-verus setup`.");
         return;
     }
-    let atoms = atomize_fixture();
+    let (atoms, indexer) = atomize_fixture();
+
+    // The envelope records the producer of the index and the selected analyzer.
+    assert_eq!(indexer["name"], "rust-analyzer", "indexer: {indexer}");
+    assert!(
+        indexer["version"]
+            .as_str()
+            .is_some_and(|v| v.starts_with("0.3.")),
+        "indexer: {indexer}"
+    );
+    assert!(
+        indexer["selection"]
+            .as_str()
+            .is_some_and(|s| s.starts_with("verus-analyzer ")),
+        "indexer: {indexer}"
+    );
     let start = |name: &str| {
         atoms
             .get(name)

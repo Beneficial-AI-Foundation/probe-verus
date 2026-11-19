@@ -20,7 +20,7 @@ what constitutes a breaking change.
 ### Changed
 - `--auto-install` on `extract` and `atomize` is no longer deprecated and prints no warning. It downloads the selected verus-analyzer release and scip if they are missing.
 - `setup` installs the selected verus-analyzer release, and `setup --status` shows it and what selected it. `--status` now combines with `--from-project`. The new `setup -p <package>` selects the analyzer of that workspace member, as `extract -p` does. The extract action passes its `package` input to `setup`.
-- The extract action passes its inputs to Bash through environment variables, so that an input such as `$(...)` is not run as a command.
+- The extract and atomize actions pass their inputs to Bash through environment variables, so that an input such as `$(...)` is not run as a command.
 - `generate-atoms.yml` passes `--rust-analyzer` to `atomize` when `use_rust_analyzer` is true. Before, it downloaded and ran verus-analyzer.
 - A `verus-analyzer` found on `PATH` (pin `path`) is stored as an absolute path, so that a relative `PATH` entry names the same binary from the project directory.
 - Runs on one project wait for each other: the SCIP cache takes an exclusive lock on `data/index.scip.lock`. Before, two runs with different analyzer selections could store one run's index with the other run's key.

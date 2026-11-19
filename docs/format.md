@@ -20,6 +20,11 @@ All JSON outputs follow the [Schema 3.0 envelope](https://github.com/Beneficial-
     "version": "5.2.0",
     "command": "atomize"
   },
+  "indexer": {
+    "name": "rust-analyzer",
+    "version": "0.3.269-standalone",
+    "selection": "verus-analyzer 2026-09-25"
+  },
   "source": {
     "repo": "https://github.com/org/project.git",
     "commit": "abc123def456...",
@@ -35,6 +40,12 @@ All JSON outputs follow the [Schema 3.0 envelope](https://github.com/Beneficial-
 ```
 
 To access the atoms data, unwrap the `data` field from the envelope.
+
+The optional `indexer` field records the SCIP indexer that produced the index.
+`name` and `version` come from the index metadata (`tool_info`). verus-analyzer
+writes `rust-analyzer` there. `selection` is the analyzer that probe-verus selected,
+for example `verus-analyzer 2026-09-25`. The field is for debugging only. See
+[SCHEMA.md](SCHEMA.md#envelope-indexer).
 
 ## Atoms Data Structure
 
@@ -355,6 +366,10 @@ let atoms = envelope.data;
 ```
 
 ## Version History
+
+### v9.0.0 (unreleased)
+
+- Added the optional envelope field `indexer` (`name`, `version`, `selection`)
 
 ### v5.1.0 (2026-03-17)
 

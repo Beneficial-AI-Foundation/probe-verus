@@ -118,6 +118,7 @@ The primary output is a dictionary keyed by code-name, where each entry is a `Un
   "schema": "probe-verus/extract",
   "schema-version": "3.0",
   "tool": { "name": "probe-verus", "version": "5.2.0", "command": "extract" },
+  "indexer": { "name": "rust-analyzer", "version": "0.3.269-standalone", "selection": "verus-analyzer 2026-09-25" },
   "source": { "repo": "...", "commit": "...", "language": "rust", "package": "...", "package-version": "..." },
   "timestamp": "2026-03-22T12:00:00Z",
   "data": {

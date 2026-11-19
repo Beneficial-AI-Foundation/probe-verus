@@ -3,7 +3,10 @@
 use crate::{
     add_external_stubs, backfill_atoms_from_parser, build_call_graph, build_module_visibility_map,
     convert_to_atoms_with_parsed_spans, find_duplicate_code_names, is_library_crate,
-    metadata::{gather_metadata, get_default_output_path, wrap_in_envelope, AtomizeInternalConfig},
+    metadata::{
+        gather_metadata, get_default_output_path, wrap_in_envelope, AtomizeInternalConfig,
+        IndexerInfo,
+    },
     parse_scip_json, public_api, resolve_package_root, resolve_workspace_root,
     scip_cache::{Analyzer, CacheState, ScipCache},
     validate_index, verus_dependencies, AtomWithLines, IndexError, ScipIndex,
@@ -162,7 +165,11 @@ pub fn cmd_atomize(
     }
 
     // Wrap in envelope and write
-    let envelope = wrap_in_envelope("probe-verus/atoms", "atomize", &atoms_dict, &metadata);
+    let envelope = wrap_in_envelope("probe-verus/atoms", "atomize", &atoms_dict, &metadata)
+        .with_indexer(Some(IndexerInfo::from_scip(
+            &scip_index.metadata.tool_info,
+            scip_cache.analyzer_selection(),
+        )));
     let json = serde_json::to_string_pretty(&envelope)
         .map_err(|e| format!("Failed to serialize JSON: {}", e))?;
     std::fs::write(&output, &json).map_err(|e| format!("Failed to write output file: {}", e))?;
@@ -412,7 +419,11 @@ pub fn atomize_internal(config: &AtomizeInternalConfig) -> Result<usize, String>
 
     let count = atoms_dict.len();
 
-    let envelope = wrap_in_envelope("probe-verus/atoms", "atomize", &atoms_dict, config.metadata);
+    let envelope = wrap_in_envelope("probe-verus/atoms", "atomize", &atoms_dict, config.metadata)
+        .with_indexer(Some(IndexerInfo::from_scip(
+            &scip_index.metadata.tool_info,
+            cache.analyzer_selection(),
+        )));
 
     if let Some(parent) = config.output.parent() {
         std::fs::create_dir_all(parent)

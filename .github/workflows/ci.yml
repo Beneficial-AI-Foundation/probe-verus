@@ -86,6 +86,10 @@ jobs:
         working-directory: probe-verus
         run: cargo test --lib --verbose
 
+      - name: Run unified extract tests
+        working-directory: probe-verus
+        run: cargo test --test unified_extract --verbose
+
   tag-release:
     name: Tag release
     runs-on: ubuntu-latest

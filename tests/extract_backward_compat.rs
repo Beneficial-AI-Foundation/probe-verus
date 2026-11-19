@@ -8,7 +8,9 @@
 //! - New fields are allowed (Extra = INFO, printed but passes)
 //!
 //! Volatile envelope fields (timestamp, commit, repo, tool version) are
-//! automatically ignored by `probe_extract_check::golden::compare`.
+//! automatically ignored by `probe_extract_check::golden::compare`. The
+//! `indexer` field depends on the analyzer that runs the test, so this test
+//! removes it before blessing and comparing, and checks it separately.
 //!
 //! ## Bless mode
 //!
@@ -19,6 +21,7 @@
 
 use probe_extract_check::golden::{compare, DiffKind};
 use probe_extract_check::{check_all, load_extract_json};
+use probe_verus::metadata::envelope_indexer;
 use std::path::{Path, PathBuf};
 
 const VERUS_MICRO: &str = "tests/fixtures/verus_micro";
@@ -61,9 +64,29 @@ fn find_unified_output(dir: &Path) -> Option<PathBuf> {
         .map(|e| e.path())
 }
 
+fn find_atoms_output(dir: &Path) -> Option<PathBuf> {
+    std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("verus_") && n.ends_with("_atoms.json"))
+        })
+}
+
 fn tools_available() -> bool {
     use probe_verus::tool_manager::{resolve_tool, Tool};
     resolve_tool(Tool::VerusAnalyzer).is_ok() && resolve_tool(Tool::Scip).is_ok()
+}
+
+/// `json` without its top-level `indexer` field.
+fn without_indexer(mut json: serde_json::Value) -> serde_json::Value {
+    if let Some(map) = json.as_object_mut() {
+        map.remove("indexer");
+    }
+    json
 }
 
 #[test]
@@ -108,6 +131,37 @@ fn extract_backward_compat() {
         serde_json::from_str(&std::fs::read_to_string(&actual_path).unwrap())
             .expect("failed to parse extract output");
 
+    // The extract envelope carries the indexer of the atoms it was built from:
+    // the complete object (name, version, selection), not a part of it.
+    let atoms_path = find_atoms_output(&probes_dir)
+        .unwrap_or_else(|| panic!("no atoms output found in {}", probes_dir.display()));
+    let atoms_json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&atoms_path).unwrap())
+            .expect("failed to parse atoms output");
+    let atoms_indexer = envelope_indexer(&atoms_json)
+        .unwrap_or_else(|| panic!("atoms envelope has no valid indexer: {atoms_json:#}"));
+    assert_eq!(
+        envelope_indexer(&actual_json),
+        Some(atoms_indexer.clone()),
+        "extract indexer differs from the atoms indexer"
+    );
+    assert_eq!(actual_json["indexer"], atoms_json["indexer"]);
+    assert_eq!(atoms_indexer.name, "rust-analyzer");
+    assert!(!atoms_indexer.version.is_empty(), "{atoms_indexer:?}");
+    assert!(
+        atoms_indexer
+            .selection
+            .as_deref()
+            .is_some_and(|s| s.starts_with("verus-analyzer ")),
+        "{atoms_indexer:?}"
+    );
+
+    // The indexer depends on the analyzer that runs the test (its version and
+    // selection change with PROBE_VERUS_ANALYZER_VERSION or a new default), so
+    // it is neither blessed nor compared. The assertions above check it
+    // against the atoms envelope.
+    let actual_json = without_indexer(actual_json);
+
     if std::env::var("BLESS").is_ok() {
         let golden_path = Path::new(GOLDEN_FILE);
         if let Some(parent) = golden_path.parent() {
@@ -127,9 +181,10 @@ fn extract_backward_compat() {
             golden_path.display()
         );
     }
-    let golden_json: serde_json::Value =
+    let golden_json: serde_json::Value = without_indexer(
         serde_json::from_str(&std::fs::read_to_string(golden_path).unwrap())
-            .expect("failed to parse golden file");
+            .expect("failed to parse golden file"),
+    );
 
     let diffs = compare(&golden_json, &actual_json);
 

@@ -31,8 +31,13 @@ fn tools_available() -> bool {
     resolve_tool(Tool::VerusAnalyzer).is_ok() && resolve_tool(Tool::Scip).is_ok()
 }
 
-/// Local atoms by code-name without the package prefix: (start line, dependencies).
-fn atomize_fixture() -> BTreeMap<String, (u64, Vec<String>)> {
+/// Atoms by code-name: (start line, dependencies).
+type Atoms = BTreeMap<String, (u64, Vec<String>)>;
+
+/// Local atoms by code-name without the package prefix: (start line,
+/// dependencies), the envelope `indexer` field, and the indexer that the SCIP
+/// cache records (`metadata.tool_info` of the index, `analyzer` of the key).
+fn atomize_fixture() -> (Atoms, serde_json::Value, serde_json::Value) {
     let dir = tempfile::tempdir().unwrap();
     copy_dir(Path::new(FIXTURE), dir.path());
     let output = dir.path().join("atoms.json");
@@ -51,7 +56,7 @@ fn atomize_fixture() -> BTreeMap<String, (u64, Vec<String>)> {
     let json: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(output).unwrap()).unwrap();
     let short = |name: &str| name.strip_prefix(PREFIX).unwrap_or(name).to_string();
-    json["data"]
+    let atoms = json["data"]
         .as_object()
         .unwrap()
         .iter()
@@ -68,7 +73,19 @@ fn atomize_fixture() -> BTreeMap<String, (u64, Vec<String>)> {
                 (atom["code-text"]["lines-start"].as_u64().unwrap(), deps),
             )
         })
-        .collect()
+        .collect();
+    let data = dir.path().join("data");
+    let scip = probe_verus::parse_scip_json(data.join("index.scip.json").to_str().unwrap())
+        .expect("failed to parse the SCIP index");
+    let key: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(data.join("index.scip.key.json")).unwrap())
+            .unwrap();
+    let cached = serde_json::json!({
+        "name": scip.metadata.tool_info.name,
+        "version": scip.metadata.tool_info.version,
+        "selection": key["analyzer"],
+    });
+    (atoms, json["indexer"].clone(), cached)
 }
 
 #[test]
@@ -77,7 +94,24 @@ fn atomize_fixture_owners_and_edges() {
         eprintln!("SKIP: verus-analyzer or scip not found. Run `probe-verus setup`.");
         return;
     }
-    let atoms = atomize_fixture();
+    let (atoms, indexer, cached) = atomize_fixture();
+
+    // The envelope records the producer of the index and the selected analyzer,
+    // exactly as the SCIP index and the cache key record them.
+    assert_eq!(indexer, cached);
+    assert_eq!(indexer["name"], "rust-analyzer", "indexer: {indexer}");
+    assert!(
+        indexer["version"]
+            .as_str()
+            .is_some_and(|v| v.starts_with("0.3.")),
+        "indexer: {indexer}"
+    );
+    assert!(
+        indexer["selection"]
+            .as_str()
+            .is_some_and(|s| s.starts_with("verus-analyzer ")),
+        "indexer: {indexer}"
+    );
     let start = |name: &str| {
         atoms
             .get(name)

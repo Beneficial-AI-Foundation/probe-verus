@@ -157,6 +157,13 @@ The envelope records the producer name and version from the SCIP metadata,
 as an optional field. This needs a probe KB change
 (`kb/engineering/schema.md`). It is for debugging only.
 
+The field is `indexer` (probe KB Schema 3.2, probe#102), on the `atoms` and
+`extract` envelopes. It holds `name` and `version` from `tool_info` and
+`selection`, the `analyzer` value of the cache key (for example
+`verus-analyzer 2026-09-25`). `selection` is necessary because verus-analyzer
+writes `rust-analyzer 0.3.N` in `tool_info`. `extract` copies the field from
+the atoms file it merges.
+
 ### 7. Corpus test
 
 `scripts/corpus/run.py` runs `extract --skip-verify` on the support target, each at
@@ -211,7 +218,7 @@ analyzer.
    section 3. The corpus check must pass.
 2. Analyzer selection and SCIP cache identity (done: `src/analyzer_selection.rs`,
    `ScipCache` key in `data/index.scip.key.json`).
-3. Provenance field, after the KB change.
+3. Provenance field, after the KB change (`indexer`, see section 6).
 
 Not in this work:
 

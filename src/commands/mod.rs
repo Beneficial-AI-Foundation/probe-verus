@@ -25,7 +25,7 @@ mod tracked_csv;
 
 pub use atomize::cmd_atomize;
 pub use callee_crates::cmd_callee_crates;
-pub use extract::{cmd_extract, merge_into_unified, ScipSource};
+pub use extract::{cmd_extract, merge_into_unified, merge_into_unified_with_indexer, ScipSource};
 pub use functions::cmd_functions;
 pub use merge_atoms::cmd_merge_atoms;
 pub use run_verus::cmd_run_verus;
